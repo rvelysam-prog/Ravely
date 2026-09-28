@@ -7,7 +7,7 @@ import {
   KeyRound,
   Settings,
   Mail,
-  Code2,
+  FileJson,
   Download,
   LogOut,
   CheckCircle2,
@@ -18,14 +18,28 @@ import {
   Search,
   Trash2,
   Eye,
+  EyeOff,
   Link2,
   Copy,
   Ban,
-  ExternalLink
+  ExternalLink,
+  Lock
 } from 'lucide-react';
 import { ContactMessage, Employee, SiteSettings } from '../types';
-import { DeliverableFile } from '../data/phpDeliverableFiles';
 import { BrandLogo } from './BrandLogo';
+import {
+  createPortableEmployeeToken,
+  deleteContactMessage,
+  generateDefaultAvatarSvgDataUri,
+  getContactMessages,
+  getEmployees,
+  getNextMatricule,
+  markTokenRevoked,
+  saveEmployees,
+  saveSiteSettings,
+  setAdminPassword,
+  verifyAdminPasswordJS
+} from '../services/staticStorage';
 
 interface AdminBackofficeProps {
   settings: SiteSettings;
@@ -46,19 +60,16 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
   onBackToSite,
   onOpenDirectEmployeeLink
 }) => {
-  // Login states
-  const [loginEmail, setLoginEmail] = useState('');
+  // Login states (Simple JS password verification for admin.html)
   const [loginPassword, setLoginPassword] = useState('');
+  const [showLoginPass, setShowLoginPass] = useState(false);
   const [loginError, setLoginError] = useState('');
-  const [loginLoading, setLoginLoading] = useState(false);
 
   // Dashboard states
-  const [activeTab, setActiveTab] = useState<'employees' | 'cms' | 'messages' | 'deploy'>('employees');
+  const [activeTab, setActiveTab] = useState<'employees' | 'cms' | 'messages' | 'json'>('employees');
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [messages, setMessages] = useState<ContactMessage[]>([]);
   const [nextMatricule, setNextMatricule] = useState('EMP-2026-003');
-  const [deliverables, setDeliverables] = useState<DeliverableFile[]>([]);
-  const [selectedDeliverable, setSelectedDeliverable] = useState<DeliverableFile | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -84,7 +95,6 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     contrat_pdf_base64: '',
     contrat_pdf_name: ''
   });
-  const [savingEmp, setSavingEmp] = useState(false);
 
   // Password Reset Modal
   const [resetModalEmp, setResetModalEmp] = useState<Employee | null>(null);
@@ -93,75 +103,35 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
   // Site CMS Editor State
   const [cmsForm, setCmsForm] = useState<SiteSettings>(settings);
   const [newAdminPassword, setNewAdminPassword] = useState('');
-  const [savingCms, setSavingCms] = useState(false);
 
   useEffect(() => {
     setCmsForm(settings);
   }, [settings]);
 
-  const fetchDashboardData = async (token: string) => {
-    try {
-      const [dashRes, phpRes] = await Promise.all([
-        fetch('/api/admin/dashboard', {
-          headers: { Authorization: `Bearer ${token}` }
-        }),
-        fetch('/api/admin/php-deliverables', {
-          headers: { Authorization: `Bearer ${token}` }
-        })
-      ]);
-
-      if (dashRes.status === 401) {
-        onAdminLogout();
-        return;
-      }
-
-      if (dashRes.ok) {
-        const data = await dashRes.json();
-        setEmployees(data.employees || []);
-        setMessages(data.messages || []);
-        setNextMatricule(data.nextMatricule || 'EMP-2026-003');
-      }
-
-      if (phpRes.ok) {
-        const phpData = await phpRes.json();
-        setDeliverables(phpData.files || []);
-        if (phpData.files?.length > 0 && !selectedDeliverable) {
-          setSelectedDeliverable(phpData.files[0]);
-        }
-      }
-    } catch {
-      setFeedback({ type: 'error', text: 'Erreur lors du chargement des données du backoffice.' });
-    }
+  const refreshLocalData = () => {
+    const loadedEmployees = getEmployees();
+    const loadedMessages = getContactMessages();
+    setEmployees(loadedEmployees);
+    setMessages(loadedMessages);
+    setNextMatricule(getNextMatricule(loadedEmployees));
   };
 
   useEffect(() => {
     if (adminToken) {
-      fetchDashboardData(adminToken);
+      refreshLocalData();
     }
   }, [adminToken]);
 
-  const handleAdminLogin = async (e: React.FormEvent) => {
+  // Pure JS password authentication (zero server fetch)
+  const handleAdminLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    setLoginLoading(true);
     setLoginError('');
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: loginEmail, password: loginPassword })
-      });
-      const data = await res.json();
-      if (!res.ok || data.role !== 'admin') {
-        setLoginError('Accès refusé. Veuillez vérifier vos identifiants administrateur.');
-      } else {
-        onAdminAuthenticated(data.token);
-        setLoginPassword('');
-      }
-    } catch {
-      setLoginError('Erreur de connexion au serveur.');
-    } finally {
-      setLoginLoading(false);
+    if (!verifyAdminPasswordJS(loginPassword)) {
+      setLoginError('Mot de passe administrateur incorrect.');
+      return;
     }
+    setLoginPassword('');
+    onAdminAuthenticated('admin-js-local-session');
   };
 
   const openAddEmployeeModal = () => {
@@ -178,7 +148,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       salaire: '5800',
       devise: 'CAD',
       date_embauche: new Date().toISOString().slice(0, 10),
-      password: '',
+      password: 'Employe@2026!',
       photo_base64: '',
       photo_name: '',
       contrat_pdf_base64: '',
@@ -201,7 +171,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       salaire: String(emp.salaire),
       devise: emp.devise || 'CAD',
       date_embauche: emp.date_embauche,
-      password: '',
+      password: emp.password || 'Employe@2026!',
       photo_base64: '',
       photo_name: '',
       contrat_pdf_base64: '',
@@ -262,129 +232,178 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     reader.readAsDataURL(file);
   };
 
-  const handleSaveEmployee = async (e: React.FormEvent) => {
+  const handleSaveEmployee = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!adminToken) return;
-    setSavingEmp(true);
     setFeedback(null);
 
-    try {
-      const url = editingEmployee
-        ? `/api/admin/employees/${editingEmployee.id}`
-        : '/api/admin/employees';
-      const method = editingEmployee ? 'PUT' : 'POST';
-
-      const res = await fetch(url, {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${adminToken}`
-        },
-        body: JSON.stringify({
-          ...empForm,
-          salaire: parseFloat(empForm.salaire) || 0
-        })
+    const list = getEmployees();
+    const cleanEmail = empForm.email.trim().toLowerCase();
+    const duplicate = list.find(
+      (item) =>
+        item.email.toLowerCase() === cleanEmail &&
+        (!editingEmployee || item.id !== editingEmployee.id)
+    );
+    if (duplicate) {
+      setFeedback({
+        type: 'error',
+        text: 'Cette adresse e-mail est déjà utilisée par un autre employé.'
       });
+      return;
+    }
 
-      const data = await res.json();
-      if (!res.ok) {
-        setFeedback({ type: 'error', text: data.error || 'Erreur lors de la sauvegarde.' });
-      } else {
-        setModalOpen(false);
-        setFeedback({
-          type: 'success',
-          text: editingEmployee
-            ? `Le dossier de ${data.employee.prenom} ${data.employee.nom} (${data.employee.matricule}) a été mis à jour.`
-            : `Employé ${data.employee.prenom} ${data.employee.nom} créé avec le matricule ${data.employee.matricule}.`
-        });
-        fetchDashboardData(adminToken);
+    const now = new Date().toISOString();
+
+    if (editingEmployee) {
+      const updatedEmp: Employee = {
+        ...editingEmployee,
+        prenom: empForm.prenom.trim(),
+        nom: empForm.nom.trim(),
+        email: cleanEmail,
+        telephone: empForm.telephone.trim(),
+        adresse: empForm.adresse.trim(),
+        poste: empForm.poste.trim(),
+        departement: empForm.departement.trim() || 'Opérations Logistiques',
+        type_contrat: empForm.type_contrat,
+        salaire: parseFloat(empForm.salaire) || 0,
+        devise: empForm.devise || 'CAD',
+        date_embauche: empForm.date_embauche,
+        password: empForm.password.trim() || editingEmployee.password || 'Employe@2026!',
+        photo_url: empForm.photo_base64 || editingEmployee.photo_url,
+        contrat_pdf_url: empForm.contrat_pdf_base64 || editingEmployee.contrat_pdf_url,
+        has_custom_pdf: Boolean(empForm.contrat_pdf_base64 || editingEmployee.has_custom_pdf),
+        updated_at: now
+      };
+      // Refresh portable token if employee already had a direct link so link stays in sync
+      if (updatedEmp.access_token) {
+        updatedEmp.access_token = createPortableEmployeeToken(updatedEmp);
       }
-    } catch {
-      setFeedback({ type: 'error', text: 'Erreur réseau lors de la sauvegarde du salarié.' });
-    } finally {
-      setSavingEmp(false);
+
+      const updatedList = list.map((item) => (item.id === editingEmployee.id ? updatedEmp : item));
+      saveEmployees(updatedList);
+      refreshLocalData();
+      setModalOpen(false);
+      setFeedback({
+        type: 'success',
+        text: `Le dossier de ${updatedEmp.prenom} ${updatedEmp.nom} (${updatedEmp.matricule}) a été mis à jour dans le localStorage.`
+      });
+    } else {
+      const nextId = list.length > 0 ? Math.max(...list.map((i) => i.id)) + 1 : 1;
+      const autoMatricule = getNextMatricule(list);
+      const newEmp: Employee = {
+        id: nextId,
+        matricule: autoMatricule,
+        prenom: empForm.prenom.trim(),
+        nom: empForm.nom.trim(),
+        email: cleanEmail,
+        password: empForm.password.trim() || 'Employe@2026!',
+        telephone: empForm.telephone.trim(),
+        adresse: empForm.adresse.trim(),
+        poste: empForm.poste.trim(),
+        departement: empForm.departement.trim() || 'Opérations Logistiques',
+        type_contrat: empForm.type_contrat,
+        salaire: parseFloat(empForm.salaire) || 0,
+        devise: empForm.devise || 'CAD',
+        date_embauche: empForm.date_embauche,
+        photo_url:
+          empForm.photo_base64 ||
+          generateDefaultAvatarSvgDataUri(empForm.prenom.trim(), empForm.nom.trim(), autoMatricule),
+        contrat_pdf_url: empForm.contrat_pdf_base64 || '',
+        has_custom_pdf: Boolean(empForm.contrat_pdf_base64),
+        must_change_password: true,
+        is_active: true,
+        access_token: null,
+        access_token_created_at: null,
+        created_at: now,
+        updated_at: now
+      };
+      newEmp.access_token = createPortableEmployeeToken(newEmp);
+      newEmp.access_token_created_at = now;
+
+      const updatedList = [...list, newEmp];
+      saveEmployees(updatedList);
+      refreshLocalData();
+      setModalOpen(false);
+      setFeedback({
+        type: 'success',
+        text: `Employé ${newEmp.prenom} ${newEmp.nom} ajouté dans le localStorage avec le matricule ${newEmp.matricule}.`
+      });
     }
   };
 
-  const handleToggleActive = async (emp: Employee) => {
-    if (!adminToken) return;
-    try {
-      const res = await fetch(`/api/admin/employees/${emp.id}/toggle-active`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${adminToken}` }
-      });
-      if (res.ok) {
-        fetchDashboardData(adminToken);
-        setFeedback({
-          type: 'success',
-          text: `Statut du compte ${emp.matricule} modifié avec succès.`
-        });
-      }
-    } catch {
-      setFeedback({ type: 'error', text: 'Impossible de modifier le statut.' });
-    }
+  const handleToggleActive = (emp: Employee) => {
+    const list = getEmployees();
+    const updatedList = list.map((item) =>
+      item.id === emp.id
+        ? { ...item, is_active: !item.is_active, updated_at: new Date().toISOString() }
+        : item
+    );
+    saveEmployees(updatedList);
+    refreshLocalData();
+    setFeedback({
+      type: 'success',
+      text: `Statut du compte ${emp.matricule} modifié avec succès.`
+    });
   };
 
-  const handleResetPasswordSubmit = async (e: React.FormEvent) => {
+  const handleResetPasswordSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!adminToken || !resetModalEmp) return;
-    try {
-      const res = await fetch(`/api/admin/employees/${resetModalEmp.id}/reset-password`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${adminToken}`
-        },
-        body: JSON.stringify({ newPassword: tempResetPassword })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setFeedback({ type: 'error', text: data.error || 'Erreur lors de la réinitialisation.' });
-      } else {
-        setFeedback({
-          type: 'success',
-          text: `Mot de passe réinitialisé pour ${resetModalEmp.matricule}. Le changement sera forcé dès sa prochaine connexion.`
-        });
-        setResetModalEmp(null);
-        setTempResetPassword('');
-        fetchDashboardData(adminToken);
-      }
-    } catch {
-      setFeedback({ type: 'error', text: 'Erreur réseau.' });
-    }
+    if (!resetModalEmp) return;
+    const list = getEmployees();
+    const updatedList = list.map((item) =>
+      item.id === resetModalEmp.id
+        ? {
+            ...item,
+            password: tempResetPassword.trim(),
+            must_change_password: true,
+            updated_at: new Date().toISOString()
+          }
+        : item
+    );
+    saveEmployees(updatedList);
+    refreshLocalData();
+    setFeedback({
+      type: 'success',
+      text: `Mot de passe réinitialisé pour ${resetModalEmp.matricule}. Le changement sera demandé à sa prochaine connexion.`
+    });
+    setResetModalEmp(null);
+    setTempResetPassword('');
+  };
+
+  const buildDirectEmployeeUrl = (token: string): string => {
+    return `${window.location.origin}/employe.html?token=${encodeURIComponent(token)}`;
   };
 
   const handleGenerateDirectLink = async (emp: Employee) => {
-    if (!adminToken) return;
+    const list = getEmployees();
+    const newToken = createPortableEmployeeToken(emp);
+    const updatedList = list.map((item) =>
+      item.id === emp.id
+        ? {
+            ...item,
+            access_token: newToken,
+            access_token_created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          }
+        : item
+    );
+    saveEmployees(updatedList);
+    refreshLocalData();
+
+    const fullUrl = buildDirectEmployeeUrl(newToken);
     try {
-      const res = await fetch(`/api/admin/employees/${emp.id}/generate-link`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${adminToken}` }
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setFeedback({ type: 'error', text: data.error || 'Impossible de générer le lien.' });
-      } else {
-        const fullUrl = `${window.location.origin}/employe/${data.employee.access_token}`;
-        try {
-          await navigator.clipboard.writeText(fullUrl);
-        } catch {
-          // Clipboard fallback ignored if blocked
-        }
-        setFeedback({
-          type: 'success',
-          text: `Lien direct unique généré et copié pour ${emp.prenom} ${emp.nom} : ${fullUrl}`
-        });
-        fetchDashboardData(adminToken);
-      }
+      await navigator.clipboard.writeText(fullUrl);
     } catch {
-      setFeedback({ type: 'error', text: 'Erreur réseau lors de la génération du lien.' });
+      // Ignore clipboard permission errors
     }
+    setFeedback({
+      type: 'success',
+      text: `Lien direct créé et copié pour ${emp.prenom} ${emp.nom} : ${fullUrl}`
+    });
   };
 
   const handleCopyDirectLink = async (emp: Employee) => {
     if (!emp.access_token) return;
-    const fullUrl = `${window.location.origin}/employe/${emp.access_token}`;
+    const fullUrl = buildDirectEmployeeUrl(emp.access_token);
     try {
       await navigator.clipboard.writeText(fullUrl);
       setFeedback({
@@ -399,74 +418,95 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     }
   };
 
-  const handleRevokeDirectLink = async (emp: Employee) => {
-    if (!adminToken) return;
-    try {
-      const res = await fetch(`/api/admin/employees/${emp.id}/revoke-link`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${adminToken}` }
-      });
-      if (res.ok) {
-        setFeedback({
-          type: 'success',
-          text: `Le lien d’accès direct de ${emp.prenom} ${emp.nom} (${emp.matricule}) a été révoqué.`
-        });
-        fetchDashboardData(adminToken);
-      }
-    } catch {
-      setFeedback({ type: 'error', text: 'Impossible de révoquer le lien.' });
+  const handleRevokeDirectLink = (emp: Employee) => {
+    if (emp.access_token) {
+      markTokenRevoked(emp.access_token);
     }
+    const list = getEmployees();
+    const updatedList = list.map((item) =>
+      item.id === emp.id
+        ? {
+            ...item,
+            access_token: null,
+            access_token_created_at: null,
+            updated_at: new Date().toISOString()
+          }
+        : item
+    );
+    saveEmployees(updatedList);
+    refreshLocalData();
+    setFeedback({
+      type: 'success',
+      text: `Le lien d’accès direct de ${emp.prenom} ${emp.nom} (${emp.matricule}) a été révoqué.`
+    });
   };
 
-  const handleSaveCms = async (e: React.FormEvent) => {
+  const handleSaveCms = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!adminToken) return;
-    setSavingCms(true);
-    setFeedback(null);
-    try {
-      const res = await fetch('/api/admin/site', {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${adminToken}`
-        },
-        body: JSON.stringify({
-          ...cmsForm,
-          new_admin_password: newAdminPassword || undefined
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setFeedback({ type: 'error', text: data.error || 'Erreur lors de la mise à jour.' });
-      } else {
-        onSettingsUpdated(data.settings);
-        setNewAdminPassword('');
-        setFeedback({
-          type: 'success',
-          text: 'Les informations et contenus du site ont été mis à jour en temps réel.'
-        });
-      }
-    } catch {
-      setFeedback({ type: 'error', text: 'Erreur réseau lors de la sauvegarde.' });
-    } finally {
-      setSavingCms(false);
+    saveSiteSettings(cmsForm);
+    onSettingsUpdated(cmsForm);
+    if (newAdminPassword.trim().length >= 4) {
+      setAdminPassword(newAdminPassword.trim());
+      setNewAdminPassword('');
     }
+    setFeedback({
+      type: 'success',
+      text: 'Les paramètres du site et du localStorage ont été enregistrés.'
+    });
   };
 
-  const handleDownloadFile = (file: DeliverableFile) => {
-    const blob = new Blob([file.content], { type: 'text/plain;charset=utf-8' });
+  const handleExportEmployesJson = () => {
+    const exportPayload = {
+      company: {
+        company_name: settings.company_name,
+        slogan: settings.slogan,
+        address: settings.address,
+        phone: settings.phone,
+        whatsapp: settings.whatsapp,
+        email: settings.email
+      },
+      employees: getEmployees()
+    };
+    const blob = new Blob([JSON.stringify(exportPayload, null, 2)], {
+      type: 'application/json;charset=utf-8'
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = file.filename;
+    a.download = 'employes.json';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
 
+  const handleImportEmployesJson = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result));
+        const list = Array.isArray(parsed) ? parsed : parsed.employees;
+        if (!Array.isArray(list)) {
+          setFeedback({ type: 'error', text: 'Format JSON invalide.' });
+          return;
+        }
+        saveEmployees(list);
+        refreshLocalData();
+        setFeedback({
+          type: 'success',
+          text: `${list.length} employé(s) importé(s) dans le localStorage avec succès.`
+        });
+      } catch {
+        setFeedback({ type: 'error', text: 'Impossible de lire le fichier employes.json.' });
+      }
+    };
+    reader.readAsText(file);
+  };
+
   // ==========================================================================
-  // ADMIN LOGIN VIEW (WHEN NOT AUTHENTICATED)
+  // ADMIN LOGIN VIEW (Simple JS Password Protection for admin.html)
   // ==========================================================================
   if (!adminToken) {
     return (
@@ -479,12 +519,16 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
               size="card"
             />
             <div>
-              <span className="text-xs font-mono text-slate-500">Accès Restreint (/admin)</span>
+              <span className="text-xs font-mono text-slate-500">Administration RH (admin.html)</span>
               <h1 className="font-display font-bold text-xl text-[#0B2545]">
                 Backoffice Direction
               </h1>
             </div>
           </div>
+
+          <p className="text-xs sm:text-sm text-slate-600 mb-5 leading-relaxed">
+            Entrez le mot de passe administrateur pour gérer les employés dans le navigateur (<code className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">localStorage</code>) et générer les liens directs <code className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">/employe.html?token=XXX</code>.
+          </p>
 
           {loginError && (
             <div className="mb-4 p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs sm:text-sm flex items-start gap-2">
@@ -496,38 +540,34 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           <form onSubmit={handleAdminLogin} className="space-y-4">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                Identifiant Administrateur
+                Mot de passe Administrateur
               </label>
-              <input
-                type="email"
-                required
-                value={loginEmail}
-                onChange={(e) => setLoginEmail(e.target.value)}
-                placeholder="Adresse e-mail administrateur"
-                className="w-full min-h-[46px] px-4 py-2.5 rounded-xl border border-slate-300 text-sm focus:border-[#0B2545] focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                Mot de passe
-              </label>
-              <input
-                type="password"
-                required
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                placeholder="••••••••••••"
-                className="w-full min-h-[46px] px-4 py-2.5 rounded-xl border border-slate-300 text-sm focus:border-[#0B2545] focus:outline-none"
-              />
+              <div className="relative">
+                <input
+                  type={showLoginPass ? 'text' : 'password'}
+                  required
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  placeholder="••••••••••••"
+                  className="w-full min-h-[46px] pl-4 pr-12 py-2.5 rounded-xl border border-slate-300 text-sm focus:border-[#0B2545] focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowLoginPass((prev) => !prev)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 min-h-[38px] min-w-[38px] flex items-center justify-center text-slate-500 hover:text-slate-800"
+                  aria-label="Afficher ou masquer le mot de passe"
+                >
+                  {showLoginPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
 
             <button
               type="submit"
-              disabled={loginLoading}
-              className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-[#0B2545] text-white font-bold text-sm hover:bg-[#134074] transition-colors"
+              className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-[#0B2545] text-white font-bold text-sm hover:bg-[#134074] transition-colors flex items-center justify-center gap-2"
             >
-              {loginLoading ? 'Connexion...' : 'Accéder au Backoffice'}
+              <Lock className="w-4 h-4 text-amber-400" />
+              <span>Déverrouiller l’Administration</span>
             </button>
           </form>
 
@@ -571,10 +611,10 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       <div className="bg-[#0B2545] text-white rounded-2xl p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-4 border border-amber-400/30">
         <div className="space-y-1">
           <div className="text-xs font-mono text-amber-400">
-            Backoffice Administration (/admin) · Accès Propriétaire Exclusif
+            Administration Statique (admin.html) · Stockage localStorage &amp; employes.json
           </div>
           <h1 className="font-display font-bold text-2xl sm:text-3xl text-white">
-            Console de Gestion RH & Contenu — {settings.company_name}
+            Console de Gestion RH &amp; Contenu — {settings.company_name}
           </h1>
         </div>
 
@@ -584,7 +624,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             onClick={onBackToSite}
             className="min-h-[44px] px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap"
           >
-            Voir le site en direct
+            Voir le site public
           </button>
           <button
             type="button"
@@ -592,7 +632,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             className="min-h-[44px] px-4 py-2 rounded-xl bg-amber-400 text-[#0B2545] hover:bg-amber-300 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors whitespace-nowrap"
           >
             <LogOut className="w-4 h-4" />
-            <span>Déconnexion Admin</span>
+            <span>Verrouiller Admin</span>
           </button>
         </div>
       </div>
@@ -627,13 +667,11 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200 p-5">
-          <span className="text-xs text-slate-500 block">Messages & Devis Clients</span>
+          <span className="text-xs text-slate-500 block">Messages &amp; Devis Clients</span>
           <span className="font-mono tabular-nums text-2xl sm:text-3xl font-bold text-[#0B2545]">
             {messages.length}
           </span>
-          <span className="text-xs text-slate-500 block mt-1">
-            {messages.filter((m) => !m.lu).length} non lu(s)
-          </span>
+          <span className="text-xs text-slate-500 block mt-1">Stockés localement</span>
         </div>
       </div>
 
@@ -662,7 +700,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           }`}
         >
           <Settings className="w-4 h-4" />
-          <span>Modifier le Site & Logo</span>
+          <span>Modifier le Site &amp; Logo</span>
         </button>
 
         <button
@@ -680,15 +718,15 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
         <button
           type="button"
-          onClick={() => setActiveTab('deploy')}
+          onClick={() => setActiveTab('json')}
           className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
-            activeTab === 'deploy'
+            activeTab === 'json'
               ? 'bg-[#0B2545] text-white shadow-sm'
               : 'text-slate-700 hover:text-slate-950'
           }`}
         >
-          <Code2 className="w-4 h-4" />
-          <span>Fichiers public_html (PHP/MySQL & .sql)</span>
+          <FileJson className="w-4 h-4" />
+          <span>Base employes.json (Export / Import)</span>
         </button>
       </div>
 
@@ -700,14 +738,14 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
               : 'bg-red-50 border-red-200 text-red-800'
           }`}
         >
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 break-all">
             <CheckCircle2 className="w-5 h-5 shrink-0" />
             <span>{feedback.text}</span>
           </div>
           <button
             type="button"
             onClick={() => setFeedback(null)}
-            className="text-xs font-semibold underline"
+            className="text-xs font-semibold underline shrink-0"
           >
             Fermer
           </button>
@@ -715,7 +753,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       )}
 
       {/* ====================================================================
-          TAB 1: GESTION DES EMPLOYÉS
+          TAB 1: GESTION DES EMPLOYÉS (LOCALSTORAGE + LIEN DIRECT)
       ==================================================================== */}
       {activeTab === 'employees' && (
         <div className="space-y-6">
@@ -769,11 +807,11 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
-                  <th className="py-3.5 px-4">Salarié & Photo</th>
+                  <th className="py-3.5 px-4">Salarié &amp; Photo</th>
                   <th className="py-3.5 px-4">Matricule</th>
-                  <th className="py-3.5 px-4">Poste & Contrat</th>
+                  <th className="py-3.5 px-4">Poste &amp; Contrat</th>
                   <th className="py-3.5 px-4 text-right">Salaire</th>
-                  <th className="py-3.5 px-4">Lien Direct Salarié (/employe/TOKEN)</th>
+                  <th className="py-3.5 px-4">Lien Direct (/employe.html?token=XXX)</th>
                   <th className="py-3.5 px-4">Statut</th>
                   <th className="py-3.5 px-4 text-right">Actions RH</th>
                 </tr>
@@ -812,8 +850,8 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                     <td className="py-3.5 px-4">
                       {emp.access_token ? (
                         <div className="space-y-1.5">
-                          <div className="font-mono text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg max-w-[220px] truncate">
-                            /employe/{emp.access_token}
+                          <div className="font-mono text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg max-w-[230px] truncate">
+                            /employe.html?token={emp.access_token}
                           </div>
                           <div className="flex items-center gap-1.5">
                             <button
@@ -830,7 +868,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                                 type="button"
                                 onClick={() => onOpenDirectEmployeeLink(emp.access_token!)}
                                 className="px-2 py-1 rounded-lg bg-slate-100 text-slate-700 text-[11px] font-semibold inline-flex items-center gap-1 hover:bg-slate-200"
-                                title="Tester l'ouverture directe"
+                                title="Tester l'ouverture directe de la fiche"
                               >
                                 <ExternalLink className="w-3 h-3" />
                                 <span>Ouvrir</span>
@@ -872,15 +910,16 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                     </td>
                     <td className="py-3.5 px-4 text-right">
                       <div className="inline-flex items-center gap-1.5">
-                        <a
-                          href={`/api/employee/contract-pdf/${emp.id}?token=${encodeURIComponent(adminToken)}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="p-2 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-100"
-                          title="Voir le contrat PDF"
-                        >
-                          <Eye className="w-4 h-4" />
-                        </a>
+                        {emp.access_token && onOpenDirectEmployeeLink && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenDirectEmployeeLink(emp.access_token!)}
+                            className="p-2 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-100"
+                            title="Voir la fiche et le contrat PDF"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => openEditEmployeeModal(emp)}
@@ -920,7 +959,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             </table>
           </div>
 
-          {/* Mobile & Tablet Adaptive Cards (Zero Horizontal Scroll Bugs) */}
+          {/* Mobile & Tablet Adaptive Cards */}
           <div className="lg:hidden grid grid-cols-1 md:grid-cols-2 gap-4">
             {filteredEmployees.map((emp) => (
               <div
@@ -969,12 +1008,12 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                 {/* Lien Direct Salarié sur Mobile */}
                 <div className="pt-3 border-t border-slate-100 space-y-2">
                   <span className="text-[11px] font-semibold text-slate-500 block">
-                    Lien d’accès direct sans mot de passe :
+                    Lien direct sans login (/employe.html?token=XXX) :
                   </span>
                   {emp.access_token ? (
                     <div className="space-y-2">
                       <div className="font-mono text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg truncate">
-                        /employe/{emp.access_token}
+                        /employe.html?token={emp.access_token}
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <button
@@ -983,8 +1022,18 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                           className="flex-1 min-h-[38px] px-3 py-1.5 rounded-xl bg-[#0B2545] text-white text-xs font-semibold flex items-center justify-center gap-1.5"
                         >
                           <Copy className="w-3.5 h-3.5" />
-                          <span>Copier le lien</span>
+                          <span>Copier</span>
                         </button>
+                        {onOpenDirectEmployeeLink && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenDirectEmployeeLink(emp.access_token!)}
+                            className="min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-100 text-slate-800 text-xs font-semibold flex items-center justify-center gap-1.5"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span>Ouvrir</span>
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => handleRevokeDirectLink(emp)}
@@ -1002,7 +1051,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                       className="w-full min-h-[40px] px-3 py-2 rounded-xl bg-amber-400/25 border border-amber-400 text-[#0B2545] text-xs font-bold flex items-center justify-center gap-1.5"
                     >
                       <Link2 className="w-3.5 h-3.5" />
-                      <span>Créer un lien direct (/employe/TOKEN)</span>
+                      <span>Créer un lien direct</span>
                     </button>
                   )}
                 </div>
@@ -1047,16 +1096,16 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       )}
 
       {/* ====================================================================
-          TAB 2: MODIFIER LE SITE & LOGO (CMS PROPRIÉTAIRE)
+          TAB 2: MODIFIER LE SITE & LOGO (LOCALSTORAGE)
       ==================================================================== */}
       {activeTab === 'cms' && (
         <form onSubmit={handleSaveCms} className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 space-y-8">
           <div className="border-b border-slate-200 pb-4">
             <h2 className="font-display font-bold text-xl text-[#0B2545]">
-              Personnalisation du Site Public & Identité Visuelle
+              Personnalisation du Site Public &amp; Identité Visuelle
             </h2>
             <p className="text-xs sm:text-sm text-slate-500 mt-1">
-              Cet espace vous est strictement réservé. Toute modification est appliquée immédiatement sur le site public.
+              Toute modification est enregistrée immédiatement dans votre navigateur.
             </p>
           </div>
 
@@ -1150,46 +1199,9 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             </div>
           </div>
 
-          {/* Edit 3 Core Services */}
-          <div className="space-y-4 pt-6 border-t border-slate-200">
-            <h3 className="font-display font-bold text-base text-[#0B2545]">
-              Contenu des 3 Services Logistiques
-            </h3>
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {cmsForm.services.map((srv, index) => (
-                <div key={srv.id} className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
-                  <div className="text-xs font-mono font-bold text-amber-600">
-                    Service {srv.number}
-                  </div>
-                  <input
-                    type="text"
-                    value={srv.title}
-                    onChange={(e) => {
-                      const updated = [...cmsForm.services];
-                      updated[index] = { ...srv, title: e.target.value };
-                      setCmsForm({ ...cmsForm, services: updated });
-                    }}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs font-bold bg-white"
-                  />
-                  <textarea
-                    rows={4}
-                    value={srv.description}
-                    onChange={(e) => {
-                      const updated = [...cmsForm.services];
-                      updated[index] = { ...srv, description: e.target.value };
-                      setCmsForm({ ...cmsForm, services: updated });
-                    }}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs bg-white"
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Optional Admin Password Update */}
           <div className="pt-6 border-t border-slate-200 max-w-md">
             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-              Modifier votre mot de passe Administrateur (optionnel)
+              Modifier le mot de passe Administrateur (optionnel)
             </label>
             <input
               type="password"
@@ -1203,17 +1215,16 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           <div className="pt-4">
             <button
               type="submit"
-              disabled={savingCms}
               className="min-h-[48px] px-6 py-3 rounded-xl bg-[#0B2545] text-white font-bold text-sm hover:bg-[#134074] transition-colors"
             >
-              {savingCms ? 'Enregistrement...' : 'Enregistrer les modifications du site'}
+              Enregistrer les modifications
             </button>
           </div>
         </form>
       )}
 
       {/* ====================================================================
-          TAB 3: MESSAGES DE CONTACT
+          TAB 3: MESSAGES DE CONTACT (LOCALSTORAGE)
       ==================================================================== */}
       {activeTab === 'messages' && (
         <div className="space-y-4">
@@ -1225,9 +1236,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             messages.map((msg) => (
               <div
                 key={msg.id}
-                className={`bg-white rounded-2xl border p-6 space-y-3 ${
-                  msg.lu ? 'border-slate-200' : 'border-amber-400'
-                }`}
+                className="bg-white rounded-2xl border border-slate-200 p-6 space-y-3"
               >
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
@@ -1245,12 +1254,9 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                   </div>
                   <button
                     type="button"
-                    onClick={async () => {
-                      await fetch(`/api/admin/messages/${msg.id}`, {
-                        method: 'DELETE',
-                        headers: { Authorization: `Bearer ${adminToken}` }
-                      });
-                      fetchDashboardData(adminToken);
+                    onClick={() => {
+                      deleteContactMessage(msg.id);
+                      refreshLocalData();
                     }}
                     className="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"
                     title="Supprimer ce message"
@@ -1268,76 +1274,69 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       )}
 
       {/* ====================================================================
-          TAB 4: FICHIERS SERVEUR public_html (PHP 8+ / MySQL & .sql)
+          TAB 4: FICHIER EMPLOYES.JSON (EXPORT / IMPORT STATIQUE NETLIFY)
       ==================================================================== */}
-      {activeTab === 'deploy' && (
-        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden grid grid-cols-1 lg:grid-cols-12">
-          <div className="lg:col-span-4 border-b lg:border-b-0 lg:border-r border-slate-200 p-5 space-y-4 bg-slate-50">
+      {activeTab === 'json' && (
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
             <div>
-              <h2 className="font-display font-bold text-base text-[#0B2545]">
-                Arborescence public_html & SQL
+              <h2 className="font-display font-bold text-xl text-[#0B2545]">
+                Base de données statique : <code className="font-mono text-base">employes.json</code>
               </h2>
-              <p className="text-xs text-slate-500 mt-1">
-                Fichiers PHP 8+ / PDO / MySQL et base .sql prêts à transférer sur votre hébergement cPanel.
+              <p className="text-xs sm:text-sm text-slate-600 mt-1">
+                Votre site fonctionne à 100% en statique sur Netlify grâce à <code className="font-mono">/employes.json</code> et au <code className="font-mono">localStorage</code>, sans aucun serveur PHP ni MySQL.
               </p>
             </div>
 
-            <div className="space-y-2">
-              {deliverables.map((file) => (
-                <button
-                  key={file.path}
-                  type="button"
-                  onClick={() => setSelectedDeliverable(file)}
-                  className={`w-full text-left p-3 rounded-xl border text-xs transition-colors flex items-center justify-between gap-2 ${
-                    selectedDeliverable?.path === file.path
-                      ? 'bg-[#0B2545] text-white border-[#0B2545]'
-                      : 'bg-white text-slate-800 border-slate-200 hover:border-slate-300'
-                  }`}
-                >
-                  <span className="font-mono font-semibold truncate">{file.path}</span>
-                  <Download
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDownloadFile(file);
-                    }}
-                    className="w-4 h-4 shrink-0 text-amber-400 hover:scale-110 transition-transform"
-                  />
-                </button>
-              ))}
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={handleExportEmployesJson}
+                className="min-h-[44px] px-4 py-2.5 rounded-xl bg-amber-400 text-[#0B2545] font-bold text-xs sm:text-sm flex items-center gap-2 hover:bg-amber-300"
+              >
+                <Download className="w-4 h-4" />
+                <span>Télécharger employes.json</span>
+              </button>
+
+              <label className="cursor-pointer min-h-[44px] px-4 py-2.5 rounded-xl bg-[#0B2545] text-white font-bold text-xs sm:text-sm flex items-center gap-2 hover:bg-[#134074]">
+                <Upload className="w-4 h-4 text-amber-400" />
+                <span>Importer un fichier JSON</span>
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  onChange={handleImportEmployesJson}
+                  className="hidden"
+                />
+              </label>
             </div>
           </div>
 
-          <div className="lg:col-span-8 p-5 sm:p-6 flex flex-col justify-between space-y-4">
-            {selectedDeliverable && (
-              <>
-                <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-200">
-                  <div>
-                    <span className="font-mono text-xs font-bold text-[#134074]">
-                      public_html/{selectedDeliverable.path}
-                    </span>
-                    <p className="text-xs text-slate-600 mt-0.5">{selectedDeliverable.description}</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleDownloadFile(selectedDeliverable)}
-                    className="min-h-[40px] px-4 py-2 rounded-xl bg-amber-400 text-[#0B2545] font-bold text-xs flex items-center gap-2 hover:bg-amber-300"
-                  >
-                    <Download className="w-4 h-4" />
-                    <span>Télécharger {selectedDeliverable.filename}</span>
-                  </button>
-                </div>
-
-                <pre className="bg-slate-900 text-slate-100 p-4 rounded-xl text-xs font-mono overflow-x-auto max-h-[520px] overflow-y-auto leading-relaxed">
-                  {selectedDeliverable.content}
-                </pre>
-              </>
+          <pre className="bg-slate-900 text-slate-100 p-4 rounded-xl text-xs font-mono overflow-x-auto max-h-[520px] overflow-y-auto leading-relaxed">
+            {JSON.stringify(
+              {
+                company: {
+                  company_name: settings.company_name,
+                  slogan: settings.slogan,
+                  address: settings.address,
+                  phone: settings.phone,
+                  whatsapp: settings.whatsapp,
+                  email: settings.email
+                },
+                employees: employees.map((e) => ({
+                  ...e,
+                  photo_url: e.photo_url.startsWith('data:') ? '[Photo encodée Base64/SVG]' : e.photo_url,
+                  contrat_pdf_url: e.contrat_pdf_url ? '[Contrat PDF encodé Base64]' : ''
+                }))
+              },
+              null,
+              2
             )}
-          </div>
+          </pre>
         </div>
       )}
 
       {/* ====================================================================
-          MODAL: AJOUTER / MODIFIER UN EMPLOYÉ
+          MODAL: AJOUTER / MODIFIER UN EMPLOYÉ DANS LE LOCALSTORAGE
       ==================================================================== */}
       {modalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
@@ -1471,28 +1470,26 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                 </div>
               </div>
 
-              {!editingEmployee && (
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Mot de passe initial temporaire (sera hashé et forcé au changement au 1er login) *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    minLength={6}
-                    value={empForm.password}
-                    onChange={(e) => setEmpForm({ ...empForm, password: e.target.value })}
-                    placeholder="Définir le mot de passe temporaire remis au salarié"
-                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-mono"
-                  />
-                </div>
-              )}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Mot de passe de connexion du salarié *
+                </label>
+                <input
+                  type="text"
+                  required
+                  minLength={6}
+                  value={empForm.password}
+                  onChange={(e) => setEmpForm({ ...empForm, password: e.target.value })}
+                  placeholder="Mot de passe de connexion Espace Employé"
+                  className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-mono"
+                />
+              </div>
 
-              {/* Uploads: Photo JPG/PNG (/uploads/photos) & Contrat PDF (/uploads/contrats) */}
+              {/* Uploads en Base64 dans localStorage */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
                 <div className="p-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 space-y-2">
                   <span className="text-xs font-semibold text-[#0B2545] block">
-                    Photo d’identité (JPG / PNG) → /uploads/photos
+                    Photo d’identité (JPG / PNG)
                   </span>
                   <label className="cursor-pointer min-h-[40px] px-3 py-2 rounded-lg bg-white border border-slate-300 text-xs font-semibold text-slate-700 inline-flex items-center gap-2 hover:bg-slate-100">
                     <Upload className="w-4 h-4 text-[#0B2545]" />
@@ -1508,7 +1505,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
                 <div className="p-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 space-y-2">
                   <span className="text-xs font-semibold text-[#0B2545] block">
-                    Contrat de travail (PDF) → /uploads/contrats
+                    Contrat de travail (PDF)
                   </span>
                   <label className="cursor-pointer min-h-[40px] px-3 py-2 rounded-lg bg-white border border-slate-300 text-xs font-semibold text-slate-700 inline-flex items-center gap-2 hover:bg-slate-100">
                     <FileText className="w-4 h-4 text-[#0B2545]" />
@@ -1533,10 +1530,9 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={savingEmp}
                   className="min-h-[44px] px-6 py-2.5 rounded-xl bg-[#0B2545] text-white text-xs sm:text-sm font-bold hover:bg-[#134074]"
                 >
-                  {savingEmp ? 'Enregistrement...' : editingEmployee ? 'Mettre à jour' : 'Créer le salarié'}
+                  {editingEmployee ? 'Mettre à jour' : 'Enregistrer le salarié'}
                 </button>
               </div>
             </form>
@@ -1563,7 +1559,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
               </button>
             </div>
             <p className="text-xs text-slate-600">
-              Définissez un nouveau mot de passe temporaire pour <strong>{resetModalEmp.prenom} {resetModalEmp.nom}</strong>. Il sera hashé et l’employé devra obligatoirement le changer dès sa prochaine connexion.
+              Définissez un nouveau mot de passe temporaire pour <strong>{resetModalEmp.prenom} {resetModalEmp.nom}</strong>.
             </p>
             <form onSubmit={handleResetPasswordSubmit} className="space-y-4">
               <input

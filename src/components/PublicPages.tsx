@@ -17,6 +17,7 @@ import {
   PackageCheck
 } from 'lucide-react';
 import { PublicPage, SiteSettings } from '../types';
+import { addContactMessage } from '../services/staticStorage';
 
 import heroPortImg from '../assets/images/hero_multimodal_port_1790568794371.jpg';
 import serviceMultimodalImg from '../assets/images/service_multimodal_freight_1790568810704.jpg';
@@ -84,39 +85,41 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     });
   };
 
-  const handleContactSubmit = async (e: React.FormEvent) => {
+  const handleContactSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
     setSubmitStatus(null);
-    try {
-      const res = await fetch('/api/contact', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(contactForm)
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setSubmitStatus({ type: 'error', text: data.error || 'Une erreur est survenue.' });
-      } else {
-        setSubmitStatus({ type: 'success', text: data.message });
-        setContactForm({
-          nom_complet: '',
-          entreprise: '',
-          email: '',
-          telephone: '',
-          service_concerne: settings.services[0]?.title || 'Transport Multimodal Global',
-          sujet: '',
-          message: ''
-        });
-      }
-    } catch {
-      setSubmitStatus({
-        type: 'error',
-        text: 'Impossible de transmettre votre message actuellement. Veuillez nous contacter par téléphone ou e-mail.'
-      });
-    } finally {
+
+    if (!contactForm.nom_complet.trim() || !contactForm.email.trim() || !contactForm.sujet.trim() || !contactForm.message.trim()) {
+      setSubmitStatus({ type: 'error', text: 'Veuillez remplir tous les champs obligatoires.' });
       setSubmitting(false);
+      return;
     }
+
+    addContactMessage({
+      nom_complet: contactForm.nom_complet.trim(),
+      entreprise: contactForm.entreprise.trim(),
+      email: contactForm.email.trim(),
+      telephone: contactForm.telephone.trim(),
+      service_concerne: contactForm.service_concerne,
+      sujet: contactForm.sujet.trim(),
+      message: contactForm.message.trim()
+    });
+
+    setSubmitStatus({
+      type: 'success',
+      text: 'Votre demande a bien été transmise à notre équipe ATLANTIC TRANSPORT LTD. Nous vous répondrons sous 24h ouvrées.'
+    });
+    setContactForm({
+      nom_complet: '',
+      entreprise: '',
+      email: '',
+      telephone: '',
+      service_concerne: settings.services[0]?.title || 'Transport Multimodal Global',
+      sujet: '',
+      message: ''
+    });
+    setSubmitting(false);
   };
 
   const cleanWhatsapp = settings.whatsapp || settings.phone.replace(/[^\d]/g, '');

@@ -14,6 +14,12 @@ import {
 } from 'lucide-react';
 import { Employee, SiteSettings } from '../types';
 import { BrandLogo } from './BrandLogo';
+import {
+  authenticateEmployeeJS,
+  findEmployeeByDirectTokenJS,
+  updateEmployeePasswordJS,
+  verifyAdminPasswordJS
+} from '../services/staticStorage';
 
 interface EmployeePortalProps {
   settings: SiteSettings;
@@ -42,9 +48,8 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // Direct link employee state (/employe/TOKEN_UNIQUE)
+  // Direct link employee state (/employe.html?token=XXX)
   const [directEmployee, setDirectEmployee] = useState<Employee | null>(null);
-  const [directLoading, setDirectLoading] = useState(false);
   const [directError, setDirectError] = useState('');
 
   // First-login password change state
@@ -57,30 +62,21 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
   const [viewerMode, setViewerMode] = useState<'document' | 'pdf-native'>('document');
   const [securityNotice, setSecurityNotice] = useState<string | null>(null);
 
-  // Fetch employee directly if accessed via /employe/TOKEN_UNIQUE
+  // Resolve employee directly in pure JS if accessed via /employe.html?token=XXX
   useEffect(() => {
     if (!directAccessToken) {
       setDirectEmployee(null);
       setDirectError('');
       return;
     }
-    setDirectLoading(true);
-    setDirectError('');
-    fetch(`/api/employee/by-token/${encodeURIComponent(directAccessToken)}`)
-      .then(async (res) => {
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.error || 'Lien d’accès direct invalide ou révoqué.');
-        }
-        setDirectEmployee(data.employee);
-      })
-      .catch((err) => {
-        setDirectEmployee(null);
-        setDirectError(err.message || 'Lien d’accès direct invalide ou révoqué.');
-      })
-      .finally(() => {
-        setDirectLoading(false);
-      });
+    const result = findEmployeeByDirectTokenJS(directAccessToken);
+    if (result.employee) {
+      setDirectEmployee(result.employee);
+      setDirectError('');
+    } else {
+      setDirectEmployee(null);
+      setDirectError(result.error || 'Lien d’accès direct invalide ou révoqué.');
+    }
   }, [directAccessToken]);
 
   // Block Ctrl+S, Ctrl+P, Ctrl+U and right-click when viewing employee portal
@@ -104,75 +100,63 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
     setTimeout(() => setSecurityNotice(null), 3500);
   };
 
-  const handleLogin = async (e: React.FormEvent) => {
+  // Pure JS Login (Zero server fetch, zero "Erreur de connexion au serveur")
+  const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Identifiants incorrects.');
-      } else if (data.role === 'admin') {
-        onAdminAuthenticated(data.token);
-      } else if (data.role === 'employee') {
-        onEmployeeAuthenticated(data.token, data.employee);
-        setPassword('');
-      }
-    } catch {
-      setError('Erreur de connexion au serveur. Veuillez réessayer.');
-    } finally {
+
+    // 1. Check if Admin credentials entered in Espace Employé
+    if (verifyAdminPasswordJS(password, email)) {
       setLoading(false);
+      onAdminAuthenticated('admin-js-session');
+      return;
     }
+
+    // 2. Authenticate Employee in pure JS against localStorage / employes.json
+    const authResult = authenticateEmployeeJS(email, password);
+    setLoading(false);
+
+    if (!authResult.ok) {
+      setError(authResult.error);
+      return;
+    }
+
+    const sessionTok = `emp-js-${authResult.employee.id}-${Date.now()}`;
+    onEmployeeAuthenticated(sessionTok, authResult.employee);
+    setPassword('');
   };
 
-  const handleFirstPasswordChange = async (e: React.FormEvent) => {
+  // Pure JS First-Login Password Change
+  const handleFirstPasswordChange = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!employeeToken) return;
-    setLoading(true);
+    if (!employee) return;
     setError('');
-    try {
-      const res = await fetch('/api/employee/change-password', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${employeeToken}`
-        },
-        body: JSON.stringify({ newPassword, confirmPassword })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Impossible de mettre à jour le mot de passe.');
-      } else {
-        setPasswordChangeSuccess('Votre nouveau mot de passe personnel a été enregistré avec succès.');
-        setNewPassword('');
-        setConfirmPassword('');
-        onEmployeeAuthenticated(employeeToken, data.employee);
-      }
-    } catch {
-      setError('Erreur réseau lors de la mise à jour du mot de passe.');
-    } finally {
-      setLoading(false);
+
+    if (newPassword.trim().length < 8) {
+      setError('Le nouveau mot de passe doit contenir au moins 8 caractères.');
+      return;
     }
+    if (newPassword !== confirmPassword) {
+      setError('La confirmation du mot de passe ne correspond pas.');
+      return;
+    }
+
+    const updated = updateEmployeePasswordJS(employee.id, newPassword);
+    if (!updated) {
+      setError('Impossible de mettre à jour le mot de passe.');
+      return;
+    }
+
+    setPasswordChangeSuccess('Votre nouveau mot de passe personnel a été enregistré avec succès.');
+    setNewPassword('');
+    setConfirmPassword('');
+    onEmployeeAuthenticated(employeeToken || `emp-js-${updated.id}`, updated);
   };
 
-  // Determine active employee (either via direct link /employe/TOKEN_UNIQUE or via standard login)
+  // Determine active employee (either via direct link /employe.html?token=XXX or via standard login)
   const activeEmployee = directEmployee || employee;
   const isDirectTokenMode = Boolean(directAccessToken && directEmployee);
-
-  if (directAccessToken && directLoading) {
-    return (
-      <div className="max-w-md mx-auto my-16 bg-white rounded-2xl border border-slate-200 p-8 text-center shadow-sm">
-        <p className="text-sm font-semibold text-[#0B2545]">
-          Chargement sécurisé de votre dossier salarié...
-        </p>
-      </div>
-    );
-  }
 
   if (directAccessToken && directError) {
     return (
@@ -364,7 +348,7 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
               disabled={loading}
               className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-[#0B2545] text-white font-bold text-sm hover:bg-[#134074] transition-colors"
             >
-              {loading ? 'Enregistrement...' : 'Valider et accéder à mon dossier employé'}
+              Valider et accéder à mon dossier employé
             </button>
           </form>
 
@@ -388,13 +372,11 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
     maximumFractionDigits: 2
   }).format(activeEmployee.salaire);
 
-  const pdfStreamUrl = isDirectTokenMode
-    ? `/api/employee/contract-pdf-by-token/${encodeURIComponent(
-        directAccessToken!
-      )}#toolbar=0&navpanes=0&scrollbar=1&view=FitH`
-    : `/api/employee/contract-pdf/${activeEmployee.id}?token=${encodeURIComponent(
-        employeeToken || ''
-      )}#toolbar=0&navpanes=0&scrollbar=1&view=FitH`;
+  const hasCustomPdfData = Boolean(
+    activeEmployee.has_custom_pdf &&
+      activeEmployee.contrat_pdf_url &&
+      activeEmployee.contrat_pdf_url.startsWith('data:application/pdf')
+  );
 
   return (
     <div
@@ -544,7 +526,7 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
             </div>
 
             <div className="flex items-center gap-2">
-              {activeEmployee.has_custom_pdf && (
+              {hasCustomPdfData && (
                 <div className="flex items-center bg-slate-800 rounded-lg p-0.5 text-xs">
                   <button
                     type="button"
@@ -594,11 +576,11 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
             className="bg-slate-800 p-3 sm:p-6 overflow-x-auto max-h-[760px] overflow-y-auto relative select-none"
             onContextMenu={handleContextMenu}
           >
-            {viewerMode === 'pdf-native' && activeEmployee.has_custom_pdf ? (
+            {viewerMode === 'pdf-native' && hasCustomPdfData ? (
               <div className="relative w-full h-[660px] bg-white rounded-xl overflow-hidden shadow-lg">
                 <iframe
                   title={`Contrat PDF ${activeEmployee.matricule}`}
-                  src={pdfStreamUrl}
+                  src={`${activeEmployee.contrat_pdf_url}#toolbar=0&navpanes=0&scrollbar=1&view=FitH`}
                   className="w-full h-full border-0"
                 />
                 {/* Protective anti-right-click overlay along top bar of native PDF plugin */}

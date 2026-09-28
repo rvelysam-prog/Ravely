@@ -1,0 +1,62 @@
+{
+  "company": {
+    "company_name": "ATLANTIC TRANSPORT LTD",
+    "slogan": "Le monde sans frontières, votre logistique sans limites.",
+    "address": "King George Blvd, Surrey, BC V3T 2W1, Canada",
+    "phone": "+1 (506) 802-2226",
+    "whatsapp": "15068022226",
+    "email": "atlantictransport.int@ik.me"
+  },
+  "employees": [
+    {
+      "id": 1,
+      "matricule": "EMP-2026-001",
+      "prenom": "Marc-Antoine",
+      "nom": "Tremblay",
+      "email": "m.tremblay@atlantictransport.ca",
+      "password": "Employe@2026!",
+      "telephone": "+1 (604) 555-0194",
+      "adresse": "10450 King George Blvd, Surrey, BC V3T 2W1, Canada",
+      "poste": "Coordinateur Principal des Opérations Multimodales",
+      "departement": "Fret Maritime & Intermodal",
+      "type_contrat": "CDI - Temps plein",
+      "salaire": 6400.0,
+      "devise": "CAD",
+      "date_embauche": "2026-02-01",
+      "photo_url": "",
+      "contrat_pdf_url": "",
+      "has_custom_pdf": false,
+      "must_change_password": false,
+      "is_active": true,
+      "access_token": "EMP2026001-7f9a2d4e8b1c",
+      "access_token_created_at": "2026-09-27T12:00:00.000Z",
+      "created_at": "2026-02-01T09:00:00.000Z",
+      "updated_at": "2026-09-27T12:00:00.000Z"
+    },
+    {
+      "id": 2,
+      "matricule": "EMP-2026-002",
+      "prenom": "Sophie",
+      "nom": "Lavoie",
+      "email": "s.lavoie@atlantictransport.ca",
+      "password": "Employe@2026!",
+      "telephone": "+1 (604) 555-0248",
+      "adresse": "13880 102 Ave, Surrey, BC V3T 5X8, Canada",
+      "poste": "Spécialiste Conformité Douanière & Incoterms",
+      "departement": "Douanes & Transit International",
+      "type_contrat": "CDI - Temps plein",
+      "salaire": 5850.0,
+      "devise": "CAD",
+      "date_embauche": "2026-03-15",
+      "photo_url": "",
+      "contrat_pdf_url": "",
+      "has_custom_pdf": false,
+      "must_change_password": false,
+      "is_active": true,
+      "access_token": "EMP2026002-3c8e1b5a9d4f",
+      "access_token_created_at": "2026-09-27T12:00:00.000Z",
+      "created_at": "2026-03-15T09:00:00.000Z",
+      "updated_at": "2026-09-27T12:00:00.000Z"
+    }
+  ]
+}
