@@ -1,0 +1,6 @@
+{
+  "name": "ATLANTIC TRANSPORT LTD",
+  "description": "Le monde sans frontières, votre logistique sans limites. Transport Multimodal Global, Solutions d'Entreposage & Gestion de la Supply Chain, Commission de Transport & Formalités Douanières.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
