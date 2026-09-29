@@ -14,7 +14,23 @@ import firebaseConfig from '../firebase-applet-config.json';
 // Silence internal @firebase/firestore transient WebChannel retry logs in iframe environments
 setLogLevel('silent');
 
-const app = initializeApp(firebaseConfig);
+const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env || {};
+
+export const resolvedFirebaseConfig = {
+  apiKey: env.VITE_FIREBASE_API_KEY || firebaseConfig.apiKey,
+  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || firebaseConfig.authDomain,
+  projectId: env.VITE_FIREBASE_PROJECT_ID || firebaseConfig.projectId,
+  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || firebaseConfig.storageBucket,
+  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfig.messagingSenderId,
+  appId: env.VITE_FIREBASE_APP_ID || firebaseConfig.appId,
+  measurementId: env.VITE_FIREBASE_MEASUREMENT_ID || firebaseConfig.measurementId || '',
+  firestoreDatabaseId:
+    env.VITE_FIREBASE_DATABASE_ID ||
+    env.VITE_FIREBASE_FIRESTORE_DATABASE_ID ||
+    firebaseConfig.firestoreDatabaseId
+};
+
+const app = initializeApp(resolvedFirebaseConfig);
 
 function initDb() {
   try {
@@ -27,10 +43,10 @@ function initDb() {
         experimentalForceLongPolling: true,
         ignoreUndefinedProperties: true
       },
-      firebaseConfig.firestoreDatabaseId
+      resolvedFirebaseConfig.firestoreDatabaseId
     );
   } catch {
-    return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+    return getFirestore(app, resolvedFirebaseConfig.firestoreDatabaseId);
   }
 }
 
