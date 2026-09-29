@@ -20,19 +20,37 @@ export interface SiteSettings {
 
 export interface Employee {
   id: number;
+  firestore_id?: string;
   matricule: string;
+  civilite: 'Monsieur' | 'Madame';
+  nom_complet: string;
   prenom: string;
   nom: string;
   email: string;
   password?: string;
   telephone: string;
   adresse: string;
+  date_naissance: string;
+  nationalite: string;
   poste: string;
   departement: string;
-  type_contrat: string;
+  type_contrat: 'CDI' | 'CDD' | string;
+  date_effet: string;
+  date_embauche: string;
+  date_fin_cdd?: string;
+  duree_periode_essai: string;
+  lieu_travail: string;
+  horaires: string;
   salaire: number;
   devise: string;
-  date_embauche: string;
+  hebergement_fourni: boolean;
+  hebergement_duree_type?: 'duree_precise' | 'toute_duree_contrat';
+  hebergement_nombre_mois?: number;
+  hebergement_lieu_type?: 'preciser_lieu' | 'texte_generique';
+  adresse_hebergement?: string;
+  date_signature?: string;
+  // Champ "photo" stocké en base64 dans employes.json (et photo_url conservé en alias)
+  photo: string;
   photo_url: string;
   contrat_pdf_url: string;
   has_custom_pdf: boolean;

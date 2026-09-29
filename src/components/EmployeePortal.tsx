@@ -16,10 +16,21 @@ import { Employee, SiteSettings } from '../types';
 import { BrandLogo } from './BrandLogo';
 import {
   authenticateEmployeeJS,
+  fetchEmployeesFromFirestore,
   findEmployeeByDirectTokenJS,
   updateEmployeePasswordJS,
   verifyAdminPasswordJS
 } from '../services/staticStorage';
+import {
+  CONTRACT_STATIC_ASSETS,
+  buildHebergementPoint2Text,
+  createArticleStarIconPngDataUrl,
+  createScriptTitlePngDataUrl,
+  formatDateFr,
+  formatDateLongFr,
+  formatSalaryContract,
+  generateEmployeeQrDataUrl
+} from '../services/contractPdfGenerator';
 
 interface EmployeePortalProps {
   settings: SiteSettings;
@@ -48,7 +59,7 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // Direct link employee state (/employe.html?token=XXX)
+  // Direct link employee state (/employe.html?token=XXX or /employe.html?id=EMP-XXXX)
   const [directEmployee, setDirectEmployee] = useState<Employee | null>(null);
   const [directError, setDirectError] = useState('');
 
@@ -62,22 +73,61 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
   const [viewerMode, setViewerMode] = useState<'document' | 'pdf-native'>('document');
   const [securityNotice, setSecurityNotice] = useState<string | null>(null);
 
-  // Resolve employee directly in pure JS if accessed via /employe.html?token=XXX
+  // Visual assets for the A4 Contract
+  const [qrDataUrl, setQrDataUrl] = useState<string>('');
+  const [scriptTitleUrl, setScriptTitleUrl] = useState<string>('');
+  const [starIconUrl, setStarIconUrl] = useState<string>('');
+
+  // Resolve employee directly in pure JS or Firestore if accessed via /employe.html?token=XXX or ?id=EMP-XXXX
   useEffect(() => {
+    let cancelled = false;
     if (!directAccessToken) {
       setDirectEmployee(null);
       setDirectError('');
       return;
     }
-    const result = findEmployeeByDirectTokenJS(directAccessToken);
-    if (result.employee) {
-      setDirectEmployee(result.employee);
+    const localResult = findEmployeeByDirectTokenJS(directAccessToken);
+    if (localResult.employee) {
+      setDirectEmployee(localResult.employee);
       setDirectError('');
-    } else {
-      setDirectEmployee(null);
-      setDirectError(result.error || 'Lien d’accès direct invalide ou révoqué.');
+      return;
     }
+    fetchEmployeesFromFirestore()
+      .then(() => {
+        if (cancelled) return;
+        const freshResult = findEmployeeByDirectTokenJS(directAccessToken);
+        if (freshResult.employee) {
+          setDirectEmployee(freshResult.employee);
+          setDirectError('');
+        } else {
+          setDirectEmployee(null);
+          setDirectError(freshResult.error || 'Lien d’accès direct invalide ou révoqué.');
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setDirectEmployee(null);
+        setDirectError(localResult.error || 'Lien d’accès direct invalide ou révoqué.');
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [directAccessToken]);
+
+  const activeEmployee = directEmployee || employee;
+
+  useEffect(() => {
+    setScriptTitleUrl(createScriptTitlePngDataUrl());
+    setStarIconUrl(createArticleStarIconPngDataUrl());
+  }, []);
+
+  useEffect(() => {
+    if (activeEmployee?.matricule) {
+      generateEmployeeQrDataUrl(activeEmployee.matricule)
+        .then(setQrDataUrl)
+        .catch(() => {});
+    }
+  }, [activeEmployee?.matricule]);
 
   // Block Ctrl+S, Ctrl+P, Ctrl+U and right-click when viewing employee portal
   useEffect(() => {
@@ -85,7 +135,7 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
       if ((e.ctrlKey || e.metaKey) && ['s', 'p', 'u'].includes(e.key.toLowerCase())) {
         e.preventDefault();
         setSecurityNotice(
-          'Action bloquée : Le téléchargement et l’impression du contrat de travail sont désactivés.'
+          'Action bloquée : Le téléchargement et l’impression du contrat de travail sont réservés à l’administrateur.'
         );
         setTimeout(() => setSecurityNotice(null), 4000);
       }
@@ -100,21 +150,27 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
     setTimeout(() => setSecurityNotice(null), 3500);
   };
 
-  // Pure JS Login (Zero server fetch, zero "Erreur de connexion au serveur")
-  const handleLogin = (e: React.FormEvent) => {
+  // Pure JS + Firestore Login
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
 
-    // 1. Check if Admin credentials entered in Espace Employé
     if (verifyAdminPasswordJS(password, email)) {
       setLoading(false);
       onAdminAuthenticated('admin-js-session');
       return;
     }
 
-    // 2. Authenticate Employee in pure JS against localStorage / employes.json
-    const authResult = authenticateEmployeeJS(email, password);
+    let authResult = authenticateEmployeeJS(email, password);
+    if (!authResult.ok) {
+      try {
+        await fetchEmployeesFromFirestore();
+        authResult = authenticateEmployeeJS(email, password);
+      } catch {
+        // Ignore Firestore network error and report auth error
+      }
+    }
     setLoading(false);
 
     if (!authResult.ok) {
@@ -154,8 +210,6 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
     onEmployeeAuthenticated(employeeToken || `emp-js-${updated.id}`, updated);
   };
 
-  // Determine active employee (either via direct link /employe.html?token=XXX or via standard login)
-  const activeEmployee = directEmployee || employee;
   const isDirectTokenMode = Boolean(directAccessToken && directEmployee);
 
   if (directAccessToken && directError) {
@@ -282,7 +336,7 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
   }
 
   // ==========================================================================
-  // VIEW 2: FORCE PASSWORD CHANGE ON FIRST LOGIN (ONLY WHEN LOGGED IN VIA PASSWORD)
+  // VIEW 2: FORCE PASSWORD CHANGE ON FIRST LOGIN
   // ==========================================================================
   if (!isDirectTokenMode && activeEmployee.must_change_password) {
     return (
@@ -303,7 +357,7 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
           </div>
 
           <p className="text-xs sm:text-sm text-slate-600 mb-6 leading-relaxed">
-            Bienvenue <strong>{activeEmployee.prenom} {activeEmployee.nom}</strong>. Pour votre première connexion à l’<strong>Espace Employé</strong>, vous devez définir un nouveau mot de passe personnel (minimum 8 caractères) avant d’accéder à votre dossier et à votre contrat.
+            Bienvenue <strong>{activeEmployee.nom_complet || `${activeEmployee.prenom} ${activeEmployee.nom}`}</strong>. Pour votre première connexion à l’<strong>Espace Employé</strong>, vous devez définir un nouveau mot de passe personnel (minimum 8 caractères) avant d’accéder à votre dossier et à votre contrat.
           </p>
 
           {error && (
@@ -365,18 +419,36 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
   }
 
   // ==========================================================================
-  // VIEW 3: AUTHENTICATED OR DIRECT-LINK EMPLOYEE DOSSIER + PROTECTED PDF VIEWER
+  // VIEW 3: EMPLOYEE DOSSIER + EXACT VISUAL A4 CONTRACT VIEWER (READ-ONLY)
   // ==========================================================================
-  const formattedSalary = new Intl.NumberFormat('fr-CA', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  }).format(activeEmployee.salaire);
+  const formattedSalaryWithCurrency = formatSalaryContract(
+    activeEmployee.salaire,
+    activeEmployee.devise
+  );
 
   const hasCustomPdfData = Boolean(
     activeEmployee.has_custom_pdf &&
       activeEmployee.contrat_pdf_url &&
       activeEmployee.contrat_pdf_url.startsWith('data:application/pdf')
   );
+
+  const isCDD = String(activeEmployee.type_contrat).toUpperCase().includes('CDD');
+  const civilite = activeEmployee.civilite || 'Monsieur';
+  const fullNameUpper = (
+    activeEmployee.nom_complet || `${activeEmployee.prenom} ${activeEmployee.nom}`
+  )
+    .trim()
+    .toUpperCase();
+  const dateNaissance = formatDateFr(activeEmployee.date_naissance || '1984-08-24');
+  const dateNaissanceLong = formatDateLongFr(activeEmployee.date_naissance || '1984-08-24');
+  const nationalite = activeEmployee.nationalite || 'Canadienne';
+  const dateEffet = formatDateFr(activeEmployee.date_effet || activeEmployee.date_embauche);
+  const dateFinCdd = formatDateFr(activeEmployee.date_fin_cdd || '2027-09-28');
+  const periodeEssai = activeEmployee.duree_periode_essai || '3 semaines';
+  const lieuTravail = (activeEmployee.lieu_travail || 'SURREY, COLOMBIE-BRITANNIQUE').toUpperCase();
+  const dateSignature = formatDateFr(activeEmployee.date_signature);
+  const displayPhoto = activeEmployee.photo || activeEmployee.photo_url;
+  const point2HebergementText = buildHebergementPoint2Text(activeEmployee);
 
   return (
     <div
@@ -387,13 +459,13 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
       <div className="bg-[#0B2545] text-white rounded-2xl p-6 sm:p-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border border-amber-400/30">
         <div className="space-y-1">
           <div className="text-xs font-mono text-amber-400">
-            Espace Employé Sécurisé · Matricule {activeEmployee.matricule}
+            Espace Employé Sécurisé · Matricule {activeEmployee.matricule} · Statut Vérifié
           </div>
           <h1 className="font-display font-bold text-2xl sm:text-3xl text-white">
-            {activeEmployee.prenom} {activeEmployee.nom}
+            {civilite} {fullNameUpper}
           </h1>
           <p className="text-xs sm:text-sm text-slate-300">
-            {activeEmployee.poste} · {settings.company_name}
+            {activeEmployee.poste} · Contrat {isCDD ? 'CDD' : 'CDI'} · {settings.company_name}
           </p>
         </div>
 
@@ -436,13 +508,13 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-        {/* Left Column: Employee Identity Card (Photo, Matricule, Nom, Poste, Contrat, Salaire, Date d'embauche) */}
+        {/* Left Column: Employee Identity Card */}
         <div className="lg:col-span-4 bg-white rounded-2xl border border-slate-200 p-6 sm:p-7 space-y-6">
           <div className="flex flex-col items-center text-center">
             <div className="w-36 h-36 rounded-2xl overflow-hidden border-2 border-[#0B2545] shadow-sm bg-slate-100 mb-4">
               <img
-                src={activeEmployee.photo_url}
-                alt={`Photo d'identité de ${activeEmployee.prenom} ${activeEmployee.nom}`}
+                src={displayPhoto}
+                alt={`Photo d'identité de ${fullNameUpper}`}
                 referrerPolicy="no-referrer"
                 draggable={false}
                 className="w-full h-full object-cover pointer-events-none select-none"
@@ -452,75 +524,82 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
               Matricule : {activeEmployee.matricule}
             </span>
             <h2 className="font-display font-bold text-xl text-[#0B2545] mt-0.5">
-              {activeEmployee.prenom} {activeEmployee.nom}
+              {civilite} {fullNameUpper}
             </h2>
             <p className="text-xs text-slate-600 mt-1">{activeEmployee.poste}</p>
           </div>
 
-          <dl className="space-y-3.5 text-sm pt-4 border-t border-slate-100">
-            <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-100">
+          <dl className="space-y-3 text-sm pt-4 border-t border-slate-100">
+            <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
               <dt className="text-slate-500 text-xs">Matricule</dt>
               <dd className="font-mono tabular-nums font-bold text-[#0B2545]">
                 {activeEmployee.matricule}
               </dd>
             </div>
 
-            <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-100">
-              <dt className="text-slate-500 text-xs">Nom complet</dt>
-              <dd className="font-semibold text-slate-900 text-right">
-                {activeEmployee.prenom} {activeEmployee.nom}
+            <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
+              <dt className="text-slate-500 text-xs">Civilité &amp; Nom complet</dt>
+              <dd className="font-semibold text-blue-700 text-right">
+                {civilite} {fullNameUpper}
               </dd>
             </div>
 
-            <div className="flex items-start justify-between gap-2 pb-3 border-b border-slate-100">
-              <dt className="text-slate-500 text-xs shrink-0">Poste</dt>
+            <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
+              <dt className="text-slate-500 text-xs">Date de naissance</dt>
+              <dd className="font-mono text-xs font-semibold text-slate-900">
+                {dateNaissance} ({nationalite})
+              </dd>
+            </div>
+
+            <div className="flex items-start justify-between gap-2 pb-2.5 border-b border-slate-100">
+              <dt className="text-slate-500 text-xs shrink-0">Poste occupé</dt>
               <dd className="font-semibold text-slate-900 text-right">
                 {activeEmployee.poste}
               </dd>
             </div>
 
-            <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-100">
+            <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
               <dt className="text-slate-500 text-xs">Type de contrat</dt>
               <dd className="font-semibold text-[#134074] text-right">
-                {activeEmployee.type_contrat}
+                {isCDD ? `CDD (du ${dateEffet} au ${dateFinCdd})` : 'CDI (Durée indéterminée)'}
               </dd>
             </div>
 
-            <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-100">
-              <dt className="text-slate-500 text-xs">Salaire mensuel</dt>
-              <dd className="font-mono tabular-nums font-bold text-emerald-700">
-                {formattedSalary} {activeEmployee.devise}
+            <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
+              <dt className="text-slate-500 text-xs">Salaire brut mensuel</dt>
+              <dd className="font-mono tabular-nums font-bold text-[#0000AA]">
+                {formattedSalaryWithCurrency}
               </dd>
             </div>
 
             <div className="flex items-center justify-between gap-2">
-              <dt className="text-slate-500 text-xs">Date d’embauche</dt>
+              <dt className="text-slate-500 text-xs">Date d’effet</dt>
               <dd className="font-mono tabular-nums font-semibold text-slate-900">
-                {activeEmployee.date_embauche}
+                {dateEffet}
               </dd>
             </div>
           </dl>
 
           <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 text-xs text-slate-600 space-y-1">
-            <p className="font-semibold text-[#0B2545]">Dossier Individuel Certifié</p>
+            <p className="font-semibold text-[#0B2545]">Dossier Individuel Certifié — NE: 799094917</p>
             <p>
               Rattaché au siège d’{settings.company_name} ({settings.address}).
             </p>
           </div>
         </div>
 
-        {/* Right Column: Integrated Non-Downloadable PDF Contract Viewer */}
+        {/* Right Column: Integrated Non-Downloadable A4 Contract Viewer */}
         <div className="lg:col-span-8 bg-white rounded-2xl border border-slate-200 overflow-hidden">
-          {/* Viewer Toolbar (No Download / No Print buttons!) */}
+          {/* Viewer Toolbar (Zero Download Button for Employee!) */}
           <div className="bg-slate-900 text-white px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-800">
             <div className="flex items-center gap-2.5">
               <FileText className="w-5 h-5 text-amber-400 shrink-0" />
               <div>
                 <h2 className="text-sm font-bold text-white">
-                  Contrat de Travail PDF — {activeEmployee.matricule}.pdf
+                  Contrat de Travail ({isCDD ? 'à durée déterminée' : 'à durée indéterminée'}) — {activeEmployee.matricule}.pdf
                 </h2>
                 <p className="text-[11px] text-slate-400">
-                  Consultation intégrée sécurisée · Clic droit, impression et téléchargement désactivés
+                  Consultation intégrée sécurisée · Téléchargement réservé à l’administration
                 </p>
               </div>
             </div>
@@ -535,7 +614,7 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
                       viewerMode === 'document' ? 'bg-amber-400 text-[#0B2545]' : 'text-slate-300'
                     }`}
                   >
-                    Lecteur Mobile/HD
+                    Aperçu A4 Officiel
                   </button>
                   <button
                     type="button"
@@ -544,7 +623,7 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
                       viewerMode === 'pdf-native' ? 'bg-amber-400 text-[#0B2545]' : 'text-slate-300'
                     }`}
                   >
-                    PDF Original
+                    Lecteur PDF
                   </button>
                 </div>
               )}
@@ -571,141 +650,475 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
             </div>
           </div>
 
-          {/* Protected Viewport */}
+          {/* Protected A4 Contract Viewport */}
           <div
-            className="bg-slate-800 p-3 sm:p-6 overflow-x-auto max-h-[760px] overflow-y-auto relative select-none"
+            className="bg-slate-800 p-3 sm:p-6 overflow-x-auto max-h-[820px] overflow-y-auto relative select-none"
             onContextMenu={handleContextMenu}
           >
             {viewerMode === 'pdf-native' && hasCustomPdfData ? (
-              <div className="relative w-full h-[660px] bg-white rounded-xl overflow-hidden shadow-lg">
+              <div className="relative w-full h-[720px] bg-white rounded-xl overflow-hidden shadow-lg">
                 <iframe
                   title={`Contrat PDF ${activeEmployee.matricule}`}
                   src={`${activeEmployee.contrat_pdf_url}#toolbar=0&navpanes=0&scrollbar=1&view=FitH`}
                   className="w-full h-full border-0"
                 />
-                {/* Protective anti-right-click overlay along top bar of native PDF plugin */}
                 <div
-                  className="absolute top-0 left-0 right-0 h-12 bg-transparent"
+                  className="absolute top-0 left-0 right-0 h-14 bg-transparent"
                   onContextMenu={handleContextMenu}
                 />
               </div>
             ) : (
+              /* EXACT A4 VISUAL REPRODUCTION OF THE 4-PAGE REFERENCE CONTRACT */
               <div
                 style={{ fontSize: `${zoomLevel}%` }}
-                className="max-w-2xl mx-auto bg-white text-slate-900 rounded-lg shadow-xl border border-slate-300 p-6 sm:p-10 space-y-6 relative overflow-hidden"
+                className="max-w-[794px] mx-auto bg-white text-black shadow-2xl border border-slate-300 relative overflow-hidden"
               >
-                {/* Official Letterhead */}
-                <div className="border-b-2 border-[#0B2545] pb-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="flex items-center gap-3">
-                    <BrandLogo
-                      customLogoUrl={settings.logo_url}
-                      companyName={settings.company_name}
-                      size="footer"
-                    />
-                    <div>
-                      <h3 className="font-display font-extrabold text-base sm:text-lg text-[#0B2545]">
-                        {settings.company_name}
-                      </h3>
-                      <p className="text-xs text-slate-600">{settings.address}</p>
-                      <p className="text-xs font-mono text-slate-500">
-                        Tél: {settings.phone} · {settings.email}
+                {/* Rule 1: Quasi-invisible watermark "ATLANTICLAND TRANSPORT LTD" on white background */}
+                <div
+                  aria-hidden="true"
+                  className="absolute inset-0 pointer-events-none overflow-hidden select-none z-0 opacity-[0.03] flex flex-col justify-between py-2 px-2"
+                >
+                  {Array.from({ length: 44 }).map((_, idx) => (
+                    <div
+                      key={idx}
+                      className="font-sans text-[10px] tracking-wider text-slate-900 whitespace-nowrap"
+                    >
+                      ATLANTICLAND TRANSPORT LTD &nbsp;&nbsp;&nbsp;&nbsp; ATLANTICLAND TRANSPORT LTD &nbsp;&nbsp;&nbsp;&nbsp; ATLANTICLAND TRANSPORT LTD &nbsp;&nbsp;&nbsp;&nbsp; ATLANTICLAND TRANSPORT LTD
+                    </div>
+                  ))}
+                </div>
+
+                {/* Main A4 Content Layer with strict 20mm horizontal margins (Rule 4) */}
+                <div className="relative z-10 px-6 sm:px-[20mm] pt-6 pb-16 space-y-6 break-words">
+                  {/* Rule 2: Top Header using ONLY logo-atlantic.png (left), logo-canada.png (right), and blason original.png */}
+                  <div className="grid grid-cols-1 sm:grid-cols-12 items-end gap-3 pb-3 border-b-2 border-black">
+                    <div className="sm:col-span-4 flex flex-col items-start">
+                      <img
+                        src={CONTRACT_STATIC_ASSETS.logoAtlantic}
+                        alt="Atlantic Transport Logo"
+                        referrerPolicy="no-referrer"
+                        className="h-14 w-auto object-contain mb-1"
+                        draggable={false}
+                      />
+                      <div className="text-[11.5px] leading-snug font-serif text-[#2E7D32]">
+                        <p>Atlantic Transport ltd.</p>
+                        <p>King George Blvd, Surrey</p>
+                        <p>BC V3T 2W1, Canada</p>
+                        <p>Téléphone: +1 (506) 802-2226</p>
+                        <p>Email : atlantictransport.int@ik.me</p>
+                      </div>
+                    </div>
+
+                    <div className="sm:col-span-4 text-left sm:text-center pb-2">
+                      <span className="font-sans font-bold text-xs sm:text-[12.5px] text-[#2E7D32]">
+                        Numéro d&apos;entreprise (NE): 799094917
+                      </span>
+                    </div>
+
+                    <div className="sm:col-span-4 flex flex-col items-start sm:items-end gap-1.5">
+                      <img
+                        src={CONTRACT_STATIC_ASSETS.logoCanada}
+                        alt="Government of Canada"
+                        referrerPolicy="no-referrer"
+                        className="h-12 sm:h-14 w-auto object-contain"
+                        draggable={false}
+                      />
+                      <img
+                        src={CONTRACT_STATIC_ASSETS.blasonOriginal}
+                        alt="Blason officiel"
+                        referrerPolicy="no-referrer"
+                        className="h-11 sm:h-12 w-auto object-contain"
+                        draggable={false}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Title Block + Top-Left QR Code ("Scanner for Status") */}
+                  <div className="relative pt-1">
+                    <div className="text-center space-y-1 flex flex-col items-center">
+                      {scriptTitleUrl ? (
+                        <img
+                          src={scriptTitleUrl}
+                          alt="Contrat de Travail"
+                          className="h-14 sm:h-16 w-auto object-contain"
+                          draggable={false}
+                        />
+                      ) : (
+                        <h3 className="text-3xl sm:text-4xl font-bold italic text-[#002060]">
+                          Contrat de Travail
+                        </h3>
+                      )}
+                      <p className="font-sans font-bold text-sm sm:text-base text-[#3A2E21]">
+                        {isCDD ? '(à durée déterminée)' : '(à durée indéterminée)'}
                       </p>
                     </div>
-                  </div>
-                  <div className="text-left sm:text-right font-mono text-xs">
-                    <span className="block font-bold text-[#0B2545]">RÉF : {activeEmployee.matricule}</span>
-                    <span className="block text-slate-500">CONFIDENTIEL — LECTURE SEULE</span>
-                  </div>
-                </div>
 
-                {/* Contract Title */}
-                <div className="text-center py-3 bg-slate-50 rounded-xl border border-slate-200">
-                  <h4 className="font-display font-bold text-base sm:text-lg text-[#0B2545] uppercase tracking-wide">
-                    Contrat de Travail Individuel — {activeEmployee.type_contrat}
-                  </h4>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Régime juridique : Province de la Colombie-Britannique, Canada
-                  </p>
-                </div>
-
-                {/* Parties */}
-                <div className="space-y-4 text-xs sm:text-sm leading-relaxed text-slate-700">
-                  <div className="p-4 rounded-xl bg-slate-50/70 border border-slate-200/80 space-y-2">
-                    <p className="font-bold text-[#0B2545]">ENTRE LES SOUSSIGNÉS :</p>
-                    <p>
-                      <strong>L’EMPLOYEUR :</strong> La société <strong>{settings.company_name}</strong>, ayant son siège d’exploitation situé à <strong>{settings.address}</strong>, représentée par sa Direction des Ressources Humaines, d’une part ;
-                    </p>
-                    <p>
-                      <strong>ET LE SALARIÉ :</strong> <strong>{activeEmployee.prenom} {activeEmployee.nom}</strong>, immatriculé(e) sous le numéro <strong>{activeEmployee.matricule}</strong>, joignable à l’adresse électronique <strong>{activeEmployee.email}</strong>, d’autre part.
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <h5 className="font-bold text-[#0B2545]">
-                      ARTICLE 1 — ENGAGEMENT, POSTE ET AFFECTATION
-                    </h5>
-                    <p>
-                      À compter du <strong className="font-mono">{activeEmployee.date_embauche}</strong>,{' '}
-                      <strong>{settings.company_name}</strong> engage{' '}
-                      <strong>{activeEmployee.prenom} {activeEmployee.nom}</strong> en qualité de{' '}
-                      <strong>{activeEmployee.poste}</strong> au sein du département{' '}
-                      <strong>{activeEmployee.departement || 'Opérations Logistiques'}</strong>, dans le cadre d’un contrat de type <strong>{activeEmployee.type_contrat}</strong>.
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <h5 className="font-bold text-[#0B2545]">
-                      ARTICLE 2 — RÉMUNÉRATION MENSUELLE
-                    </h5>
-                    <p>
-                      En contrepartie de l’accomplissement de ses fonctions, le Salarié percevra une rémunération mensuelle brute fixée à{' '}
-                      <strong className="font-mono text-[#0B2545]">
-                        {formattedSalary} {activeEmployee.devise}
-                      </strong>
-                      , versée par virement bancaire selon les échéances habituelles de l’entreprise.
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <h5 className="font-bold text-[#0B2545]">
-                      ARTICLE 3 — OBLIGATIONS PROFESSIONNELLES &amp; SECRET DES OPÉRATIONS
-                    </h5>
-                    <p>
-                      Le Salarié s’engage à observer scrupuleusement les procédures opérationnelles, douanières et de sécurité d’<strong>{settings.company_name}</strong>. Toutes les données relatives aux expéditions, manifestes de fret, tarifs et clients demeurent strictement confidentielles.
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <h5 className="font-bold text-[#0B2545]">
-                      ARTICLE 4 — CONSULTATION NUMÉRIQUE SÉCURISÉE
-                    </h5>
-                    <p>
-                      Le présent contrat est mis à disposition du Salarié au sein de son Espace Employé personnel avec protection numérique contre la copie et le téléchargement non autorisés.
-                    </p>
-                  </div>
-                </div>
-
-                {/* Signatures */}
-                <div className="pt-6 border-t border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-6 text-xs">
-                  <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
-                    <span className="font-bold text-[#0B2545] block">POUR L’EMPLOYEUR</span>
-                    <span className="text-slate-600 block">{settings.company_name}</span>
-                    <span className="text-slate-500 block">King George Blvd, Surrey, BC V3T 2W1</span>
-                    <div className="pt-2 font-mono text-[11px] text-emerald-700 font-semibold">
-                      [Signé et certifié numériquement — Direction RH]
+                    {/* Top-Left under title: QR Code + "Scanner for Status" */}
+                    <div className="mt-3 sm:mt-0 sm:absolute sm:top-4 sm:left-0 flex flex-col items-center w-28">
+                      {qrDataUrl && (
+                        <img
+                          src={qrDataUrl}
+                          alt="QR Code Scanner for Status"
+                          className="w-24 h-24 bg-white p-0.5"
+                          draggable={false}
+                        />
+                      )}
+                      <span className="font-sans font-bold text-[10px] text-black mt-1">
+                        Scanner for Status
+                      </span>
                     </div>
                   </div>
 
-                  <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
-                    <span className="font-bold text-[#0B2545] block">LE SALARIÉ</span>
-                    <span className="text-slate-600 block">
-                      {activeEmployee.prenom} {activeEmployee.nom} ({activeEmployee.matricule})
-                    </span>
-                    <span className="text-slate-500 block">Date d’effet : {activeEmployee.date_embauche}</span>
-                    <div className="pt-2 font-mono text-[11px] text-[#134074] font-semibold">
-                      [Dossier actif vérifié — Espace Employé]
+                  {/* Body Introduction: "Entre les soussignés :" with #0000AA & non-breaking spaces */}
+                  <div className="pt-2 sm:pt-10 space-y-3 font-serif italic font-bold text-xs sm:text-[14px] leading-relaxed text-black">
+                    <p
+                      className="text-xl sm:text-2xl font-normal italic text-black"
+                      style={{ fontFamily: '"Brush Script MT", Georgia, serif' }}
+                    >
+                      Entre les soussignés :
+                    </p>
+                    <p>
+                      L&apos;entreprise : ATLANTIC TRANSPORT LTD dont le siège social est situé à King
+                      George Blvd, Surrey, BC V3T 2W1, Canada. Immatriculée auprès du Registre de
+                      commerce et des Sociétés sous le numéro 799094917 Et représentée par Monsieur:
+                      <br />
+                      <span className="not-italic font-normal text-[#0000AA] uppercase">
+                        ANTOINE FORESTIN&nbsp;
+                      </span>
+                    </p>
+                    <p className="pl-4 font-normal italic">
+                      Agissant en qualité de DIRECTEUR GENERAL
+                    </p>
+                    <p
+                      className="pl-2 text-lg sm:text-xl font-normal italic"
+                      style={{ fontFamily: '"Brush Script MT", Georgia, serif' }}
+                    >
+                      D&apos;une part,
+                    </p>
+                    <p className="pl-4">Et</p>
+                    <p>
+                      {civilite}:&nbsp;
+                      <span className="not-italic font-normal text-[#0000AA] uppercase">
+                        {fullNameUpper}&nbsp;
+                      </span>
+                      demeurant&nbsp;: {activeEmployee.adresse}&nbsp;né(e) le {dateNaissanceLong}&nbsp;de
+                      nationalité&nbsp;: {nationalite}&nbsp;, qui déclare expressément être libre de tout
+                      engagement, ne pas être soumis(e) à une clause de non-concurrence et être en
+                      mesure de conclure le présent contrat.
+                    </p>
+                    <p
+                      className="pl-2 text-lg sm:text-xl font-normal italic"
+                      style={{ fontFamily: '"Brush Script MT", Georgia, serif' }}
+                    >
+                      D&apos;autre part,
+                    </p>
+                    <p className="pl-4 pt-1">IL A ETE CONVENU CE QUI SUIT :</p>
+                  </div>
+
+                  {/* Articles I to IX */}
+                  <div className="space-y-4 pt-2 font-serif italic font-bold text-xs sm:text-[14px] leading-relaxed text-black">
+                    {[
+                      {
+                        num: 'I',
+                        title: 'MOTIF (1)',
+                        body: (
+                          <>
+                            {civilite}&nbsp;
+                            <span className="not-italic font-normal text-[#0000AA] uppercase">
+                              {fullNameUpper}&nbsp;
+                            </span>
+                            est engagé(e) par l&apos;entreprise en vue de servir la clientèle.
+                          </>
+                        )
+                      },
+                      {
+                        num: 'II',
+                        title: 'EMPLOI OCCUPE',
+                        body: (
+                          <>
+                            {civilite}&nbsp;
+                            <span className="not-italic font-normal text-[#0000AA] uppercase">
+                              {fullNameUpper}&nbsp;
+                            </span>
+                            est employé(e) en qualité de {activeEmployee.poste}&nbsp;au sein de
+                            l&apos;Entreprise Atlantic Transport.
+                          </>
+                        )
+                      },
+                      {
+                        num: 'III',
+                        title: 'DUREE',
+                        body: isCDD ? (
+                          <>
+                            Le présent contrat est conclu pour une durée déterminée du&nbsp;
+                            <span className="not-italic font-normal text-[#0000AA]">
+                              {dateEffet} au {dateFinCdd}.&nbsp;
+                            </span>
+                            <br />
+                            Il pourra y être mis fin par l&apos;une ou l&apos;autre des parties,
+                            sous réserve de respecter les règles de procédure légales.
+                          </>
+                        ) : (
+                          <>
+                            Le présent contrat est conclu pour une durée indéterminée et prend effet
+                            le&nbsp;
+                            <span className="not-italic font-normal text-[#0000AA]">
+                              {dateEffet}.&nbsp;
+                            </span>
+                            <br />
+                            Il pourra y être mis fin par l&apos;une ou l&apos;autre des parties,
+                            sous réserve de respecter les règles de procédure légales.
+                          </>
+                        )
+                      },
+                      {
+                        num: 'IV',
+                        title: "PERIODE D'ESSAI",
+                        body: (
+                          <>
+                            Le contrat ne deviendra définitif qu&apos;à l&apos;issue d&apos;une
+                            formation interne d&apos;essai de&nbsp;
+                            <span className="font-normal text-[#0000AA]">{periodeEssai},&nbsp;</span>
+                            au cours de laquelle chacune des parties pourra rompre le contrat sans
+                            indemnité.
+                          </>
+                        )
+                      },
+                      {
+                        num: 'V',
+                        title: 'LIEU DE TRAVAIL',
+                        body: <>Le lieu de travail est situé à {lieuTravail}&nbsp;</>
+                      },
+                      {
+                        num: 'VI',
+                        title: 'HORAIRE DE TRAVAIL',
+                        body: (
+                          <div className="space-y-1">
+                            <p>Les horaires seront les suivants :</p>
+                            <ul className="pl-8 space-y-1">
+                              {[
+                                'Le lundi de 08H à 17H',
+                                'Le mardi de 08H à 17H',
+                                'Le mercredi de 08H à 15 H',
+                                'Le jeudi de 08H à 17 H',
+                                'Le vendredi de 08 H à 14H'
+                              ].map((line, i) => (
+                                <li key={i} className="flex items-center gap-2">
+                                  <span className="not-italic text-slate-600">🕒</span>
+                                  <span>{line}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )
+                      },
+                      {
+                        num: 'VII',
+                        title: 'REMUNERATION',
+                        body: (
+                          <>
+                            En contrepartie de ses fonctions, {civilite}&nbsp;
+                            <span className="not-italic font-normal text-[#0000AA] uppercase">
+                              {fullNameUpper}&nbsp;
+                            </span>
+                            percevra une rémunération brute mensuelle de&nbsp;
+                            <span className="text-[#0000AA]">
+                              {formattedSalaryWithCurrency}&nbsp;
+                            </span>
+                            pour un horaire hebdomadaire moyen de&nbsp;
+                            <span className="text-[#0000AA]">40 heures.&nbsp;</span>Elle lui sera
+                            versée à la fin de chaque mois.
+                          </>
+                        )
+                      },
+                      {
+                        num: 'VIII',
+                        title: 'RUPTURE POUR FAUTE GRAVE OU FORCE MAJEURE',
+                        body: (
+                          <>
+                            Chacune des parties se réserve mutuellement le droit de mettre fin au
+                            contrat immédiatement en cas de faute grave de l&apos;autre parties ou
+                            cas de force majeure.
+                          </>
+                        )
+                      },
+                      {
+                        num: 'IX',
+                        title: 'INDEMNITE DE FIN DE CONTRAT',
+                        body: (
+                          <>
+                            A la cessation de ses fonctions dans l&apos;entreprise, {civilite}&nbsp;
+                            <span className="not-italic font-normal text-[#0000AA] uppercase">
+                              {fullNameUpper}&nbsp;
+                            </span>
+                            percevra une indemnité de fin de contrat aux conditions et taux fixés
+                            par le code du travail.
+                          </>
+                        )
+                      }
+                    ].map((art) => (
+                      <div key={art.num}>
+                        <h4 className="font-serif text-xs sm:text-[15px] text-black flex items-center gap-2">
+                          {starIconUrl ? (
+                            <img
+                              src={starIconUrl}
+                              alt=""
+                              className="w-4 h-4 object-contain shrink-0"
+                              draggable={false}
+                            />
+                          ) : (
+                            <span className="text-blue-800">✦</span>
+                          )}
+                          <span>
+                            <strong className="not-italic underline">ARTICLE {art.num}</strong> :{' '}
+                            <span className="italic font-normal">{art.title}</span>
+                          </span>
+                        </h4>
+                        <div className="mt-1 pl-2">{art.body}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Rule 7 & Rule 8: Centered Brown Underlined "Clause des obligations de l'employeur" (#8B4513) */}
+                  <div className="pt-4 space-y-3 font-serif text-black">
+                    <h4 className="font-serif not-italic font-bold text-base sm:text-lg text-[#8B4513] underline text-center">
+                      Clause des obligations de l&apos;employeur
+                    </h4>
+
+                    <p className="italic font-bold text-xs sm:text-[14px] leading-relaxed">
+                      L&apos;employeur s&apos;engage à fournir au salarié les moyens nécessaires à
+                      l&apos;exécution de ses fonctions dans les conditions définies par le présent
+                      contrat. À ce titre, l&apos;employeur assume les obligations suivantes :
+                    </p>
+
+                    {/* Rule 8: Titles in bold black size 12pt, explanatory paragraphs underneath in normal italic size 10pt */}
+                    <div className="space-y-3.5 pt-1">
+                      <div>
+                        <p className="pl-2 font-bold not-italic text-[12pt] text-black">
+                          1. Mise à disposition du poste de travail
+                        </p>
+                        <p className="pl-4 italic font-normal text-[10pt] leading-relaxed text-black mt-0.5">
+                          L&apos;employeur garantit au salarié l&apos;accès aux outils, équipements
+                          et ressources nécessaires à l&apos;exercice de ses fonctions.
+                        </p>
+                      </div>
+
+                      <div>
+                        <p className="pl-2 font-bold not-italic text-[12pt] text-black">
+                          2. Conditions d&apos;hébergement
+                        </p>
+                        <p className="pl-4 italic font-normal text-[10pt] leading-relaxed text-black mt-0.5">
+                          {point2HebergementText}
+                        </p>
+                      </div>
+
+                      <div>
+                        <p className="pl-2 font-bold not-italic text-[12pt] text-black">
+                          3. Protection de la santé et de la sécurité
+                        </p>
+                        <p className="pl-4 italic font-normal text-[10pt] leading-relaxed text-black mt-0.5">
+                          Conformément à l&apos;article L4121-1 du Code du travail, l&apos;employeur
+                          met en œuvre les mesures nécessaires pour assurer la sécurité et protéger
+                          la santé physique et mentale du salarié sur le lieu de travail.
+                        </p>
+                      </div>
+
+                      <div>
+                        <p className="pl-2 font-bold not-italic text-[12pt] text-black">
+                          4. Respect des droits du salarié
+                        </p>
+                        <p className="pl-4 italic font-normal text-[10pt] leading-relaxed text-black mt-0.5">
+                          L&apos;employeur s&apos;engage à respecter les droits fondamentaux du
+                          salarié, notamment en matière de temps de travail, de repos, de
+                          non-discrimination et de dignité au travail.
+                        </p>
+                      </div>
+
+                      <div>
+                        <p className="pl-2 font-bold not-italic text-[12pt] text-black">
+                          5. Congés payés
+                        </p>
+                        <div className="pl-4 italic font-normal text-[10pt] leading-relaxed text-black mt-0.5 space-y-1">
+                          <p>
+                            Le salarié bénéficie de congés payés conformément aux dispositions
+                            légales en vigueur.
+                          </p>
+                          <p>
+                            Les dates de congés sont fixées en accord avec l&apos;employeur, dans le
+                            respect des nécessités de service et du calendrier de l&apos;entreprise.
+                          </p>
+                          <p>
+                            Durant ses congés, le salarié percevra une indemnité équivalente à sa
+                            rémunération habituelle.
+                          </p>
+                        </div>
+                      </div>
                     </div>
                   </div>
+
+                  {/* Rule 6: Page signature — "Canada, Le [DATE_JOUR]" on the right ABOVE, then signature.png and cachet.png offset below without masking the date */}
+                  <div className="pt-6 space-y-3">
+                    <div className="text-center font-serif italic font-bold text-sm sm:text-base text-black">
+                      <span className="underline">Fait en double exemplaire,</span>
+                    </div>
+
+                    <div className="text-right font-serif text-xs sm:text-sm text-black pb-2">
+                      Canada, Le {dateSignature}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 pt-1 items-start">
+                      <div>
+                        <span className="font-serif font-bold text-sm sm:text-base text-black underline">
+                          Le Salarié
+                        </span>
+                      </div>
+
+                      <div className="flex flex-col items-end">
+                        <div className="relative w-64 h-40">
+                          <div className="absolute top-2 left-10 z-10 text-left">
+                            <span className="font-serif font-bold text-sm sm:text-base text-black underline block leading-none">
+                              L&apos;employeur
+                            </span>
+                            <span className="font-serif font-bold text-[10px] text-black block pl-8 mt-0.5">
+                              Directeur
+                            </span>
+                          </div>
+                          <img
+                            src={CONTRACT_STATIC_ASSETS.cachet}
+                            alt="Cachet officiel"
+                            referrerPolicy="no-referrer"
+                            className="absolute top-0 right-2 w-36 h-36 object-contain select-none pointer-events-none"
+                            draggable={false}
+                          />
+                          <img
+                            src={CONTRACT_STATIC_ASSETS.signature}
+                            alt="Signature Directeur"
+                            referrerPolicy="no-referrer"
+                            className="absolute top-3 left-2 w-44 h-32 object-contain select-none pointer-events-none"
+                            draggable={false}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Bottom-Right logo-atlantic.png just above black footer bar */}
+                  <div className="flex justify-end pt-2">
+                    <img
+                      src={CONTRACT_STATIC_ASSETS.logoAtlantic}
+                      alt="Atlantic Transport"
+                      referrerPolicy="no-referrer"
+                      className="h-12 w-auto object-contain"
+                      draggable={false}
+                    />
+                  </div>
+                </div>
+
+                {/* Rule 3: Fixed Black Footer Band with white centered text "King George Blvd, Surrey, Colombie-Britanique" */}
+                <div className="relative bg-black text-white px-5 py-3 text-center">
+                  <span className="font-serif font-bold text-xs sm:text-sm text-white">
+                    King George Blvd, Surrey, Colombie-Britanique
+                  </span>
                 </div>
               </div>
             )}

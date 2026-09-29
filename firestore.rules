@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function isValidEmployee(data) {
+      return data.keys().hasAll(['matricule', 'nom_complet', 'poste', 'type_contrat', 'salaire']) &&
+        data.matricule is string && data.matricule.size() >= 3 && data.matricule.size() <= 64 &&
+        data.nom_complet is string && data.nom_complet.size() >= 1 && data.nom_complet.size() <= 200 &&
+        data.poste is string && data.poste.size() >= 1 && data.poste.size() <= 200 &&
+        data.type_contrat is string && data.type_contrat.size() >= 1 && data.type_contrat.size() <= 50 &&
+        (data.salaire is number || data.salaire is int || data.salaire is float);
+    }
+
+    function isValidContract(data) {
+      return data.keys().hasAll(['matricule', 'type_contrat']) &&
+        data.matricule is string && data.matricule.size() >= 3 && data.matricule.size() <= 64 &&
+        data.type_contrat is string && data.type_contrat.size() >= 1 && data.type_contrat.size() <= 50;
+    }
+
+    match /employees/{employeeId} {
+      allow get: if isValidId(employeeId);
+      allow list: if true;
+      allow create: if isValidId(employeeId) && isValidEmployee(incoming());
+      allow update: if isValidId(employeeId) && isValidEmployee(incoming());
+      allow delete: if isValidId(employeeId);
+    }
+
+    match /contracts/{contractId} {
+      allow get: if isValidId(contractId);
+      allow list: if true;
+      allow create: if isValidId(contractId) && isValidContract(incoming());
+      allow update: if isValidId(contractId) && isValidContract(incoming());
+      allow delete: if isValidId(contractId);
+    }
+
+    match /test/{docId} {
+      allow read: if true;
+    }
+  }
+}

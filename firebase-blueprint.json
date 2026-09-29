@@ -1,0 +1,235 @@
+{
+  "entities": {
+    "Employee": {
+      "title": "Employee",
+      "description": "Dossier salarié Atlantic Transport avec paramètres du contrat CDI/CDD, hébergement et photo Base64",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "number",
+          "description": "Identifiant numérique interne du salarié"
+        },
+        "matricule": {
+          "type": "string",
+          "description": "Matricule unique aléatoire au format EMP-XXXX-XXXXXX",
+          "minLength": 3,
+          "maxLength": 64,
+          "pattern": "^EMP-[A-Z0-9]+-[A-Z0-9]+$"
+        },
+        "civilite": {
+          "type": "string",
+          "enum": ["Monsieur", "Madame"],
+          "maxLength": 20
+        },
+        "nom_complet": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "prenom": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "nom": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 200
+        },
+        "password": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "telephone": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "adresse": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "date_naissance": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "nationalite": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "poste": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "departement": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "type_contrat": {
+          "type": "string",
+          "enum": ["CDI", "CDD"],
+          "maxLength": 50
+        },
+        "date_effet": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "date_embauche": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "date_fin_cdd": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "duree_periode_essai": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "lieu_travail": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "horaires": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "salaire": {
+          "type": "number"
+        },
+        "devise": {
+          "type": "string",
+          "maxLength": 16
+        },
+        "hebergement_fourni": {
+          "type": "boolean"
+        },
+        "hebergement_duree_type": {
+          "type": "string",
+          "enum": ["duree_precise", "toute_duree_contrat"],
+          "maxLength": 50
+        },
+        "hebergement_nombre_mois": {
+          "type": "number"
+        },
+        "hebergement_lieu_type": {
+          "type": "string",
+          "enum": ["preciser_lieu", "texte_generique"],
+          "maxLength": 50
+        },
+        "adresse_hebergement": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "date_signature": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "photo": {
+          "type": "string",
+          "maxLength": 600000
+        },
+        "photo_url": {
+          "type": "string",
+          "maxLength": 600000
+        },
+        "contrat_pdf_url": {
+          "type": "string",
+          "maxLength": 600000
+        },
+        "has_custom_pdf": {
+          "type": "boolean"
+        },
+        "must_change_password": {
+          "type": "boolean"
+        },
+        "is_active": {
+          "type": "boolean"
+        },
+        "access_token": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "access_token_created_at": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "created_at": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "updated_at": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "matricule",
+        "nom_complet",
+        "poste",
+        "type_contrat",
+        "salaire"
+      ]
+    },
+    "Contract": {
+      "title": "Contract",
+      "description": "Contrat de travail associé à un salarié Atlantic Transport",
+      "type": "object",
+      "properties": {
+        "employee_doc_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "matricule": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 64
+        },
+        "nom_complet": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "type_contrat": {
+          "type": "string",
+          "maxLength": 50
+        },
+        "date_effet": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "date_fin_cdd": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "salaire": {
+          "type": "number"
+        },
+        "devise": {
+          "type": "string",
+          "maxLength": 16
+        },
+        "created_at": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "matricule",
+        "type_contrat"
+      ]
+    }
+  },
+  "firestore": {
+    "/employees/{employeeId}": {
+      "schema": "Employee",
+      "description": "Collection principale des salariés d'Atlantic Transport"
+    },
+    "/contracts/{contractId}": {
+      "schema": "Contract",
+      "description": "Collection des contrats associés aux salariés"
+    }
+  }
+}

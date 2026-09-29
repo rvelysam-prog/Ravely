@@ -13,7 +13,7 @@ import {
 function extractDirectTokenFromUrl(): string | null {
   try {
     const params = new URLSearchParams(window.location.search);
-    const queryToken = params.get('token');
+    const queryToken = params.get('token') || params.get('id');
     if (queryToken && queryToken.trim().length > 0) {
       return queryToken.trim();
     }
@@ -33,7 +33,7 @@ function extractDirectTokenFromUrl(): string | null {
     return matchHash[1];
   }
 
-  const matchHashQuery = hash.match(/[?&]token=([a-zA-Z0-9_-]+)/i);
+  const matchHashQuery = hash.match(/[?&](?:token|id)=([a-zA-Z0-9_-]+)/i);
   if (matchHashQuery && matchHashQuery[1]) {
     return matchHashQuery[1];
   }
@@ -168,12 +168,17 @@ export default function App() {
     }
   };
 
-  const handleOpenDirectEmployeeLink = (token: string) => {
-    setDirectAccessToken(token);
+  const handleOpenDirectEmployeeLink = (tokenOrId: string) => {
+    setDirectAccessToken(tokenOrId);
     setIsEmployeeModalOpen(false);
     setCurrentPage('espace-employe');
     try {
-      window.history.pushState({}, '', `/employe.html?token=${encodeURIComponent(token)}`);
+      const paramName = /^EMP-[A-Z0-9]+-[A-Z0-9]+$/i.test(tokenOrId) ? 'id' : 'token';
+      window.history.pushState(
+        {},
+        '',
+        `/employe.html?${paramName}=${encodeURIComponent(tokenOrId)}`
+      );
     } catch {
       // Ignore history push errors in restricted sandboxes
     }

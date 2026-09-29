@@ -23,14 +23,20 @@ import {
   Copy,
   Ban,
   ExternalLink,
-  Lock
+  Lock,
+  QrCode
 } from 'lucide-react';
 import { ContactMessage, Employee, SiteSettings } from '../types';
 import { BrandLogo } from './BrandLogo';
 import {
+  compressPhotoToSafeBase64,
   createPortableEmployeeToken,
   deleteContactMessage,
+  deleteEmployeeAndContractsFromFirestore,
+  exportEmployesJsonFile,
+  fetchEmployeesFromFirestore,
   generateDefaultAvatarSvgDataUri,
+  generateUniqueMatriculeInFirestore,
   getContactMessages,
   getEmployees,
   getNextMatricule,
@@ -38,8 +44,19 @@ import {
   saveEmployees,
   saveSiteSettings,
   setAdminPassword,
-  verifyAdminPasswordJS
+  setCachedContractPdf,
+  subscribeToEmployeesFirestore,
+  verifyAdminPasswordJS,
+  writeEmployeeToFirestore
 } from '../services/staticStorage';
+import { formatReadableFirestoreError } from '../firebase';
+import {
+  buildHebergementPoint2Text,
+  downloadEmployeeContractPdf,
+  formatSalaryContract,
+  generateEmployeeContractPdfDataUri,
+  getEmployeeStatusUrl
+} from '../services/contractPdfGenerator';
 
 interface AdminBackofficeProps {
   settings: SiteSettings;
@@ -67,33 +84,51 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
   // Dashboard states
   const [activeTab, setActiveTab] = useState<'employees' | 'cms' | 'messages' | 'json'>('employees');
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [messages, setMessages] = useState<ContactMessage[]>([]);
-  const [nextMatricule, setNextMatricule] = useState('EMP-2026-003');
+  const [employees, setEmployees] = useState<Employee[]>(() => getEmployees());
+  const [messages, setMessages] = useState<ContactMessage[]>(() => getContactMessages());
+  const [nextMatricule, setNextMatricule] = useState<string>(() => getNextMatricule());
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
+  const [generatingPdfId, setGeneratingPdfId] = useState<number | null>(null);
 
-  // Employee Modal (Add / Edit)
+  // Employee Modal (Add / Edit with all required Contract & Photo fields)
   const [modalOpen, setModalOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
+  const [autoDownloadPdfOnSave, setAutoDownloadPdfOnSave] = useState(true);
+  const [savingEmp, setSavingEmp] = useState(false);
+
+  // Delete Confirmation Modal
+  const [deleteModalEmp, setDeleteModalEmp] = useState<Employee | null>(null);
+  const [deletingEmp, setDeletingEmp] = useState(false);
+
   const [empForm, setEmpForm] = useState({
-    prenom: '',
-    nom: '',
+    civilite: 'Monsieur' as 'Monsieur' | 'Madame',
+    nom_complet: '',
     email: '',
-    telephone: '',
-    adresse: 'King George Blvd, Surrey, BC V3T 2W1, Canada',
+    telephone: '+1 (506) 802-2226',
+    adresse: '',
+    date_naissance: '1990-05-15',
+    nationalite: 'Canadienne',
     poste: '',
     departement: 'Opérations Logistiques',
-    type_contrat: 'CDI - Temps plein',
-    salaire: '5500',
+    type_contrat: 'CDI' as 'CDI' | 'CDD',
+    date_effet: new Date().toISOString().slice(0, 10),
+    date_fin_cdd: '2027-09-28',
+    duree_periode_essai: '3 semaines',
+    lieu_travail: 'Surrey, Colombie-Britannique (King George Blvd, Surrey BC V3T 2W1)',
+    horaires: '40 heures par semaine (du lundi au vendredi, 08h00 - 17h00)',
+    salaire: '4600',
     devise: 'CAD',
-    date_embauche: new Date().toISOString().slice(0, 10),
-    password: '',
+    hebergement_fourni: false,
+    hebergement_duree_type: 'duree_precise' as 'duree_precise' | 'toute_duree_contrat',
+    hebergement_nombre_mois: '3',
+    hebergement_lieu_type: 'preciser_lieu' as 'preciser_lieu' | 'texte_generique',
+    adresse_hebergement: '',
+    password: 'Employe@2026!',
     photo_base64: '',
-    photo_name: '',
-    contrat_pdf_base64: '',
-    contrat_pdf_name: ''
+    photo_name: ''
   });
 
   // Password Reset Modal
@@ -108,21 +143,53 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     setCmsForm(settings);
   }, [settings]);
 
-  const refreshLocalData = () => {
-    const loadedEmployees = getEmployees();
+  const refreshLocalData = async () => {
     const loadedMessages = getContactMessages();
-    setEmployees(loadedEmployees);
     setMessages(loadedMessages);
-    setNextMatricule(getNextMatricule(loadedEmployees));
+    try {
+      const freshEmployees = await fetchEmployeesFromFirestore();
+      setEmployees(freshEmployees);
+      setNextMatricule(getNextMatricule(freshEmployees));
+    } catch (error) {
+      const localList = getEmployees();
+      setEmployees(localList);
+      setNextMatricule(getNextMatricule(localList));
+      setFeedback({
+        type: 'error',
+        text: formatReadableFirestoreError(error)
+      });
+    }
   };
 
+  // Real-time Firestore listener on collection "employees" (Requirement 4)
   useEffect(() => {
-    if (adminToken) {
-      refreshLocalData();
-    }
-  }, [adminToken]);
+    setMessages(getContactMessages());
+    const unsubscribe = subscribeToEmployeesFirestore(
+      (liveEmployees) => {
+        setEmployees(liveEmployees);
+        setNextMatricule((prev) => {
+          const isDuplicate = liveEmployees.some(
+            (e) => e.matricule.toUpperCase() === prev.toUpperCase()
+          );
+          if (isDuplicate || /^EMP-\d{4}-\d{3}$/i.test(prev)) {
+            return getNextMatricule(liveEmployees);
+          }
+          return prev;
+        });
+      },
+      (errMessage) => {
+        setFeedback({
+          type: 'error',
+          text: errMessage
+        });
+      }
+    );
+    return () => {
+      unsubscribe();
+    };
+  }, []);
 
-  // Pure JS password authentication (zero server fetch)
+  // Pure JS password authentication
   const handleAdminLogin = (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError('');
@@ -136,84 +203,98 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
   const openAddEmployeeModal = () => {
     setEditingEmployee(null);
+    setModalError(null);
+    setAutoDownloadPdfOnSave(true);
+    const freshMatricule = getNextMatricule(employees);
+    setNextMatricule(freshMatricule);
     setEmpForm({
-      prenom: '',
-      nom: '',
+      civilite: 'Monsieur',
+      nom_complet: '',
       email: '',
-      telephone: '',
+      telephone: '+1 (604) 555-0199',
       adresse: 'King George Blvd, Surrey, BC V3T 2W1, Canada',
+      date_naissance: '1991-06-15',
+      nationalite: 'Canadienne',
       poste: '',
       departement: 'Opérations Logistiques',
-      type_contrat: 'CDI - Temps plein',
-      salaire: '5800',
+      type_contrat: 'CDI',
+      date_effet: new Date().toISOString().slice(0, 10),
+      date_fin_cdd: '2027-09-28',
+      duree_periode_essai: '3 semaines',
+      lieu_travail: 'Surrey, Colombie-Britannique (King George Blvd, Surrey BC V3T 2W1)',
+      horaires: '40 heures par semaine (du lundi au vendredi, 08h00 - 17h00)',
+      salaire: '4600',
       devise: 'CAD',
-      date_embauche: new Date().toISOString().slice(0, 10),
+      hebergement_fourni: false,
+      hebergement_duree_type: 'duree_precise',
+      hebergement_nombre_mois: '3',
+      hebergement_lieu_type: 'preciser_lieu',
+      adresse_hebergement: 'King George Blvd, Surrey, Colombie-Britannique Canada',
       password: 'Employe@2026!',
       photo_base64: '',
-      photo_name: '',
-      contrat_pdf_base64: '',
-      contrat_pdf_name: ''
+      photo_name: ''
     });
     setModalOpen(true);
   };
 
   const openEditEmployeeModal = (emp: Employee) => {
     setEditingEmployee(emp);
+    setModalError(null);
+    setAutoDownloadPdfOnSave(false);
+    const isCddType = String(emp.type_contrat).toUpperCase().includes('CDD');
     setEmpForm({
-      prenom: emp.prenom,
-      nom: emp.nom,
+      civilite: emp.civilite === 'Madame' ? 'Madame' : 'Monsieur',
+      nom_complet: emp.nom_complet || `${emp.prenom} ${emp.nom}`.toUpperCase(),
       email: emp.email,
       telephone: emp.telephone || '',
       adresse: emp.adresse || '',
+      date_naissance: emp.date_naissance || '1990-01-01',
+      nationalite: emp.nationalite || 'Canadienne',
       poste: emp.poste,
       departement: emp.departement || 'Opérations Logistiques',
-      type_contrat: emp.type_contrat,
+      type_contrat: isCddType ? 'CDD' : 'CDI',
+      date_effet: emp.date_effet || emp.date_embauche,
+      date_fin_cdd: emp.date_fin_cdd || '2027-09-28',
+      duree_periode_essai: emp.duree_periode_essai || '3 semaines',
+      lieu_travail:
+        emp.lieu_travail || 'Surrey, Colombie-Britannique (King George Blvd, Surrey BC V3T 2W1)',
+      horaires:
+        emp.horaires || '40 heures par semaine (du lundi au vendredi, 08h00 - 17h00)',
       salaire: String(emp.salaire),
       devise: emp.devise || 'CAD',
-      date_embauche: emp.date_embauche,
+      hebergement_fourni: Boolean(emp.hebergement_fourni),
+      hebergement_duree_type:
+        emp.hebergement_duree_type === 'toute_duree_contrat'
+          ? 'toute_duree_contrat'
+          : 'duree_precise',
+      hebergement_nombre_mois: String(emp.hebergement_nombre_mois || 3),
+      hebergement_lieu_type:
+        emp.hebergement_lieu_type === 'texte_generique' ? 'texte_generique' : 'preciser_lieu',
+      adresse_hebergement:
+        emp.adresse_hebergement || 'King George Blvd, Surrey, Colombie-Britannique Canada',
       password: emp.password || 'Employe@2026!',
-      photo_base64: '',
-      photo_name: '',
-      contrat_pdf_base64: '',
-      contrat_pdf_name: ''
+      photo_base64: emp.photo || emp.photo_url || '',
+      photo_name: ''
     });
     setModalOpen(true);
   };
 
+  // Convert uploaded photo to compressed base64 for Firestore & employes.json field "photo"
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!['image/jpeg', 'image/jpg', 'image/png'].includes(file.type)) {
-      setFeedback({ type: 'error', text: 'Seuls les formats photo JPG et PNG sont autorisés.' });
+    if (!['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.type)) {
+      setFeedback({ type: 'error', text: 'Seuls les formats photo JPG, PNG et WebP sont autorisés.' });
       return;
     }
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       if (typeof reader.result === 'string') {
+        const safeCompressed = await compressPhotoToSafeBase64(reader.result);
         setEmpForm((prev) => ({
           ...prev,
-          photo_base64: reader.result as string,
+          photo_base64: safeCompressed,
           photo_name: file.name
-        }));
-      }
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleContractPdfUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.type !== 'application/pdf') {
-      setFeedback({ type: 'error', text: 'Le contrat de travail doit être au format PDF (.pdf).' });
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setEmpForm((prev) => ({
-          ...prev,
-          contrat_pdf_base64: reader.result as string,
-          contrat_pdf_name: file.name
         }));
       }
     };
@@ -232,141 +313,249 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     reader.readAsDataURL(file);
   };
 
-  const handleSaveEmployee = (e: React.FormEvent) => {
-    e.preventDefault();
-    setFeedback(null);
-
-    const list = getEmployees();
-    const cleanEmail = empForm.email.trim().toLowerCase();
-    const duplicate = list.find(
-      (item) =>
-        item.email.toLowerCase() === cleanEmail &&
-        (!editingEmployee || item.id !== editingEmployee.id)
-    );
-    if (duplicate) {
-      setFeedback({
-        type: 'error',
-        text: 'Cette adresse e-mail est déjà utilisée par un autre employé.'
-      });
-      return;
-    }
-
-    const now = new Date().toISOString();
-
-    if (editingEmployee) {
-      const updatedEmp: Employee = {
-        ...editingEmployee,
-        prenom: empForm.prenom.trim(),
-        nom: empForm.nom.trim(),
-        email: cleanEmail,
-        telephone: empForm.telephone.trim(),
-        adresse: empForm.adresse.trim(),
-        poste: empForm.poste.trim(),
-        departement: empForm.departement.trim() || 'Opérations Logistiques',
-        type_contrat: empForm.type_contrat,
-        salaire: parseFloat(empForm.salaire) || 0,
-        devise: empForm.devise || 'CAD',
-        date_embauche: empForm.date_embauche,
-        password: empForm.password.trim() || editingEmployee.password || 'Employe@2026!',
-        photo_url: empForm.photo_base64 || editingEmployee.photo_url,
-        contrat_pdf_url: empForm.contrat_pdf_base64 || editingEmployee.contrat_pdf_url,
-        has_custom_pdf: Boolean(empForm.contrat_pdf_base64 || editingEmployee.has_custom_pdf),
-        updated_at: now
-      };
-      // Refresh portable token if employee already had a direct link so link stays in sync
-      if (updatedEmp.access_token) {
-        updatedEmp.access_token = createPortableEmployeeToken(updatedEmp);
-      }
-
-      const updatedList = list.map((item) => (item.id === editingEmployee.id ? updatedEmp : item));
-      saveEmployees(updatedList);
-      refreshLocalData();
-      setModalOpen(false);
+  const handleDownloadContractForAdmin = async (emp: Employee) => {
+    try {
+      setGeneratingPdfId(emp.id);
+      const pdfDataUri = await downloadEmployeeContractPdf(emp);
+      setCachedContractPdf(emp.matricule, pdfDataUri);
       setFeedback({
         type: 'success',
-        text: `Le dossier de ${updatedEmp.prenom} ${updatedEmp.nom} (${updatedEmp.matricule}) a été mis à jour dans le localStorage.`
+        text: `Contrat PDF (${emp.type_contrat}) généré avec jsPDF et téléchargé pour ${emp.nom_complet} (${emp.matricule}).`
       });
-    } else {
-      const nextId = list.length > 0 ? Math.max(...list.map((i) => i.id)) + 1 : 1;
-      const autoMatricule = getNextMatricule(list);
-      const newEmp: Employee = {
-        id: nextId,
-        matricule: autoMatricule,
-        prenom: empForm.prenom.trim(),
-        nom: empForm.nom.trim(),
+    } catch {
+      setFeedback({
+        type: 'error',
+        text: 'Erreur lors de la génération du contrat PDF avec jsPDF.'
+      });
+    } finally {
+      setGeneratingPdfId(null);
+    }
+  };
+
+  const handleSaveEmployee = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingEmp(true);
+    setFeedback(null);
+    setModalError(null);
+
+    try {
+      const currentList = employees.length > 0 ? employees : getEmployees();
+      const fullNameClean = empForm.nom_complet.trim().toUpperCase();
+      const nameParts = fullNameClean.split(/\s+/);
+      const prenom = nameParts[0] || 'Salarié';
+      const nom = nameParts.slice(1).join(' ') || fullNameClean;
+
+      // 1. Verify random matricule uniqueness in Firestore before validation (regenerate if duplicate)
+      const uniqueMatricule = editingEmployee
+        ? editingEmployee.matricule
+        : await generateUniqueMatriculeInFirestore(nextMatricule, currentList);
+
+      const cleanEmail =
+        empForm.email.trim().toLowerCase() ||
+        `${uniqueMatricule.toLowerCase()}@atlantictransport.ca`;
+
+      const now = new Date().toISOString();
+      const todayIso = now.slice(0, 10);
+
+      const rawPhoto =
+        empForm.photo_base64 && empForm.photo_base64.trim().length > 0
+          ? empForm.photo_base64
+          : editingEmployee?.photo ||
+            generateDefaultAvatarSvgDataUri(prenom, nom, uniqueMatricule);
+      const resolvedPhotoBase64 = await compressPhotoToSafeBase64(rawPhoto);
+
+      const baseEmpRecord: Employee = {
+        id: editingEmployee
+          ? editingEmployee.id
+          : currentList.length > 0
+          ? Math.max(...currentList.map((i) => Number(i.id) || 0)) + 1
+          : 1,
+        firestore_id: editingEmployee?.firestore_id,
+        matricule: uniqueMatricule,
+        civilite: empForm.civilite,
+        nom_complet: fullNameClean,
+        prenom,
+        nom,
         email: cleanEmail,
         password: empForm.password.trim() || 'Employe@2026!',
         telephone: empForm.telephone.trim(),
         adresse: empForm.adresse.trim(),
+        date_naissance: empForm.date_naissance,
+        nationalite: empForm.nationalite.trim(),
         poste: empForm.poste.trim(),
         departement: empForm.departement.trim() || 'Opérations Logistiques',
         type_contrat: empForm.type_contrat,
+        date_effet: empForm.date_effet,
+        date_embauche: empForm.date_effet,
+        date_fin_cdd: empForm.type_contrat === 'CDD' ? empForm.date_fin_cdd : '',
+        duree_periode_essai: empForm.duree_periode_essai.trim() || '3 semaines',
+        lieu_travail: empForm.lieu_travail.trim(),
+        horaires: empForm.horaires.trim(),
         salaire: parseFloat(empForm.salaire) || 0,
         devise: empForm.devise || 'CAD',
-        date_embauche: empForm.date_embauche,
-        photo_url:
-          empForm.photo_base64 ||
-          generateDefaultAvatarSvgDataUri(empForm.prenom.trim(), empForm.nom.trim(), autoMatricule),
-        contrat_pdf_url: empForm.contrat_pdf_base64 || '',
-        has_custom_pdf: Boolean(empForm.contrat_pdf_base64),
-        must_change_password: true,
-        is_active: true,
+        hebergement_fourni: empForm.hebergement_fourni,
+        hebergement_duree_type: empForm.hebergement_duree_type,
+        hebergement_nombre_mois: Math.max(1, parseInt(empForm.hebergement_nombre_mois, 10) || 3),
+        hebergement_lieu_type: empForm.hebergement_lieu_type,
+        adresse_hebergement:
+          empForm.hebergement_fourni && empForm.hebergement_lieu_type === 'preciser_lieu'
+            ? empForm.adresse_hebergement.trim()
+            : '',
+        date_signature: todayIso,
+        photo: resolvedPhotoBase64,
+        photo_url: resolvedPhotoBase64,
+        contrat_pdf_url: '',
+        has_custom_pdf: true,
+        must_change_password: editingEmployee ? editingEmployee.must_change_password : false,
+        is_active: editingEmployee ? editingEmployee.is_active : true,
         access_token: null,
-        access_token_created_at: null,
-        created_at: now,
+        access_token_created_at: now,
+        created_at: editingEmployee ? editingEmployee.created_at : now,
         updated_at: now
       };
-      newEmp.access_token = createPortableEmployeeToken(newEmp);
-      newEmp.access_token_created_at = now;
 
-      const updatedList = [...list, newEmp];
-      saveEmployees(updatedList);
-      refreshLocalData();
+      // Generate portable token for direct URL & QR status
+      baseEmpRecord.access_token = createPortableEmployeeToken(baseEmpRecord);
+
+      // STEP 1: Write to Firestore collection "employees" with all form fields BEFORE generating the PDF
+      const { docId, employee: savedEmp } = await writeEmployeeToFirestore(
+        baseEmpRecord,
+        Boolean(editingEmployee)
+      );
+      console.log('Document Firestore créé/mis à jour avec ID :', docId);
+
+      // STEP 2: Immediately reload the employee list from Firestore and update local state
+      const freshEmployees = await fetchEmployeesFromFirestore();
+      setEmployees(freshEmployees);
+      setNextMatricule(getNextMatricule(freshEmployees));
+
+      // Close modal now that Firestore persistence & list refresh succeeded
       setModalOpen(false);
+
+      // STEP 3: Generate client-side PDF Contract via jsPDF and trigger download if checked
+      try {
+        const pdfDataUri = await generateEmployeeContractPdfDataUri(savedEmp);
+        setCachedContractPdf(savedEmp.matricule, pdfDataUri);
+
+        if (autoDownloadPdfOnSave) {
+          const link = document.createElement('a');
+          link.href = pdfDataUri;
+          link.download = `Contrat_Travail_${savedEmp.matricule}_${savedEmp.nom.replace(/\s+/g, '_')}.pdf`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        }
+      } catch (pdfErr) {
+        console.error('Erreur lors de la génération du PDF:', pdfErr);
+      }
+
       setFeedback({
         type: 'success',
-        text: `Employé ${newEmp.prenom} ${newEmp.nom} ajouté dans le localStorage avec le matricule ${newEmp.matricule}.`
+        text: editingEmployee
+          ? `Salarié ${savedEmp.nom_complet} (${savedEmp.matricule}) mis à jour dans Firestore (ID: ${docId}) et Contrat PDF (${savedEmp.type_contrat}) régénéré.`
+          : `Salarié ${savedEmp.nom_complet} (${savedEmp.matricule}) enregistré dans Firestore collection "employees" (ID: ${docId}) et Contrat PDF (${savedEmp.type_contrat}) généré !`
+      });
+    } catch (error) {
+      const readableError = formatReadableFirestoreError(error);
+      console.error('Échec de l’enregistrement Firestore :', error);
+      setModalError(readableError);
+      setFeedback({
+        type: 'error',
+        text: readableError
+      });
+    } finally {
+      setSavingEmp(false);
+    }
+  };
+
+  const handleConfirmDeleteEmployee = async () => {
+    if (!deleteModalEmp) return;
+    setDeletingEmp(true);
+    setFeedback(null);
+    try {
+      const target = deleteModalEmp;
+      const freshList = await deleteEmployeeAndContractsFromFirestore(target);
+      setEmployees(freshList);
+      setNextMatricule(getNextMatricule(freshList));
+      setDeleteModalEmp(null);
+      setFeedback({
+        type: 'success',
+        text: `Le salarié ${target.nom_complet} (${target.matricule}) et ses contrats associés ont été supprimés de Firestore avec succès.`
+      });
+    } catch (error) {
+      const readableError = formatReadableFirestoreError(error);
+      setFeedback({
+        type: 'error',
+        text: readableError
+      });
+    } finally {
+      setDeletingEmp(false);
+    }
+  };
+
+  const handleToggleActive = async (emp: Employee) => {
+    try {
+      const updatedEmp: Employee = {
+        ...emp,
+        is_active: !emp.is_active,
+        updated_at: new Date().toISOString()
+      };
+      await writeEmployeeToFirestore(updatedEmp, true);
+      const freshList = await fetchEmployeesFromFirestore();
+      setEmployees(freshList);
+      setFeedback({
+        type: 'success',
+        text: `Statut du compte ${emp.matricule} modifié avec succès dans Firestore.`
+      });
+    } catch (error) {
+      setFeedback({
+        type: 'error',
+        text: formatReadableFirestoreError(error)
       });
     }
   };
 
-  const handleToggleActive = (emp: Employee) => {
-    const list = getEmployees();
-    const updatedList = list.map((item) =>
-      item.id === emp.id
-        ? { ...item, is_active: !item.is_active, updated_at: new Date().toISOString() }
-        : item
-    );
-    saveEmployees(updatedList);
-    refreshLocalData();
-    setFeedback({
-      type: 'success',
-      text: `Statut du compte ${emp.matricule} modifié avec succès.`
-    });
-  };
-
-  const handleResetPasswordSubmit = (e: React.FormEvent) => {
+  const handleResetPasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!resetModalEmp) return;
-    const list = getEmployees();
-    const updatedList = list.map((item) =>
-      item.id === resetModalEmp.id
-        ? {
-            ...item,
-            password: tempResetPassword.trim(),
-            must_change_password: true,
-            updated_at: new Date().toISOString()
-          }
-        : item
-    );
-    saveEmployees(updatedList);
-    refreshLocalData();
-    setFeedback({
-      type: 'success',
-      text: `Mot de passe réinitialisé pour ${resetModalEmp.matricule}. Le changement sera demandé à sa prochaine connexion.`
-    });
-    setResetModalEmp(null);
-    setTempResetPassword('');
+    try {
+      const updatedEmp: Employee = {
+        ...resetModalEmp,
+        password: tempResetPassword.trim(),
+        must_change_password: true,
+        updated_at: new Date().toISOString()
+      };
+      await writeEmployeeToFirestore(updatedEmp, true);
+      const freshList = await fetchEmployeesFromFirestore();
+      setEmployees(freshList);
+      setFeedback({
+        type: 'success',
+        text: `Mot de passe réinitialisé pour ${resetModalEmp.matricule}.`
+      });
+      setResetModalEmp(null);
+      setTempResetPassword('');
+    } catch (error) {
+      setFeedback({
+        type: 'error',
+        text: formatReadableFirestoreError(error)
+      });
+    }
+  };
+
+  const handleCopyQrStatusUrl = async (emp: Employee) => {
+    const statusUrl = getEmployeeStatusUrl(emp.matricule);
+    try {
+      await navigator.clipboard.writeText(statusUrl);
+      setFeedback({
+        type: 'success',
+        text: `URL QR Code copiée : ${statusUrl}`
+      });
+    } catch {
+      setFeedback({
+        type: 'success',
+        text: `URL QR Code : ${statusUrl}`
+      });
+    }
   };
 
   const buildDirectEmployeeUrl = (token: string): string => {
@@ -374,31 +563,34 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
   };
 
   const handleGenerateDirectLink = async (emp: Employee) => {
-    const list = getEmployees();
-    const newToken = createPortableEmployeeToken(emp);
-    const updatedList = list.map((item) =>
-      item.id === emp.id
-        ? {
-            ...item,
-            access_token: newToken,
-            access_token_created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          }
-        : item
-    );
-    saveEmployees(updatedList);
-    refreshLocalData();
-
-    const fullUrl = buildDirectEmployeeUrl(newToken);
     try {
-      await navigator.clipboard.writeText(fullUrl);
-    } catch {
-      // Ignore clipboard permission errors
+      const newToken = createPortableEmployeeToken(emp);
+      const updatedEmp: Employee = {
+        ...emp,
+        access_token: newToken,
+        access_token_created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      await writeEmployeeToFirestore(updatedEmp, true);
+      const freshList = await fetchEmployeesFromFirestore();
+      setEmployees(freshList);
+
+      const fullUrl = buildDirectEmployeeUrl(newToken);
+      try {
+        await navigator.clipboard.writeText(fullUrl);
+      } catch {
+        // Ignore
+      }
+      setFeedback({
+        type: 'success',
+        text: `Lien direct créé et copié pour ${emp.nom_complet} : ${fullUrl}`
+      });
+    } catch (error) {
+      setFeedback({
+        type: 'error',
+        text: formatReadableFirestoreError(error)
+      });
     }
-    setFeedback({
-      type: 'success',
-      text: `Lien direct créé et copié pour ${emp.prenom} ${emp.nom} : ${fullUrl}`
-    });
   };
 
   const handleCopyDirectLink = async (emp: Employee) => {
@@ -413,32 +605,35 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     } catch {
       setFeedback({
         type: 'success',
-        text: `Lien direct de ${emp.prenom} ${emp.nom} : ${fullUrl}`
+        text: `Lien direct : ${fullUrl}`
       });
     }
   };
 
-  const handleRevokeDirectLink = (emp: Employee) => {
+  const handleRevokeDirectLink = async (emp: Employee) => {
     if (emp.access_token) {
       markTokenRevoked(emp.access_token);
     }
-    const list = getEmployees();
-    const updatedList = list.map((item) =>
-      item.id === emp.id
-        ? {
-            ...item,
-            access_token: null,
-            access_token_created_at: null,
-            updated_at: new Date().toISOString()
-          }
-        : item
-    );
-    saveEmployees(updatedList);
-    refreshLocalData();
-    setFeedback({
-      type: 'success',
-      text: `Le lien d’accès direct de ${emp.prenom} ${emp.nom} (${emp.matricule}) a été révoqué.`
-    });
+    try {
+      const updatedEmp: Employee = {
+        ...emp,
+        access_token: null,
+        access_token_created_at: null,
+        updated_at: new Date().toISOString()
+      };
+      await writeEmployeeToFirestore(updatedEmp, true);
+      const freshList = await fetchEmployeesFromFirestore();
+      setEmployees(freshList);
+      setFeedback({
+        type: 'success',
+        text: `Le lien d’accès direct de ${emp.nom_complet} (${emp.matricule}) a été révoqué.`
+      });
+    } catch (error) {
+      setFeedback({
+        type: 'error',
+        text: formatReadableFirestoreError(error)
+      });
+    }
   };
 
   const handleSaveCms = (e: React.FormEvent) => {
@@ -451,33 +646,16 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     }
     setFeedback({
       type: 'success',
-      text: 'Les paramètres du site et du localStorage ont été enregistrés.'
+      text: 'Les paramètres du site ont été enregistrés.'
     });
   };
 
   const handleExportEmployesJson = () => {
-    const exportPayload = {
-      company: {
-        company_name: settings.company_name,
-        slogan: settings.slogan,
-        address: settings.address,
-        phone: settings.phone,
-        whatsapp: settings.whatsapp,
-        email: settings.email
-      },
-      employees: getEmployees()
-    };
-    const blob = new Blob([JSON.stringify(exportPayload, null, 2)], {
-      type: 'application/json;charset=utf-8'
+    exportEmployesJsonFile(settings);
+    setFeedback({
+      type: 'success',
+      text: 'Le fichier employes.json (avec les photos en Base64 dans le champ "photo") a été téléchargé.'
     });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'employes.json';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
   };
 
   const handleImportEmployesJson = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -496,7 +674,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
         refreshLocalData();
         setFeedback({
           type: 'success',
-          text: `${list.length} employé(s) importé(s) dans le localStorage avec succès.`
+          text: `${list.length} salarié(s) importé(s) depuis employes.json avec succès.`
         });
       } catch {
         setFeedback({ type: 'error', text: 'Impossible de lire le fichier employes.json.' });
@@ -506,7 +684,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
   };
 
   // ==========================================================================
-  // ADMIN LOGIN VIEW (Simple JS Password Protection for admin.html)
+  // ADMIN LOGIN VIEW
   // ==========================================================================
   if (!adminToken) {
     return (
@@ -527,7 +705,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           </div>
 
           <p className="text-xs sm:text-sm text-slate-600 mb-5 leading-relaxed">
-            Entrez le mot de passe administrateur pour gérer les employés dans le navigateur (<code className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">localStorage</code>) et générer les liens directs <code className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">/employe.html?token=XXX</code>.
+            Entrez le mot de passe administrateur pour gérer les salariés, convertir les photos en Base64 (<code className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">employes.json</code>) et générer automatiquement les contrats PDF CDI/CDD avec <code className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">jsPDF</code>.
           </p>
 
           {loginError && (
@@ -583,7 +761,6 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     );
   }
 
-  // Filtered employees
   const filteredEmployees = employees.filter((emp) => {
     const matchesStatus =
       statusFilter === 'all'
@@ -595,7 +772,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     const matchesSearch =
       !q ||
       emp.matricule.toLowerCase().includes(q) ||
-      `${emp.prenom} ${emp.nom}`.toLowerCase().includes(q) ||
+      (emp.nom_complet || `${emp.prenom} ${emp.nom}`).toLowerCase().includes(q) ||
       emp.email.toLowerCase().includes(q) ||
       emp.poste.toLowerCase().includes(q);
     return matchesStatus && matchesSearch;
@@ -607,18 +784,27 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-8">
-      {/* Admin Top Header */}
+      {/* Admin Top Header with Prominent "Exporter employes.json" Button */}
       <div className="bg-[#0B2545] text-white rounded-2xl p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-4 border border-amber-400/30">
         <div className="space-y-1">
           <div className="text-xs font-mono text-amber-400">
-            Administration Statique (admin.html) · Stockage localStorage &amp; employes.json
+            Administration Statique Netlify (admin.html) · NE: 799094917
           </div>
           <h1 className="font-display font-bold text-2xl sm:text-3xl text-white">
-            Console de Gestion RH &amp; Contenu — {settings.company_name}
+            Gestion Salariés, Photos Base64 &amp; Contrats Auto CDI/CDD (jsPDF)
           </h1>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            onClick={handleExportEmployesJson}
+            className="min-h-[44px] px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors whitespace-nowrap shadow-sm"
+          >
+            <Download className="w-4 h-4" />
+            <span>Exporter employes.json</span>
+          </button>
+
           <button
             type="button"
             onClick={onBackToSite}
@@ -626,13 +812,14 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           >
             Voir le site public
           </button>
+
           <button
             type="button"
             onClick={onAdminLogout}
             className="min-h-[44px] px-4 py-2 rounded-xl bg-amber-400 text-[#0B2545] hover:bg-amber-300 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors whitespace-nowrap"
           >
             <LogOut className="w-4 h-4" />
-            <span>Verrouiller Admin</span>
+            <span>Verrouiller</span>
           </button>
         </div>
       </div>
@@ -655,7 +842,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           <span className="font-mono tabular-nums text-xl sm:text-2xl font-bold text-amber-600 mt-0.5 block">
             {nextMatricule}
           </span>
-          <span className="text-xs text-slate-500 block mt-1">Séquence 2026 active</span>
+          <span className="text-xs text-slate-500 block mt-1">QR Code ?id={nextMatricule}</span>
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200 p-5">
@@ -667,11 +854,11 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200 p-5">
-          <span className="text-xs text-slate-500 block">Messages &amp; Devis Clients</span>
-          <span className="font-mono tabular-nums text-2xl sm:text-3xl font-bold text-[#0B2545]">
-            {messages.length}
+          <span className="text-xs text-slate-500 block">Contrats PDF &amp; Photos</span>
+          <span className="font-mono tabular-nums text-xl sm:text-2xl font-bold text-[#0B2545] mt-0.5 block">
+            100% Client
           </span>
-          <span className="text-xs text-slate-500 block mt-1">Stockés localement</span>
+          <span className="text-xs text-slate-500 block mt-1">jsPDF + Base64 local</span>
         </div>
       </div>
 
@@ -687,7 +874,20 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           }`}
         >
           <Users className="w-4 h-4" />
-          <span>Gestion des Employés ({employees.length})</span>
+          <span>Salariés &amp; Contrats Auto CDI/CDD ({employees.length})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('json')}
+          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
+            activeTab === 'json'
+              ? 'bg-[#0B2545] text-white shadow-sm'
+              : 'text-slate-700 hover:text-slate-950'
+          }`}
+        >
+          <FileJson className="w-4 h-4" />
+          <span>Fichier employes.json (Champ &quot;photo&quot; Base64)</span>
         </button>
 
         <button
@@ -715,19 +915,6 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           <Mail className="w-4 h-4" />
           <span>Demandes Contact ({messages.length})</span>
         </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('json')}
-          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
-            activeTab === 'json'
-              ? 'bg-[#0B2545] text-white shadow-sm'
-              : 'text-slate-700 hover:text-slate-950'
-          }`}
-        >
-          <FileJson className="w-4 h-4" />
-          <span>Base employes.json (Export / Import)</span>
-        </button>
       </div>
 
       {feedback && (
@@ -753,7 +940,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       )}
 
       {/* ====================================================================
-          TAB 1: GESTION DES EMPLOYÉS (LOCALSTORAGE + LIEN DIRECT)
+          TAB 1: GESTION DES SALARIÉS + CONTRAT AUTO PDF (ADMIN ONLY DOWNLOAD)
       ==================================================================== */}
       {activeTab === 'employees' && (
         <div className="space-y-6">
@@ -765,7 +952,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Rechercher par matricule, nom, poste..."
+                  placeholder="Rechercher par matricule, nom complet, poste..."
                   className="w-full min-h-[44px] pl-10 pr-4 py-2 rounded-xl border border-slate-300 text-sm focus:border-[#0B2545] focus:outline-none"
                 />
               </div>
@@ -792,14 +979,25 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={openAddEmployeeModal}
-              className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#0B2545] text-white font-bold text-xs sm:text-sm hover:bg-[#134074] transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
-            >
-              <UserPlus className="w-4 h-4 text-amber-400" />
-              <span>Ajouter un employé ({nextMatricule})</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={handleExportEmployesJson}
+                className="min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-900 font-bold text-xs sm:text-sm hover:bg-emerald-100 transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
+              >
+                <Download className="w-4 h-4 text-emerald-700" />
+                <span>Exporter employes.json</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={openAddEmployeeModal}
+                className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#0B2545] text-white font-bold text-xs sm:text-sm hover:bg-[#134074] transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
+              >
+                <UserPlus className="w-4 h-4 text-amber-400" />
+                <span>Ajouter un salarié + Contrat PDF ({nextMatricule})</span>
+              </button>
+            </div>
           </div>
 
           {/* Desktop Adaptive Table */}
@@ -807,296 +1005,356 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
-                  <th className="py-3.5 px-4">Salarié &amp; Photo</th>
-                  <th className="py-3.5 px-4">Matricule</th>
-                  <th className="py-3.5 px-4">Poste &amp; Contrat</th>
-                  <th className="py-3.5 px-4 text-right">Salaire</th>
-                  <th className="py-3.5 px-4">Lien Direct (/employe.html?token=XXX)</th>
-                  <th className="py-3.5 px-4">Statut</th>
+                  <th className="py-3.5 px-4">Salarié &amp; Photo (Base64)</th>
+                  <th className="py-3.5 px-4">Matricule &amp; QR Status</th>
+                  <th className="py-3.5 px-4">Poste &amp; Contrat (CDI/CDD)</th>
+                  <th className="py-3.5 px-4 text-right">Salaire Brut</th>
+                  <th className="py-3.5 px-4">Contrat PDF (Admin Seul)</th>
+                  <th className="py-3.5 px-4">Lien Direct Salarié</th>
                   <th className="py-3.5 px-4 text-right">Actions RH</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 text-sm">
-                {filteredEmployees.map((emp) => (
-                  <tr key={emp.id} className="hover:bg-slate-50/80 transition-colors">
-                    <td className="py-3.5 px-4">
-                      <div className="flex items-center gap-3">
-                        <img
-                          src={emp.photo_url}
-                          alt={emp.nom}
-                          referrerPolicy="no-referrer"
-                          className="w-11 h-11 rounded-xl object-cover border border-slate-300 shrink-0"
-                        />
-                        <div>
-                          <div className="font-bold text-[#0B2545]">
-                            {emp.prenom} {emp.nom}
-                          </div>
-                          <div className="text-xs text-slate-500">{emp.email}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="py-3.5 px-4 font-mono tabular-nums font-semibold text-[#0B2545]">
-                      {emp.matricule}
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <div className="font-medium text-slate-900">{emp.poste}</div>
-                      <div className="text-xs text-slate-500">
-                        {emp.type_contrat} · Embauche : {emp.date_embauche}
-                      </div>
-                    </td>
-                    <td className="py-3.5 px-4 text-right font-mono tabular-nums font-bold text-slate-900">
-                      {new Intl.NumberFormat('fr-CA').format(emp.salaire)} {emp.devise}
-                    </td>
-                    <td className="py-3.5 px-4">
-                      {emp.access_token ? (
-                        <div className="space-y-1.5">
-                          <div className="font-mono text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg max-w-[230px] truncate">
-                            /employe.html?token={emp.access_token}
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => handleCopyDirectLink(emp)}
-                              className="px-2.5 py-1 rounded-lg bg-[#0B2545] text-white text-[11px] font-semibold inline-flex items-center gap-1 hover:bg-[#134074]"
-                              title="Copier le lien direct"
-                            >
-                              <Copy className="w-3 h-3" />
-                              <span>Copier</span>
-                            </button>
-                            {onOpenDirectEmployeeLink && (
-                              <button
-                                type="button"
-                                onClick={() => onOpenDirectEmployeeLink(emp.access_token!)}
-                                className="px-2 py-1 rounded-lg bg-slate-100 text-slate-700 text-[11px] font-semibold inline-flex items-center gap-1 hover:bg-slate-200"
-                                title="Tester l'ouverture directe de la fiche"
-                              >
-                                <ExternalLink className="w-3 h-3" />
-                                <span>Ouvrir</span>
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => handleRevokeDirectLink(emp)}
-                              className="px-2 py-1 rounded-lg bg-red-50 text-red-700 text-[11px] font-semibold inline-flex items-center gap-1 hover:bg-red-100"
-                              title="Révoquer ce lien"
-                            >
-                              <Ban className="w-3 h-3" />
-                              <span>Révoquer</span>
-                            </button>
+                {filteredEmployees.map((emp) => {
+                  const isCdd = String(emp.type_contrat).toUpperCase().includes('CDD');
+                  return (
+                    <tr key={emp.id} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="py-3.5 px-4">
+                        <div className="flex items-center gap-3">
+                          <img
+                            src={emp.photo || emp.photo_url}
+                            alt={emp.nom_complet}
+                            referrerPolicy="no-referrer"
+                            className="w-11 h-11 rounded-xl object-cover border border-slate-300 shrink-0"
+                          />
+                          <div>
+                            <div className="font-bold text-[#0B2545]">
+                              {emp.civilite} {emp.nom_complet || `${emp.prenom} ${emp.nom}`.toUpperCase()}
+                            </div>
+                            <div className="text-xs text-slate-500">
+                              {emp.nationalite} · Né(e) : {emp.date_naissance}
+                            </div>
                           </div>
                         </div>
-                      ) : (
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <div className="font-mono tabular-nums font-bold text-[#0B2545]">
+                          {emp.matricule}
+                        </div>
                         <button
                           type="button"
-                          onClick={() => handleGenerateDirectLink(emp)}
-                          className="px-3 py-1.5 rounded-xl bg-amber-400/20 border border-amber-400 text-[#0B2545] text-xs font-bold inline-flex items-center gap-1.5 hover:bg-amber-400/30 transition-colors"
+                          onClick={() => handleCopyQrStatusUrl(emp)}
+                          className="mt-1 inline-flex items-center gap-1 text-[11px] font-mono text-blue-700 hover:underline"
+                          title="Copier l'URL encodée dans le QR Code du contrat"
                         >
-                          <Link2 className="w-3.5 h-3.5" />
-                          <span>Créer un lien direct</span>
+                          <QrCode className="w-3 h-3" />
+                          <span>employe.html?id={emp.matricule}</span>
                         </button>
-                      )}
-                    </td>
-                    <td className="py-3.5 px-4 text-xs">
-                      <div className="font-semibold">
-                        {emp.is_active ? (
-                          <span className="text-emerald-700">Compte Actif</span>
-                        ) : (
-                          <span className="text-red-600">Compte Désactivé</span>
-                        )}
-                      </div>
-                      <div className="text-slate-500">
-                        {emp.must_change_password ? '1er login requis' : 'Mot de passe actif'}
-                      </div>
-                    </td>
-                    <td className="py-3.5 px-4 text-right">
-                      <div className="inline-flex items-center gap-1.5">
-                        {emp.access_token && onOpenDirectEmployeeLink && (
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <div className="font-medium text-slate-900">{emp.poste}</div>
+                        <div className="text-xs text-slate-500">
+                          <span className="font-bold text-[#134074]">{isCdd ? 'CDD' : 'CDI'}</span> · Effet :{' '}
+                          {emp.date_effet || emp.date_embauche}
+                          {isCdd && emp.date_fin_cdd ? ` → ${emp.date_fin_cdd}` : ''}
+                        </div>
+                      </td>
+                      <td className="py-3.5 px-4 text-right font-mono tabular-nums font-bold text-[#0000AA]">
+                        {formatSalaryContract(emp.salaire, emp.devise)}
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <div className="flex flex-col gap-1.5">
                           <button
                             type="button"
-                            onClick={() => onOpenDirectEmployeeLink(emp.access_token!)}
-                            className="p-2 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-100"
-                            title="Voir la fiche et le contrat PDF"
+                            disabled={generatingPdfId === emp.id}
+                            onClick={() => handleDownloadContractForAdmin(emp)}
+                            className="px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-[#0B2545] text-xs font-bold inline-flex items-center gap-1.5 transition-colors shadow-2xs w-fit"
                           >
-                            <Eye className="w-4 h-4" />
+                            <Download className="w-3.5 h-3.5 shrink-0" />
+                            <span>
+                              {generatingPdfId === emp.id
+                                ? 'Génération...'
+                                : `Télécharger PDF (${isCdd ? 'CDD' : 'CDI'})`}
+                            </span>
+                          </button>
+                          {onOpenDirectEmployeeLink && (
+                            <button
+                              type="button"
+                              onClick={() => onOpenDirectEmployeeLink(emp.matricule)}
+                              className="text-[11px] text-slate-600 hover:text-[#0B2545] inline-flex items-center gap-1 font-medium"
+                            >
+                              <Eye className="w-3 h-3" />
+                              <span>Aperçu A4 &amp; QR Status</span>
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-3.5 px-4">
+                        {emp.access_token ? (
+                          <div className="space-y-1.5">
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleCopyDirectLink(emp)}
+                                className="px-2.5 py-1 rounded-lg bg-[#0B2545] text-white text-[11px] font-semibold inline-flex items-center gap-1 hover:bg-[#134074]"
+                              >
+                                <Copy className="w-3 h-3" />
+                                <span>Copier lien</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRevokeDirectLink(emp)}
+                                className="px-2 py-1 rounded-lg bg-red-50 text-red-700 text-[11px] font-semibold inline-flex items-center gap-1 hover:bg-red-100"
+                              >
+                                <Ban className="w-3 h-3" />
+                                <span>Révoquer</span>
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleGenerateDirectLink(emp)}
+                            className="px-3 py-1.5 rounded-xl bg-slate-100 border border-slate-300 text-[#0B2545] text-xs font-bold inline-flex items-center gap-1.5 hover:bg-slate-200"
+                          >
+                            <Link2 className="w-3.5 h-3.5" />
+                            <span>Créer lien</span>
                           </button>
                         )}
-                        <button
-                          type="button"
-                          onClick={() => openEditEmployeeModal(emp)}
-                          className="p-2 rounded-lg border border-slate-200 text-[#0B2545] hover:bg-slate-100"
-                          title="Modifier le dossier"
-                        >
-                          <Edit3 className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setResetModalEmp(emp);
-                            setTempResetPassword('Employe@2026!');
-                          }}
-                          className="p-2 rounded-lg border border-slate-200 text-amber-600 hover:bg-amber-50"
-                          title="Réinitialiser le mot de passe"
-                        >
-                          <KeyRound className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleToggleActive(emp)}
-                          className={`p-2 rounded-lg border ${
-                            emp.is_active
-                              ? 'border-red-200 text-red-600 hover:bg-red-50'
-                              : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'
-                          }`}
-                          title={emp.is_active ? 'Désactiver ce compte' : 'Réactiver ce compte'}
-                        >
-                          <Power className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="py-3.5 px-4 text-right">
+                        <div className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => openEditEmployeeModal(emp)}
+                            className="p-2 rounded-lg border border-slate-200 text-[#0B2545] hover:bg-slate-100"
+                            title="Modifier le salarié et régénérer son contrat"
+                          >
+                            <Edit3 className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setResetModalEmp(emp);
+                              setTempResetPassword('Employe@2026!');
+                            }}
+                            className="p-2 rounded-lg border border-slate-200 text-amber-600 hover:bg-amber-50"
+                            title="Réinitialiser le mot de passe"
+                          >
+                            <KeyRound className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleActive(emp)}
+                            className={`p-2 rounded-lg border ${
+                              emp.is_active
+                                ? 'border-amber-200 text-amber-700 hover:bg-amber-50'
+                                : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'
+                            }`}
+                            title={emp.is_active ? 'Désactiver ce compte' : 'Réactiver ce compte'}
+                          >
+                            <Power className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeleteModalEmp(emp)}
+                            className="px-2.5 py-1.5 rounded-lg border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 text-xs font-semibold inline-flex items-center gap-1"
+                            title="Supprimer ce salarié et ses contrats associés"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Supprimer</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
 
           {/* Mobile & Tablet Adaptive Cards */}
           <div className="lg:hidden grid grid-cols-1 md:grid-cols-2 gap-4">
-            {filteredEmployees.map((emp) => (
-              <div
-                key={emp.id}
-                className="bg-white rounded-2xl border border-slate-200 p-5 space-y-4"
-              >
-                <div className="flex items-center gap-3.5">
-                  <img
-                    src={emp.photo_url}
-                    alt={emp.nom}
-                    referrerPolicy="no-referrer"
-                    className="w-14 h-14 rounded-2xl object-cover border border-slate-300 shrink-0"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="font-mono text-xs font-bold text-amber-600">
-                      {emp.matricule} · {emp.is_active ? 'Actif' : 'Désactivé'}
-                    </div>
-                    <h3 className="font-bold text-base text-[#0B2545] truncate">
-                      {emp.prenom} {emp.nom}
-                    </h3>
-                    <p className="text-xs text-slate-500 truncate">{emp.email}</p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 text-xs pt-3 border-t border-slate-100">
-                  <div>
-                    <span className="text-slate-400 block">Poste</span>
-                    <span className="font-semibold text-slate-800">{emp.poste}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block">Contrat</span>
-                    <span className="font-semibold text-slate-800">{emp.type_contrat}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block">Salaire</span>
-                    <span className="font-mono tabular-nums font-bold text-emerald-700">
-                      {new Intl.NumberFormat('fr-CA').format(emp.salaire)} {emp.devise}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block">Date d’embauche</span>
-                    <span className="font-mono tabular-nums text-slate-800">{emp.date_embauche}</span>
-                  </div>
-                </div>
-
-                {/* Lien Direct Salarié sur Mobile */}
-                <div className="pt-3 border-t border-slate-100 space-y-2">
-                  <span className="text-[11px] font-semibold text-slate-500 block">
-                    Lien direct sans login (/employe.html?token=XXX) :
-                  </span>
-                  {emp.access_token ? (
-                    <div className="space-y-2">
-                      <div className="font-mono text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg truncate">
-                        /employe.html?token={emp.access_token}
+            {filteredEmployees.map((emp) => {
+              const isCdd = String(emp.type_contrat).toUpperCase().includes('CDD');
+              return (
+                <div
+                  key={emp.id}
+                  className="bg-white rounded-2xl border border-slate-200 p-5 space-y-4"
+                >
+                  <div className="flex items-center gap-3.5">
+                    <img
+                      src={emp.photo || emp.photo_url}
+                      alt={emp.nom_complet}
+                      referrerPolicy="no-referrer"
+                      className="w-14 h-14 rounded-2xl object-cover border border-slate-300 shrink-0"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="font-mono text-xs font-bold text-amber-600">
+                        {emp.matricule} · {isCdd ? 'CDD' : 'CDI'}
                       </div>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleCopyDirectLink(emp)}
-                          className="flex-1 min-h-[38px] px-3 py-1.5 rounded-xl bg-[#0B2545] text-white text-xs font-semibold flex items-center justify-center gap-1.5"
-                        >
-                          <Copy className="w-3.5 h-3.5" />
-                          <span>Copier</span>
-                        </button>
-                        {onOpenDirectEmployeeLink && (
-                          <button
-                            type="button"
-                            onClick={() => onOpenDirectEmployeeLink(emp.access_token!)}
-                            className="min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-100 text-slate-800 text-xs font-semibold flex items-center justify-center gap-1.5"
-                          >
-                            <ExternalLink className="w-3.5 h-3.5" />
-                            <span>Ouvrir</span>
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => handleRevokeDirectLink(emp)}
-                          className="min-h-[38px] px-3 py-1.5 rounded-xl bg-red-50 text-red-700 text-xs font-semibold flex items-center justify-center gap-1.5"
-                        >
-                          <Ban className="w-3.5 h-3.5" />
-                          <span>Révoquer</span>
-                        </button>
-                      </div>
+                      <h3 className="font-bold text-base text-[#0B2545] truncate">
+                        {emp.civilite} {emp.nom_complet || `${emp.prenom} ${emp.nom}`.toUpperCase()}
+                      </h3>
+                      <p className="text-xs text-slate-500 truncate">{emp.poste}</p>
                     </div>
-                  ) : (
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-xs pt-3 border-t border-slate-100">
+                    <div>
+                      <span className="text-slate-400 block">Salaire Brut</span>
+                      <span className="font-mono tabular-nums font-bold text-[#0000AA]">
+                        {formatSalaryContract(emp.salaire, emp.devise)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block">Date d’effet</span>
+                      <span className="font-mono tabular-nums text-slate-800">
+                        {emp.date_effet || emp.date_embauche}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-100 flex flex-col gap-2">
                     <button
                       type="button"
-                      onClick={() => handleGenerateDirectLink(emp)}
-                      className="w-full min-h-[40px] px-3 py-2 rounded-xl bg-amber-400/25 border border-amber-400 text-[#0B2545] text-xs font-bold flex items-center justify-center gap-1.5"
+                      onClick={() => handleDownloadContractForAdmin(emp)}
+                      className="w-full min-h-[42px] px-4 py-2 rounded-xl bg-amber-400 text-[#0B2545] text-xs font-bold flex items-center justify-center gap-2"
                     >
-                      <Link2 className="w-3.5 h-3.5" />
-                      <span>Créer un lien direct</span>
+                      <Download className="w-4 h-4" />
+                      <span>Télécharger Contrat PDF ({isCdd ? 'CDD' : 'CDI'}) — Admin</span>
                     </button>
-                  )}
-                </div>
 
-                <div className="pt-3 border-t border-slate-100 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => openEditEmployeeModal(emp)}
-                    className="flex-1 min-h-[42px] px-3 py-2 rounded-xl bg-slate-100 text-[#0B2545] text-xs font-semibold flex items-center justify-center gap-1.5"
-                  >
-                    <Edit3 className="w-3.5 h-3.5" />
-                    <span>Modifier</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setResetModalEmp(emp);
-                      setTempResetPassword('Employe@2026!');
-                    }}
-                    className="flex-1 min-h-[42px] px-3 py-2 rounded-xl bg-amber-50 text-amber-800 text-xs font-semibold flex items-center justify-center gap-1.5"
-                  >
-                    <KeyRound className="w-3.5 h-3.5" />
-                    <span>Mot de passe</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleToggleActive(emp)}
-                    className={`min-h-[42px] px-3 py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 ${
-                      emp.is_active
-                        ? 'bg-red-50 text-red-700'
-                        : 'bg-emerald-50 text-emerald-700'
-                    }`}
-                  >
-                    <Power className="w-3.5 h-3.5" />
-                    <span>{emp.is_active ? 'Désactiver' : 'Activer'}</span>
-                  </button>
+                    {onOpenDirectEmployeeLink && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenDirectEmployeeLink(emp.matricule)}
+                        className="w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-100 text-[#0B2545] text-xs font-semibold flex items-center justify-center gap-1.5"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>Ouvrir Fiche &amp; Contrat (employe.html?id={emp.matricule})</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-100 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openEditEmployeeModal(emp)}
+                      className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-slate-100 text-[#0B2545] text-xs font-semibold flex items-center justify-center gap-1.5"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                      <span>Modifier</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleActive(emp)}
+                      className={`min-h-[40px] px-3 py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 ${
+                        emp.is_active
+                          ? 'bg-amber-50 text-amber-800'
+                          : 'bg-emerald-50 text-emerald-700'
+                      }`}
+                    >
+                      <Power className="w-3.5 h-3.5" />
+                      <span>{emp.is_active ? 'Désactiver' : 'Activer'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeleteModalEmp(emp)}
+                      className="min-h-[40px] px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-red-700 hover:bg-red-100 text-xs font-bold flex items-center justify-center gap-1.5"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Supprimer</span>
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
 
       {/* ====================================================================
-          TAB 2: MODIFIER LE SITE & LOGO (LOCALSTORAGE)
+          TAB 2: FICHIER EMPLOYES.JSON (CHAMP "photo" EN BASE64)
+      ==================================================================== */}
+      {activeTab === 'json' && (
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
+            <div>
+              <h2 className="font-display font-bold text-xl text-[#0B2545]">
+                Base de données statique : <code className="font-mono text-base">employes.json</code>
+              </h2>
+              <p className="text-xs sm:text-sm text-slate-600 mt-1">
+                Chaque salarié possède sa photo d’identité convertie en Base64 stockée dans le champ <code className="font-mono font-bold text-[#0B2545]">&quot;photo&quot;</code> de <code className="font-mono">employes.json</code>.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={handleExportEmployesJson}
+                className="min-h-[44px] px-5 py-2.5 rounded-xl bg-emerald-500 text-slate-950 font-bold text-xs sm:text-sm flex items-center gap-2 hover:bg-emerald-400"
+              >
+                <Download className="w-4 h-4" />
+                <span>Exporter employes.json</span>
+              </button>
+
+              <label className="cursor-pointer min-h-[44px] px-4 py-2.5 rounded-xl bg-[#0B2545] text-white font-bold text-xs sm:text-sm flex items-center gap-2 hover:bg-[#134074]">
+                <Upload className="w-4 h-4 text-amber-400" />
+                <span>Importer employes.json</span>
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  onChange={handleImportEmployesJson}
+                  className="hidden"
+                />
+              </label>
+            </div>
+          </div>
+
+          <pre className="bg-slate-900 text-slate-100 p-4 rounded-xl text-xs font-mono overflow-x-auto max-h-[520px] overflow-y-auto leading-relaxed">
+            {JSON.stringify(
+              {
+                company: {
+                  company_name: settings.company_name,
+                  business_number: '799094917',
+                  slogan: settings.slogan,
+                  address: settings.address,
+                  phone: settings.phone,
+                  whatsapp: settings.whatsapp,
+                  email: settings.email
+                },
+                employees: employees.map((e) => ({
+                  id: e.id,
+                  matricule: e.matricule,
+                  civilite: e.civilite,
+                  nom_complet: e.nom_complet,
+                  date_naissance: e.date_naissance,
+                  nationalite: e.nationalite,
+                  adresse: e.adresse,
+                  poste: e.poste,
+                  type_contrat: e.type_contrat,
+                  date_effet: e.date_effet,
+                  date_fin_cdd: e.date_fin_cdd,
+                  duree_periode_essai: e.duree_periode_essai,
+                  lieu_travail: e.lieu_travail,
+                  horaires: e.horaires,
+                  salaire: e.salaire,
+                  devise: e.devise,
+                  hebergement_fourni: e.hebergement_fourni,
+                  adresse_hebergement: e.adresse_hebergement,
+                  photo: e.photo ? `${e.photo.slice(0, 64)}... [Base64 complet exporté]` : ''
+                }))
+              },
+              null,
+              2
+            )}
+          </pre>
+        </div>
+      )}
+
+      {/* ====================================================================
+          TAB 3: MODIFIER LE SITE & LOGO
       ==================================================================== */}
       {activeTab === 'cms' && (
         <form onSubmit={handleSaveCms} className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 space-y-8">
@@ -1104,9 +1362,6 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             <h2 className="font-display font-bold text-xl text-[#0B2545]">
               Personnalisation du Site Public &amp; Identité Visuelle
             </h2>
-            <p className="text-xs sm:text-sm text-slate-500 mt-1">
-              Toute modification est enregistrée immédiatement dans votre navigateur.
-            </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1177,7 +1432,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                Logo de l’entreprise (affiché agrandi dans le Header)
+                Logo de l’entreprise
               </label>
               <div className="flex items-center gap-4">
                 <BrandLogo
@@ -1187,7 +1442,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                 />
                 <label className="cursor-pointer min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-[#0B2545] inline-flex items-center gap-2">
                   <Upload className="w-4 h-4" />
-                  <span>Importer un fichier Logo (PNG/JPG)</span>
+                  <span>Importer un fichier Logo</span>
                   <input
                     type="file"
                     accept="image/png,image/jpeg,image/webp,image/svg+xml"
@@ -1224,7 +1479,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       )}
 
       {/* ====================================================================
-          TAB 3: MESSAGES DE CONTACT (LOCALSTORAGE)
+          TAB 4: MESSAGES DE CONTACT
       ==================================================================== */}
       {activeTab === 'messages' && (
         <div className="space-y-4">
@@ -1274,80 +1529,20 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       )}
 
       {/* ====================================================================
-          TAB 4: FICHIER EMPLOYES.JSON (EXPORT / IMPORT STATIQUE NETLIFY)
-      ==================================================================== */}
-      {activeTab === 'json' && (
-        <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
-            <div>
-              <h2 className="font-display font-bold text-xl text-[#0B2545]">
-                Base de données statique : <code className="font-mono text-base">employes.json</code>
-              </h2>
-              <p className="text-xs sm:text-sm text-slate-600 mt-1">
-                Votre site fonctionne à 100% en statique sur Netlify grâce à <code className="font-mono">/employes.json</code> et au <code className="font-mono">localStorage</code>, sans aucun serveur PHP ni MySQL.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={handleExportEmployesJson}
-                className="min-h-[44px] px-4 py-2.5 rounded-xl bg-amber-400 text-[#0B2545] font-bold text-xs sm:text-sm flex items-center gap-2 hover:bg-amber-300"
-              >
-                <Download className="w-4 h-4" />
-                <span>Télécharger employes.json</span>
-              </button>
-
-              <label className="cursor-pointer min-h-[44px] px-4 py-2.5 rounded-xl bg-[#0B2545] text-white font-bold text-xs sm:text-sm flex items-center gap-2 hover:bg-[#134074]">
-                <Upload className="w-4 h-4 text-amber-400" />
-                <span>Importer un fichier JSON</span>
-                <input
-                  type="file"
-                  accept="application/json,.json"
-                  onChange={handleImportEmployesJson}
-                  className="hidden"
-                />
-              </label>
-            </div>
-          </div>
-
-          <pre className="bg-slate-900 text-slate-100 p-4 rounded-xl text-xs font-mono overflow-x-auto max-h-[520px] overflow-y-auto leading-relaxed">
-            {JSON.stringify(
-              {
-                company: {
-                  company_name: settings.company_name,
-                  slogan: settings.slogan,
-                  address: settings.address,
-                  phone: settings.phone,
-                  whatsapp: settings.whatsapp,
-                  email: settings.email
-                },
-                employees: employees.map((e) => ({
-                  ...e,
-                  photo_url: e.photo_url.startsWith('data:') ? '[Photo encodée Base64/SVG]' : e.photo_url,
-                  contrat_pdf_url: e.contrat_pdf_url ? '[Contrat PDF encodé Base64]' : ''
-                }))
-              },
-              null,
-              2
-            )}
-          </pre>
-        </div>
-      )}
-
-      {/* ====================================================================
-          MODAL: AJOUTER / MODIFIER UN EMPLOYÉ DANS LE LOCALSTORAGE
+          MODAL: CRÉATION / ÉDITION SALARIÉ + GÉNÉRATION AUTO CONTRAT PDF CDI/CDD
       ==================================================================== */}
       {modalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl border border-slate-200 max-w-2xl w-full p-5 sm:p-8 shadow-xl my-8 max-h-[92vh] overflow-y-auto">
+          <div className="bg-white rounded-2xl border border-slate-200 max-w-3xl w-full p-5 sm:p-8 shadow-xl my-8 max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-4 border-b border-slate-200 mb-5">
               <div>
                 <span className="font-mono text-xs font-bold text-amber-600">
-                  Matricule : {editingEmployee ? editingEmployee.matricule : `${nextMatricule} (Auto)`}
+                  Matricule : {editingEmployee ? editingEmployee.matricule : `${nextMatricule} (Auto)`} · QR Code : /employe.html?id={editingEmployee ? editingEmployee.matricule : nextMatricule}
                 </span>
                 <h2 className="font-display font-bold text-xl text-[#0B2545]">
-                  {editingEmployee ? 'Modifier le dossier employé' : 'Nouvel employé ATLANTIC TRANSPORT LTD'}
+                  {editingEmployee
+                    ? 'Modifier le salarié & régénérer le Contrat PDF'
+                    : 'Nouveau salarié & Génération automatique du Contrat PDF (CDI / CDD)'}
                 </h2>
               </div>
               <button
@@ -1360,44 +1555,403 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             </div>
 
             <form onSubmit={handleSaveEmployee} className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Prénom *</label>
+              {modalError && (
+                <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs sm:text-sm flex items-start gap-2.5">
+                  <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5 text-red-600" />
+                  <span>{modalError}</span>
+                </div>
+              )}
+
+              {/* Row 1: Civilité + Nom complet + Date de naissance + Nationalité */}
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
+                <div className="sm:col-span-3">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Civilité *
+                  </label>
+                  <select
+                    value={empForm.civilite}
+                    onChange={(e) =>
+                      setEmpForm({
+                        ...empForm,
+                        civilite: e.target.value as 'Monsieur' | 'Madame'
+                      })
+                    }
+                    className="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white"
+                  >
+                    <option value="Monsieur">Monsieur</option>
+                    <option value="Madame">Madame</option>
+                  </select>
+                </div>
+
+                <div className="sm:col-span-9">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Nom complet du salarié (affiché en BLEU MAJUSCULES sur le contrat) *
+                  </label>
                   <input
                     type="text"
                     required
-                    value={empForm.prenom}
-                    onChange={(e) => setEmpForm({ ...empForm, prenom: e.target.value })}
+                    value={empForm.nom_complet}
+                    onChange={(e) => setEmpForm({ ...empForm, nom_complet: e.target.value })}
+                    placeholder="Ex: JEAN-PIERRE KAMGA"
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-bold uppercase text-blue-700"
+                  />
+                </div>
+              </div>
+
+              {/* Row 2: Date de naissance + Nationalité + Adresse de résidence */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Date de naissance *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={empForm.date_naissance}
+                    onChange={(e) => setEmpForm({ ...empForm, date_naissance: e.target.value })}
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Nationalité *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={empForm.nationalite}
+                    onChange={(e) => setEmpForm({ ...empForm, nationalite: e.target.value })}
+                    placeholder="Ex: Canadienne, Française..."
                     className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm"
                   />
                 </div>
+
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Nom *</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Adresse de résidence *
+                  </label>
                   <input
                     type="text"
                     required
-                    value={empForm.nom}
-                    onChange={(e) => setEmpForm({ ...empForm, nom: e.target.value })}
+                    value={empForm.adresse}
+                    onChange={(e) => setEmpForm({ ...empForm, adresse: e.target.value })}
+                    placeholder="Rue, Ville, Pays"
                     className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
+              {/* Row 3: Poste occupé + Type de contrat (CDI / CDD) */}
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
+                <div className="sm:col-span-7">
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    E-mail professionnel (Login) *
+                    Poste occupé (Article II) *
                   </label>
                   <input
-                    type="email"
+                    type="text"
                     required
-                    value={empForm.email}
-                    onChange={(e) => setEmpForm({ ...empForm, email: e.target.value })}
+                    value={empForm.poste}
+                    onChange={(e) => setEmpForm({ ...empForm, poste: e.target.value })}
+                    placeholder="Ex: Chauffeur Poids Lourd / Coordinateur Logistique"
                     className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm"
                   />
                 </div>
+
+                <div className="sm:col-span-5">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Type de contrat (CDI / CDD) *
+                  </label>
+                  <select
+                    value={empForm.type_contrat}
+                    onChange={(e) =>
+                      setEmpForm({
+                        ...empForm,
+                        type_contrat: e.target.value as 'CDI' | 'CDD'
+                      })
+                    }
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-bold bg-white text-[#0B2545]"
+                  >
+                    <option value="CDI">CDI — Contrat à durée indéterminée</option>
+                    <option value="CDD">CDD — Contrat à durée déterminée</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Row 4: Date d'effet + Date fin si CDD + Durée période d'essai */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-3.5 rounded-xl bg-blue-50/60 border border-blue-200">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Téléphone</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Date d’effet / Début (Article III) *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={empForm.date_effet}
+                    onChange={(e) => setEmpForm({ ...empForm, date_effet: e.target.value })}
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-mono bg-white"
+                  />
+                </div>
+
+                {empForm.type_contrat === 'CDD' ? (
+                  <div>
+                    <label className="block text-xs font-semibold text-blue-900 mb-1">
+                      Date de fin CDD (Article III) *
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={empForm.date_fin_cdd}
+                      onChange={(e) => setEmpForm({ ...empForm, date_fin_cdd: e.target.value })}
+                      className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-blue-400 text-sm font-mono bg-white"
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">
+                      Mention Article III (Auto CDI)
+                    </label>
+                    <div className="min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 bg-slate-100 text-xs font-semibold text-blue-800 flex items-center">
+                      « durée indéterminée »
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Durée période d’essai (Article IV) *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={empForm.duree_periode_essai}
+                    onChange={(e) =>
+                      setEmpForm({ ...empForm, duree_periode_essai: e.target.value })
+                    }
+                    placeholder="Ex: 3 mois"
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm bg-white"
+                  />
+                </div>
+              </div>
+
+              {/* Row 5: Lieu de travail + Horaires */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Lieu de travail (Article V) *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={empForm.lieu_travail}
+                    onChange={(e) => setEmpForm({ ...empForm, lieu_travail: e.target.value })}
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Horaires de travail (Article VI) *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={empForm.horaires}
+                    onChange={(e) => setEmpForm({ ...empForm, horaires: e.target.value })}
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm"
+                  />
+                </div>
+              </div>
+
+              {/* Row 6: Salaire brut mensuel ("X.XXX CAD") + Devise */}
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
+                <div className="sm:col-span-6">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Salaire brut mensuel (Article VII — affiché comme{' '}
+                    <span className="text-[#0000AA] font-mono">
+                      {formatSalaryContract(empForm.salaire, empForm.devise)}
+                    </span>
+                    ) *
+                  </label>
+                  <input
+                    type="number"
+                    step="1"
+                    required
+                    value={empForm.salaire}
+                    onChange={(e) => setEmpForm({ ...empForm, salaire: e.target.value })}
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-mono font-bold text-[#0000AA]"
+                  />
+                </div>
+
+                <div className="sm:col-span-6">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Devise *
+                  </label>
+                  <select
+                    value={empForm.devise}
+                    onChange={(e) => setEmpForm({ ...empForm, devise: e.target.value })}
+                    className="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white font-mono"
+                  >
+                    <option value="CAD">CAD ($)</option>
+                    <option value="USD">USD ($)</option>
+                    <option value="EUR">EUR (€)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Row 6b: Rule 9 — Hébergement conditionnel (Point 2: Conditions d'hébergement + Lieu flexible) */}
+              <div className="p-4 rounded-xl bg-amber-50/50 border border-amber-200 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-end">
+                  <div className="sm:col-span-4">
+                    <label className="block text-xs font-bold text-[#8B4513] mb-1">
+                      Hébergement pris en charge ? *
+                    </label>
+                    <select
+                      value={empForm.hebergement_fourni ? 'oui' : 'non'}
+                      onChange={(e) =>
+                        setEmpForm({
+                          ...empForm,
+                          hebergement_fourni: e.target.value === 'oui'
+                        })
+                      }
+                      className="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-300 text-sm font-bold bg-white text-[#0B2545]"
+                    >
+                      <option value="non">Non (affiche &quot;Non applicable&quot;)</option>
+                      <option value="oui">Oui (Pris en charge par l&apos;employeur)</option>
+                    </select>
+                  </div>
+
+                  {empForm.hebergement_fourni && (
+                    <>
+                      <div className="sm:col-span-5">
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          Durée d&apos;hébergement *
+                        </label>
+                        <select
+                          value={empForm.hebergement_duree_type}
+                          onChange={(e) =>
+                            setEmpForm({
+                              ...empForm,
+                              hebergement_duree_type: e.target.value as
+                                | 'duree_precise'
+                                | 'toute_duree_contrat'
+                            })
+                          }
+                          className="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white"
+                        >
+                          <option value="duree_precise">Durée précise (en nombre de mois)</option>
+                          <option value="toute_duree_contrat">
+                            Pendant toute la durée du contrat
+                          </option>
+                        </select>
+                      </div>
+
+                      {empForm.hebergement_duree_type === 'duree_precise' && (
+                        <div className="sm:col-span-3">
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">
+                            Nombre de mois *
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={120}
+                            required
+                            value={empForm.hebergement_nombre_mois}
+                            onChange={(e) =>
+                              setEmpForm({
+                                ...empForm,
+                                hebergement_nombre_mois: e.target.value
+                              })
+                            }
+                            placeholder="Ex: 3"
+                            className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-mono bg-white"
+                          />
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                {empForm.hebergement_fourni && (
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-end pt-1">
+                    <div className="sm:col-span-5">
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Lieu d&apos;hébergement (Formulation Point 2) *
+                      </label>
+                      <select
+                        value={empForm.hebergement_lieu_type}
+                        onChange={(e) =>
+                          setEmpForm({
+                            ...empForm,
+                            hebergement_lieu_type: e.target.value as
+                              | 'preciser_lieu'
+                              | 'texte_generique'
+                          })
+                        }
+                        className="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-300 text-sm font-semibold bg-white text-[#0B2545]"
+                      >
+                        <option value="preciser_lieu">Préciser le lieu (adresse libre)</option>
+                        <option value="texte_generique">
+                          Texte générique (sans adresse spécifique)
+                        </option>
+                      </select>
+                    </div>
+
+                    {empForm.hebergement_lieu_type === 'preciser_lieu' && (
+                      <div className="sm:col-span-7">
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          Adresse du logement mis à disposition *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={empForm.adresse_hebergement}
+                          onChange={(e) =>
+                            setEmpForm({ ...empForm, adresse_hebergement: e.target.value })
+                          }
+                          placeholder="Ex: 852 Rue Main Moncton, Nouveau-Brunswick Canada"
+                          className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm bg-white"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="p-2.5 rounded-lg bg-white border border-amber-200/80 text-xs text-slate-700">
+                  <span className="font-bold text-black block">
+                    Aperçu Point 2. Conditions d&apos;hébergement :
+                  </span>
+                  <span className="italic text-slate-800 mt-0.5 block">
+                    {buildHebergementPoint2Text({
+                      hebergement_fourni: empForm.hebergement_fourni,
+                      hebergement_duree_type: empForm.hebergement_duree_type,
+                      hebergement_nombre_mois: parseInt(empForm.hebergement_nombre_mois, 10) || 3,
+                      hebergement_lieu_type: empForm.hebergement_lieu_type,
+                      adresse_hebergement: empForm.adresse_hebergement
+                    })}
+                  </span>
+                </div>
+              </div>
+
+              {/* Row 7: Email + Téléphone + Mot de passe Espace Employé */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 border-t border-slate-100">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    E-mail (Connexion Espace Employé)
+                  </label>
+                  <input
+                    type="email"
+                    value={empForm.email}
+                    onChange={(e) => setEmpForm({ ...empForm, email: e.target.value })}
+                    placeholder="prenom.nom@atlantictransport.ca"
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Téléphone
+                  </label>
                   <input
                     type="text"
                     value={empForm.telephone}
@@ -1405,117 +1959,66 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                     className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm"
                   />
                 </div>
-              </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Poste occupé *</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Mot de passe salarié
+                  </label>
                   <input
                     type="text"
-                    required
-                    value={empForm.poste}
-                    onChange={(e) => setEmpForm({ ...empForm, poste: e.target.value })}
-                    placeholder="Ex: Coordinateur Transit & Douane"
-                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Type de contrat *</label>
-                  <select
-                    value={empForm.type_contrat}
-                    onChange={(e) => setEmpForm({ ...empForm, type_contrat: e.target.value })}
-                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm bg-white"
-                  >
-                    <option value="CDI - Temps plein">CDI - Temps plein</option>
-                    <option value="CDD - Temps plein">CDD - Temps plein</option>
-                    <option value="Contrat International Expatrié">Contrat International Expatrié</option>
-                    <option value="CDI - Temps partiel">CDI - Temps partiel</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Salaire mensuel *</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    required
-                    value={empForm.salaire}
-                    onChange={(e) => setEmpForm({ ...empForm, salaire: e.target.value })}
-                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Devise *</label>
-                  <select
-                    value={empForm.devise}
-                    onChange={(e) => setEmpForm({ ...empForm, devise: e.target.value })}
-                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm bg-white font-mono"
-                  >
-                    <option value="CAD">CAD ($)</option>
-                    <option value="USD">USD ($)</option>
-                    <option value="EUR">EUR (€)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Date d’embauche *</label>
-                  <input
-                    type="date"
-                    required
-                    value={empForm.date_embauche}
-                    onChange={(e) => setEmpForm({ ...empForm, date_embauche: e.target.value })}
+                    value={empForm.password}
+                    onChange={(e) => setEmpForm({ ...empForm, password: e.target.value })}
                     className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-mono"
                   />
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Mot de passe de connexion du salarié *
-                </label>
-                <input
-                  type="text"
-                  required
-                  minLength={6}
-                  value={empForm.password}
-                  onChange={(e) => setEmpForm({ ...empForm, password: e.target.value })}
-                  placeholder="Mot de passe de connexion Espace Employé"
-                  className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-mono"
-                />
-              </div>
-
-              {/* Uploads en Base64 dans localStorage */}
+              {/* Row 8: Photo d'identité Base64 + Option téléchargement auto PDF */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-                <div className="p-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 space-y-2">
-                  <span className="text-xs font-semibold text-[#0B2545] block">
-                    Photo d’identité (JPG / PNG)
-                  </span>
-                  <label className="cursor-pointer min-h-[40px] px-3 py-2 rounded-lg bg-white border border-slate-300 text-xs font-semibold text-slate-700 inline-flex items-center gap-2 hover:bg-slate-100">
-                    <Upload className="w-4 h-4 text-[#0B2545]" />
-                    <span>{empForm.photo_name || 'Choisir une photo JPG/PNG'}</span>
-                    <input
-                      type="file"
-                      accept="image/jpeg,image/png"
-                      onChange={handlePhotoUpload}
-                      className="hidden"
+                <div className="p-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 flex items-center gap-4">
+                  {empForm.photo_base64 && (
+                    <img
+                      src={empForm.photo_base64}
+                      alt="Aperçu photo Base64"
+                      className="w-14 h-14 rounded-xl object-cover border border-slate-300 shrink-0"
                     />
-                  </label>
+                  )}
+                  <div className="space-y-1.5">
+                    <span className="text-xs font-semibold text-[#0B2545] block">
+                      Photo d’identité → Base64 dans employes.json champ &quot;photo&quot;
+                    </span>
+                    <label className="cursor-pointer min-h-[38px] px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-xs font-semibold text-slate-700 inline-flex items-center gap-2 hover:bg-slate-100">
+                      <Upload className="w-4 h-4 text-[#0B2545]" />
+                      <span>{empForm.photo_name || 'Choisir une photo (JPG/PNG)'}</span>
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        onChange={handlePhotoUpload}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
                 </div>
 
-                <div className="p-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 space-y-2">
-                  <span className="text-xs font-semibold text-[#0B2545] block">
-                    Contrat de travail (PDF)
-                  </span>
-                  <label className="cursor-pointer min-h-[40px] px-3 py-2 rounded-lg bg-white border border-slate-300 text-xs font-semibold text-slate-700 inline-flex items-center gap-2 hover:bg-slate-100">
-                    <FileText className="w-4 h-4 text-[#0B2545]" />
-                    <span>{empForm.contrat_pdf_name || 'Importer le contrat PDF'}</span>
+                <div className="p-4 rounded-xl border border-amber-300 bg-amber-50/60 flex flex-col justify-center space-y-2">
+                  <div className="flex items-center gap-2 text-xs font-bold text-[#0B2545]">
+                    <FileText className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>
+                      Titre auto : Contrat de Travail (
+                      {empForm.type_contrat === 'CDD'
+                        ? 'à durée déterminée'
+                        : 'à durée indéterminée'}
+                      )
+                    </span>
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
                     <input
-                      type="file"
-                      accept="application/pdf"
-                      onChange={handleContractPdfUpload}
-                      className="hidden"
+                      type="checkbox"
+                      checked={autoDownloadPdfOnSave}
+                      onChange={(e) => setAutoDownloadPdfOnSave(e.target.checked)}
+                      className="rounded border-slate-300 text-[#0B2545]"
                     />
+                    <span>Télécharger automatiquement le PDF généré avec jsPDF à la validation</span>
                   </label>
                 </div>
               </div>
@@ -1530,12 +2033,78 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                 </button>
                 <button
                   type="submit"
+                  disabled={savingEmp}
                   className="min-h-[44px] px-6 py-2.5 rounded-xl bg-[#0B2545] text-white text-xs sm:text-sm font-bold hover:bg-[#134074]"
                 >
-                  {editingEmployee ? 'Mettre à jour' : 'Enregistrer le salarié'}
+                  {savingEmp
+                    ? 'Génération du contrat PDF en cours...'
+                    : editingEmployee
+                    ? 'Enregistrer & Régénérer le Contrat PDF'
+                    : 'Créer le salarié & Générer le Contrat PDF'}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          MODAL: CONFIRMATION SUPPRESSION SALARIÉ & CONTRATS ASSOCIÉS
+      ==================================================================== */}
+      {deleteModalEmp && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-red-200 max-w-md w-full p-6 space-y-4 shadow-xl">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5 text-red-700">
+                <Trash2 className="w-5 h-5 shrink-0" />
+                <h3 className="font-display font-bold text-lg text-[#0B2545]">
+                  Supprimer le salarié ?
+                </h3>
+              </div>
+              <button
+                type="button"
+                disabled={deletingEmp}
+                onClick={() => setDeleteModalEmp(null)}
+                className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-red-50 border border-red-100 text-xs text-slate-700 space-y-1">
+              <p>
+                Confirmez-vous la suppression définitive de{' '}
+                <strong className="text-[#0B2545]">
+                  {deleteModalEmp.civilite} {deleteModalEmp.nom_complet}
+                </strong>{' '}
+                (<span className="font-mono font-bold">{deleteModalEmp.matricule}</span>) ?
+              </p>
+              <p className="text-red-700 font-medium">
+                Cette action effacera le salarié de la collection Firestore « employees » et retirera ses contrats associés.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                disabled={deletingEmp}
+                onClick={() => setDeleteModalEmp(null)}
+                className="min-h-[42px] px-4 py-2 rounded-xl border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                disabled={deletingEmp}
+                onClick={handleConfirmDeleteEmployee}
+                className="min-h-[42px] px-5 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold inline-flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>
+                  {deletingEmp ? 'Suppression en cours...' : 'Confirmer la suppression'}
+                </span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1559,7 +2128,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
               </button>
             </div>
             <p className="text-xs text-slate-600">
-              Définissez un nouveau mot de passe temporaire pour <strong>{resetModalEmp.prenom} {resetModalEmp.nom}</strong>.
+              Définissez un nouveau mot de passe temporaire pour <strong>{resetModalEmp.nom_complet}</strong>.
             </p>
             <form onSubmit={handleResetPasswordSubmit} className="space-y-4">
               <input
