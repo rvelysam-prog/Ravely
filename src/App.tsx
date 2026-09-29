@@ -61,7 +61,9 @@ function resolveInitialPage(): PublicPage {
     path === '/admin.html' ||
     path.startsWith('/admin/') ||
     hash === '#/admin' ||
-    hash === '#admin'
+    hash === '#admin' ||
+    hash.startsWith('#/admin/') ||
+    hash.startsWith('#admin/')
   ) {
     return 'admin';
   }
@@ -156,7 +158,9 @@ export default function App() {
     setCurrentPage(page);
     try {
       if (page === 'admin') {
-        window.history.pushState({}, '', '/admin.html');
+        if (!window.location.pathname.toLowerCase().startsWith('/admin/promesse-embauche')) {
+          window.history.pushState({}, '', '/admin.html');
+        }
       } else if (page === 'espace-employe') {
         window.history.pushState({}, '', '/employe.html');
       } else {

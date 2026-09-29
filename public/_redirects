@@ -1,5 +1,7 @@
 /employe.html   /employe.html   200
 /admin.html     /admin.html     200
 /employe/*      /employe.html?token=:splat  200
+/admin/promesse-embauche  /admin.html  200
+/admin/*        /admin.html     200
 /admin          /admin.html     200
 /*              /index.html     200

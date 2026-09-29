@@ -49,6 +49,18 @@ export interface Employee {
   hebergement_lieu_type?: 'preciser_lieu' | 'texte_generique';
   adresse_hebergement?: string;
   date_signature?: string;
+  // Champs spécifiques Promesse d'embauche
+  sexe?: 'Féminin' | 'Masculin' | string;
+  numero_piece_identite?: string;
+  contact_urgence?: string;
+  manager?: string;
+  date_fin?: string;
+  salaire_horaire?: number;
+  primes?: string;
+  mode_paiement?: string;
+  ni?: string;
+  responsabilites?: string[];
+  promesse_type_contrat_label?: string;
   // Champ "photo" stocké en base64 dans employes.json (et photo_url conservé en alias)
   photo: string;
   photo_url: string;

@@ -128,6 +128,48 @@
           "type": "string",
           "maxLength": 40
         },
+        "sexe": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "numero_piece_identite": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "contact_urgence": {
+          "type": "string",
+          "maxLength": 250
+        },
+        "manager": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "date_fin": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "salaire_horaire": {
+          "type": "number"
+        },
+        "primes": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "mode_paiement": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "ni": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "responsabilites": {
+          "type": "array"
+        },
+        "promesse_type_contrat_label": {
+          "type": "string",
+          "maxLength": 200
+        },
         "photo": {
           "type": "string",
           "maxLength": 600000

@@ -57,6 +57,19 @@ import {
   generateEmployeeContractPdfDataUri,
   getEmployeeStatusUrl
 } from '../services/contractPdfGenerator';
+import { PromesseEmbaucheSection } from './PromesseEmbaucheSection';
+
+type AdminTab = 'employees' | 'promesse' | 'cms' | 'messages' | 'json';
+
+function resolveInitialAdminTab(): AdminTab {
+  if (typeof window === 'undefined') return 'employees';
+  const path = window.location.pathname.toLowerCase();
+  const hash = window.location.hash.toLowerCase();
+  if (path.includes('/admin/promesse-embauche') || hash.includes('promesse-embauche')) {
+    return 'promesse';
+  }
+  return 'employees';
+}
 
 interface AdminBackofficeProps {
   settings: SiteSettings;
@@ -83,8 +96,29 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
   const [loginError, setLoginError] = useState('');
 
   // Dashboard states
-  const [activeTab, setActiveTab] = useState<'employees' | 'cms' | 'messages' | 'json'>('employees');
+  const [activeTab, setActiveTab] = useState<AdminTab>(resolveInitialAdminTab);
   const [employees, setEmployees] = useState<Employee[]>(() => getEmployees());
+
+  const switchAdminTab = (tab: AdminTab) => {
+    setActiveTab(tab);
+    try {
+      if (tab === 'promesse') {
+        window.history.pushState({}, '', '/admin/promesse-embauche');
+      } else if (window.location.pathname.toLowerCase().includes('/admin/promesse-embauche')) {
+        window.history.pushState({}, '', '/admin.html');
+      }
+    } catch {
+      // Ignore history push errors in sandboxed iframes
+    }
+  };
+
+  useEffect(() => {
+    const onPopState = () => {
+      setActiveTab(resolveInitialAdminTab());
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
   const [messages, setMessages] = useState<ContactMessage[]>(() => getContactMessages());
   const [nextMatricule, setNextMatricule] = useState<string>(() => getNextMatricule());
   const [searchQuery, setSearchQuery] = useState('');
@@ -866,7 +900,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       <div className="flex flex-wrap items-center gap-2 bg-slate-200/70 p-1.5 rounded-2xl">
         <button
           type="button"
-          onClick={() => setActiveTab('employees')}
+          onClick={() => switchAdminTab('employees')}
           className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
             activeTab === 'employees'
               ? 'bg-[#0B2545] text-white shadow-sm'
@@ -879,7 +913,20 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
         <button
           type="button"
-          onClick={() => setActiveTab('json')}
+          onClick={() => switchAdminTab('promesse')}
+          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
+            activeTab === 'promesse'
+              ? 'bg-[#0B2545] text-white shadow-sm'
+              : 'text-slate-700 hover:text-slate-950'
+          }`}
+        >
+          <FileText className="w-4 h-4 text-amber-500" />
+          <span>Générer promesse d&apos;embauche</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => switchAdminTab('json')}
           className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
             activeTab === 'json'
               ? 'bg-[#0B2545] text-white shadow-sm'
@@ -892,7 +939,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
         <button
           type="button"
-          onClick={() => setActiveTab('cms')}
+          onClick={() => switchAdminTab('cms')}
           className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
             activeTab === 'cms'
               ? 'bg-[#0B2545] text-white shadow-sm'
@@ -905,7 +952,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
         <button
           type="button"
-          onClick={() => setActiveTab('messages')}
+          onClick={() => switchAdminTab('messages')}
           className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
             activeTab === 'messages'
               ? 'bg-[#0B2545] text-white shadow-sm'
@@ -916,6 +963,16 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           <span>Demandes Contact ({messages.length})</span>
         </button>
       </div>
+
+      {activeTab === 'promesse' && (
+        <PromesseEmbaucheSection
+          employees={employees}
+          onEmployeesUpdated={(updatedList) => {
+            setEmployees(updatedList);
+            setNextMatricule(getNextMatricule(updatedList));
+          }}
+        />
+      )}
 
       {feedback && (
         <div
