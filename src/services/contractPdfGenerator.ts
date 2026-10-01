@@ -1,6 +1,12 @@
 import { jsPDF } from 'jspdf';
 import QRCode from 'qrcode';
 import { Employee } from '../types';
+import {
+  convertUploadedImageForPdf,
+  getSavedCustomCachet,
+  getSavedCustomLogo,
+  getSavedCustomSignature
+} from './departmentsAndEmailService';
 
 // Strict A4 dimensions & 20mm margins as required
 const PAGE_WIDTH_MM = 210;
@@ -407,12 +413,12 @@ export async function generateEmployeeContractPdfDataUri(emp: Employee): Promise
 
   // Load ONLY the user's attached static PNG files (no regenerated logos!)
   const [
-    logoAtlanticDataUrl,
+    defaultLogoAtlanticDataUrl,
     logoCanadaDataUrl,
     blasonPrimaryDataUrl,
     blasonFallbackDataUrl,
-    signatureDataUrl,
-    cachetDataUrl,
+    defaultSignatureDataUrl,
+    defaultCachetDataUrl,
     qrDataUrl
   ] = await Promise.all([
     loadStaticImageAsPngDataUrl(CONTRACT_STATIC_ASSETS.logoAtlantic),
@@ -423,6 +429,33 @@ export async function generateEmployeeContractPdfDataUri(emp: Employee): Promise
     loadStaticImageAsPngDataUrl(CONTRACT_STATIC_ASSETS.cachet),
     generateEmployeeQrDataUrl(emp.matricule)
   ]);
+
+  const rawLogo = getSavedCustomLogo() || defaultLogoAtlanticDataUrl;
+  const logoAtlanticDataUrl = rawLogo
+    ? await convertUploadedImageForPdf(rawLogo, {
+        maxWidth: 700,
+        maxHeight: 350,
+        removeWhiteBackground: false
+      })
+    : defaultLogoAtlanticDataUrl;
+
+  const rawSig = emp.signature_url || getSavedCustomSignature() || defaultSignatureDataUrl;
+  const signatureDataUrl = rawSig
+    ? await convertUploadedImageForPdf(rawSig, {
+        maxWidth: 600,
+        maxHeight: 350,
+        removeWhiteBackground: true
+      })
+    : defaultSignatureDataUrl;
+
+  const rawCachet = emp.cachet_url || getSavedCustomCachet() || defaultCachetDataUrl;
+  const cachetDataUrl = rawCachet
+    ? await convertUploadedImageForPdf(rawCachet, {
+        maxWidth: 650,
+        maxHeight: 450,
+        removeWhiteBackground: true
+      })
+    : defaultCachetDataUrl;
 
   const blasonDataUrl = blasonPrimaryDataUrl || blasonFallbackDataUrl;
   const scriptTitleDataUrl = createScriptTitlePngDataUrl();
@@ -443,7 +476,10 @@ export async function generateEmployeeContractPdfDataUri(emp: Employee): Promise
   const periodeEssai = (emp.duree_periode_essai || '3 semaines').trim();
   const lieuTravail = (emp.lieu_travail || 'SURREY, COLOMBIE-BRITANNIQUE').trim().toUpperCase();
   const formattedSalaire = formatSalaryContract(emp.salaire, emp.devise);
-  const dateSignature = formatDateFr(emp.date_signature);
+  const dateEtablissement = formatDateFr(
+    emp.date_etablissement || emp.date_signature || emp.date_effet || emp.date_embauche
+  );
+  const dateSignature = dateEtablissement;
 
   // =========================================================================
   // PAGE 1 : En-tête officiel, Titre, QR Code & Entre les soussignés
@@ -463,10 +499,11 @@ export async function generateEmployeeContractPdfDataUri(emp: Employee): Promise
   doc.text('Téléphone: +1 (506) 802-2226', MARGIN_LEFT_MM, 51.6);
   doc.text('Email : atlantictransport.int@ik.me', MARGIN_LEFT_MM, 56.8);
 
-  // Center header -> Green Bold "Numéro d'entreprise (NE): 799094917"
+  // Center header -> Green Bold "A Surrey, le [DATE]" + "Numéro d'entreprise (NE): 799094917"
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
   doc.setTextColor(COLOR_GREEN_HEADER[0], COLOR_GREEN_HEADER[1], COLOR_GREEN_HEADER[2]);
+  doc.text(`A Surrey, le ${dateEtablissement}`, 110, 40.8, { align: 'center' });
   doc.text("Numéro d'entreprise (NE): 799094917", 110, 46.4, { align: 'center' });
 
   // Rule 2: Right header -> logo-canada.png on top + blason original.png below

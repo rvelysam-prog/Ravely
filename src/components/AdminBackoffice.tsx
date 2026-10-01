@@ -57,6 +57,24 @@ import {
   generateEmployeeContractPdfDataUri,
   getEmployeeStatusUrl
 } from '../services/contractPdfGenerator';
+import {
+  formatPromesseDateLongFr,
+  formatPromesseDateSlash,
+  generatePromesseEmbauchePdfDataUri
+} from '../services/promesseEmbauchePdfGenerator';
+import {
+  OFFICIAL_DEPARTMENTS,
+  convertUploadedImageForPdf,
+  findDepartmentDefinition,
+  getDeduplicatedDepartmentsList,
+  getSavedCustomCachet,
+  getSavedCustomFiligrane,
+  getSavedCustomSignature,
+  sendCandidatureAcceptanceEmailViaFirebase,
+  setSavedCustomCachet,
+  setSavedCustomFiligrane,
+  setSavedCustomSignature
+} from '../services/departmentsAndEmailService';
 import { PromesseEmbaucheSection } from './PromesseEmbaucheSection';
 
 type AdminTab = 'employees' | 'promesse' | 'cms' | 'messages' | 'json';
@@ -146,9 +164,10 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     date_naissance: '1990-05-15',
     nationalite: 'Canadienne',
     poste: '',
-    departement: 'Opérations Logistiques',
+    departement: 'DEPARTEMENT LOGISTIQUE ET ENTREPOSAGE',
     type_contrat: 'CDI' as 'CDI' | 'CDD',
     date_effet: new Date().toISOString().slice(0, 10),
+    date_etablissement: new Date().toISOString().slice(0, 10),
     date_fin_cdd: '2027-09-28',
     duree_periode_essai: '3 semaines',
     lieu_travail: 'Surrey, Colombie-Britannique (King George Blvd, Surrey BC V3T 2W1)',
@@ -164,6 +183,55 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     photo_base64: '',
     photo_name: ''
   });
+
+  const [customSigLabel, setCustomSigLabel] = useState<string>(() =>
+    getSavedCustomSignature() ? 'Signature personnalisée active' : 'signature.png (Par défaut)'
+  );
+  const [customCachetLabel, setCustomCachetLabel] = useState<string>(() =>
+    getSavedCustomCachet() ? 'Cachet personnalisé actif' : 'cachet.png (Par défaut)'
+  );
+  const [customFiligraneLabel, setCustomFiligraneLabel] = useState<string>(() =>
+    getSavedCustomFiligrane() ? 'Filigrane personnalisé actif' : 'Blason par défaut'
+  );
+
+  const handleModalAssetUpload = (
+    e: React.ChangeEvent<HTMLInputElement>,
+    target: 'signature' | 'cachet' | 'filigrane'
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const res = typeof reader.result === 'string' ? reader.result : '';
+      if (!res) return;
+      if (target === 'signature') {
+        const conv = await convertUploadedImageForPdf(res, {
+          maxWidth: 600,
+          maxHeight: 350,
+          removeWhiteBackground: true
+        });
+        setSavedCustomSignature(conv);
+        setCustomSigLabel(file.name);
+      } else if (target === 'cachet') {
+        const conv = await convertUploadedImageForPdf(res, {
+          maxWidth: 700,
+          maxHeight: 450,
+          removeWhiteBackground: true
+        });
+        setSavedCustomCachet(conv);
+        setCustomCachetLabel(file.name);
+      } else if (target === 'filigrane') {
+        const conv = await convertUploadedImageForPdf(res, {
+          maxWidth: 950,
+          maxHeight: 1150,
+          removeWhiteBackground: false
+        });
+        setSavedCustomFiligrane(conv);
+        setCustomFiligraneLabel(file.name);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
 
   // Password Reset Modal
   const [resetModalEmp, setResetModalEmp] = useState<Employee | null>(null);
@@ -250,9 +318,10 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       date_naissance: '1991-06-15',
       nationalite: 'Canadienne',
       poste: '',
-      departement: 'Opérations Logistiques',
+      departement: 'DEPARTEMENT LOGISTIQUE ET ENTREPOSAGE',
       type_contrat: 'CDI',
       date_effet: new Date().toISOString().slice(0, 10),
+      date_etablissement: new Date().toISOString().slice(0, 10),
       date_fin_cdd: '2027-09-28',
       duree_periode_essai: '3 semaines',
       lieu_travail: 'Surrey, Colombie-Britannique (King George Blvd, Surrey BC V3T 2W1)',
@@ -285,9 +354,14 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       date_naissance: emp.date_naissance || '1990-01-01',
       nationalite: emp.nationalite || 'Canadienne',
       poste: emp.poste,
-      departement: emp.departement || 'Opérations Logistiques',
+      departement: emp.departement || 'DEPARTEMENT LOGISTIQUE ET ENTREPOSAGE',
       type_contrat: isCddType ? 'CDD' : 'CDI',
       date_effet: emp.date_effet || emp.date_embauche,
+      date_etablissement:
+        emp.date_etablissement ||
+        emp.date_signature ||
+        emp.date_effet ||
+        new Date().toISOString().slice(0, 10),
       date_fin_cdd: emp.date_fin_cdd || '2027-09-28',
       duree_periode_essai: emp.duree_periode_essai || '3 semaines',
       lieu_travail:
@@ -435,7 +509,11 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           empForm.hebergement_fourni && empForm.hebergement_lieu_type === 'preciser_lieu'
             ? empForm.adresse_hebergement.trim()
             : '',
-        date_signature: todayIso,
+        date_signature: empForm.date_etablissement || todayIso,
+        date_etablissement: empForm.date_etablissement || todayIso,
+        emailEnvoye: editingEmployee?.emailEnvoye ?? true,
+        responsabilites:
+          (findDepartmentDefinition(empForm.departement) || OFFICIAL_DEPARTMENTS[1]).missions,
         photo: resolvedPhotoBase64,
         photo_url: resolvedPhotoBase64,
         contrat_pdf_url: '',
@@ -466,10 +544,56 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       // Close modal now that Firestore persistence & list refresh succeeded
       setModalOpen(false);
 
-      // STEP 3: Generate client-side PDF Contract via jsPDF and trigger download if checked
+      // STEP 3: Generate client-side PDF Contract via jsPDF + Promesse d'embauche & Trigger Email
       try {
         const pdfDataUri = await generateEmployeeContractPdfDataUri(savedEmp);
         setCachedContractPdf(savedEmp.matricule, pdfDataUri);
+
+        if (!editingEmployee) {
+          const matchedDept =
+            findDepartmentDefinition(savedEmp.departement) || OFFICIAL_DEPARTMENTS[1];
+          const promessePdfDataUri = await generatePromesseEmbauchePdfDataUri({
+            nom_complet: savedEmp.nom_complet,
+            date_naissance: savedEmp.date_naissance,
+            sexe: savedEmp.civilite === 'Madame' ? 'Féminin' : 'Masculin',
+            nationalite: savedEmp.nationalite,
+            numero_piece_identite: savedEmp.numero_piece_identite || 'C01294857',
+            telephone: savedEmp.telephone,
+            email: savedEmp.email,
+            adresse: savedEmp.adresse,
+            contact_urgence: savedEmp.contact_urgence || '',
+            poste: savedEmp.poste,
+            departement: savedEmp.departement,
+            manager: 'ANTOINE FORESTIN',
+            matricule: savedEmp.matricule,
+            type_contrat:
+              savedEmp.type_contrat === 'CDD'
+                ? 'Contrat à Durée Déterminée (CDD) de 2 ans'
+                : 'Contrat à Durée Déterminée (CDI) de 2 ans',
+            date_embauche: savedEmp.date_embauche,
+            date_etablissement: savedEmp.date_etablissement || savedEmp.date_signature,
+            date_fin: savedEmp.date_fin_cdd,
+            salaire_horaire: savedEmp.salaire_horaire || 22,
+            lieu_travail: savedEmp.lieu_travail,
+            horaire: savedEmp.horaires,
+            ni: savedEmp.ni || 'BC1129970',
+            responsabilites: matchedDept.missions
+          });
+
+          await sendCandidatureAcceptanceEmailViaFirebase({
+            toEmail: savedEmp.email,
+            nomComplet: savedEmp.nom_complet,
+            civilite: savedEmp.civilite,
+            poste: savedEmp.poste,
+            departement: savedEmp.departement,
+            dateEmbauche: formatPromesseDateLongFr(savedEmp.date_embauche),
+            dateEtablissement: formatPromesseDateSlash(
+              savedEmp.date_etablissement || savedEmp.date_signature
+            ),
+            matricule: savedEmp.matricule,
+            pdfDataUri: promessePdfDataUri
+          });
+        }
 
         if (autoDownloadPdfOnSave) {
           const link = document.createElement('a');
@@ -1699,44 +1823,96 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                 </div>
               </div>
 
-              {/* Row 3: Poste occupé + Type de contrat (CDI / CDD) */}
-              <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
-                <div className="sm:col-span-7">
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Poste occupé (Article II) *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={empForm.poste}
-                    onChange={(e) => setEmpForm({ ...empForm, poste: e.target.value })}
-                    placeholder="Ex: Chauffeur Poids Lourd / Coordinateur Logistique"
-                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm"
-                  />
+              {/* Row 3: Département (12 départements sans doublon + 3 sous-rubriques) + Poste occupé + Type de contrat */}
+              <div className="space-y-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200">
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
+                  <div className="sm:col-span-12">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Département (Affiche les 6 sous-rubriques / missions types pré-remplies) *
+                    </label>
+                    <select
+                      value={empForm.departement}
+                      onChange={(e) => setEmpForm({ ...empForm, departement: e.target.value })}
+                      className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-bold bg-white text-[#0B2545]"
+                    >
+                      {getDeduplicatedDepartmentsList(employees.map((e) => e.departement)).map(
+                        (dept) => (
+                          <option key={dept.code} value={dept.name}>
+                            {dept.name}
+                          </option>
+                        )
+                      )}
+                    </select>
+                  </div>
                 </div>
 
-                <div className="sm:col-span-5">
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Type de contrat (CDI / CDD) *
-                  </label>
-                  <select
-                    value={empForm.type_contrat}
-                    onChange={(e) =>
-                      setEmpForm({
-                        ...empForm,
-                        type_contrat: e.target.value as 'CDI' | 'CDD'
-                      })
-                    }
-                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-bold bg-white text-[#0B2545]"
-                  >
-                    <option value="CDI">CDI — Contrat à durée indéterminée</option>
-                    <option value="CDD">CDD — Contrat à durée déterminée</option>
-                  </select>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {(
+                    findDepartmentDefinition(empForm.departement) || OFFICIAL_DEPARTMENTS[1]
+                  ).missions.map((mission, idx) => (
+                    <div
+                      key={idx}
+                      className="text-[11px] bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-slate-700"
+                    >
+                      <strong className="text-amber-600 font-mono mr-1">{idx + 1}.</strong>
+                      {mission}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 pt-1">
+                  <div className="sm:col-span-7">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Poste occupé (Article II) *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={empForm.poste}
+                      onChange={(e) => setEmpForm({ ...empForm, poste: e.target.value })}
+                      placeholder="Ex: Chauffeur Poids Lourd / Coordinateur Logistique"
+                      className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm bg-white"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-5">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Type de contrat (CDI / CDD) *
+                    </label>
+                    <select
+                      value={empForm.type_contrat}
+                      onChange={(e) =>
+                        setEmpForm({
+                          ...empForm,
+                          type_contrat: e.target.value as 'CDI' | 'CDD'
+                        })
+                      }
+                      className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-bold bg-white text-[#0B2545]"
+                    >
+                      <option value="CDI">CDI — Contrat à durée indéterminée</option>
+                      <option value="CDD">CDD — Contrat à durée déterminée</option>
+                    </select>
+                  </div>
                 </div>
               </div>
 
-              {/* Row 4: Date d'effet + Date fin si CDD + Durée période d'essai */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-3.5 rounded-xl bg-blue-50/60 border border-blue-200">
+              {/* Row 4: Date d'établissement + Date d'effet + Date fin si CDD + Durée période d'essai */}
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 p-3.5 rounded-xl bg-blue-50/60 border border-blue-200">
+                <div>
+                  <label className="block text-xs font-semibold text-amber-900 mb-1">
+                    Date d’établissement (« A Surrey, le [DATE] ») *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={empForm.date_etablissement}
+                    onChange={(e) =>
+                      setEmpForm({ ...empForm, date_etablissement: e.target.value })
+                    }
+                    className="w-full min-h-[44px] px-3 py-2 rounded-xl border border-amber-400 text-sm font-mono bg-white"
+                  />
+                </div>
+
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Date d’effet / Début (Article III) *
@@ -1746,7 +1922,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                     required
                     value={empForm.date_effet}
                     onChange={(e) => setEmpForm({ ...empForm, date_effet: e.target.value })}
-                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-mono bg-white"
+                    className="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-300 text-sm font-mono bg-white"
                   />
                 </div>
 
@@ -2030,7 +2206,57 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                 </div>
               </div>
 
-              {/* Row 8: Photo d'identité Base64 + Option téléchargement auto PDF */}
+              {/* Row 8: Upload Signature, Cachet & Filigrane (Blason) */}
+              <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
+                <span className="text-xs font-bold text-[#0B2545] block">
+                  Fichiers PDF Officiels : Signature (PNG/JPG), Cachet &amp; Filigrane Blason (utilisés tels quels sans génération IA)
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <label className="cursor-pointer p-2.5 rounded-xl bg-white border border-slate-300 hover:border-[#0B2545] text-xs flex items-center gap-2">
+                    <Upload className="w-4 h-4 text-[#0B2545] shrink-0" />
+                    <div className="truncate">
+                      <span className="font-semibold block text-slate-800">Signature</span>
+                      <span className="text-[11px] text-slate-500 truncate block">{customSigLabel}</span>
+                    </div>
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      onChange={(e) => handleModalAssetUpload(e, 'signature')}
+                      className="hidden"
+                    />
+                  </label>
+
+                  <label className="cursor-pointer p-2.5 rounded-xl bg-white border border-slate-300 hover:border-[#0B2545] text-xs flex items-center gap-2">
+                    <Upload className="w-4 h-4 text-amber-600 shrink-0" />
+                    <div className="truncate">
+                      <span className="font-semibold block text-slate-800">Cachet</span>
+                      <span className="text-[11px] text-slate-500 truncate block">{customCachetLabel}</span>
+                    </div>
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      onChange={(e) => handleModalAssetUpload(e, 'cachet')}
+                      className="hidden"
+                    />
+                  </label>
+
+                  <label className="cursor-pointer p-2.5 rounded-xl bg-white border border-slate-300 hover:border-[#0B2545] text-xs flex items-center gap-2">
+                    <Upload className="w-4 h-4 text-emerald-700 shrink-0" />
+                    <div className="truncate">
+                      <span className="font-semibold block text-slate-800">Filigrane (Blason)</span>
+                      <span className="text-[11px] text-slate-500 truncate block">{customFiligraneLabel}</span>
+                    </div>
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      onChange={(e) => handleModalAssetUpload(e, 'filigrane')}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+              </div>
+
+              {/* Row 9: Photo d'identité Base64 + Option téléchargement auto PDF */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
                 <div className="p-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 flex items-center gap-4">
                   {empForm.photo_base64 && (

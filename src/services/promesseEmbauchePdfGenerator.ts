@@ -1,5 +1,17 @@
 import { jsPDF } from 'jspdf';
 import { CONTRACT_STATIC_ASSETS, loadStaticImageAsPngDataUrl } from './contractPdfGenerator';
+import {
+  PdfAssetItemSettings,
+  PdfImportedAssetsConfig,
+  convertUploadedImageForPdf,
+  getSavedCustomCachet,
+  getSavedCustomFiligrane,
+  getSavedCustomLogo,
+  getSavedCustomSignature,
+  getSavedPdfAssetsConfig,
+  normalizePdfAssetsConfig,
+  renderAssetWithSettingsForPdf
+} from './departmentsAndEmailService';
 
 export interface PromesseEmbaucheData {
   nom_complet: string;
@@ -18,6 +30,8 @@ export interface PromesseEmbaucheData {
   matricule: string;
   type_contrat: string;
   date_embauche: string;
+  date_etablissement?: string;
+  date_emission?: string;
   date_fin?: string;
   salaire_horaire: number | string;
   primes?: string;
@@ -26,18 +40,20 @@ export interface PromesseEmbaucheData {
   horaire: string;
   ni: string;
   responsabilites: string[];
+  logo_data_url?: string;
   signature_data_url?: string;
   cachet_data_url?: string;
-  date_emission?: string;
+  filigrane_data_url?: string;
+  assets_config?: PdfImportedAssetsConfig;
 }
 
 export const DEFAULT_PROMESSE_RESPONSABILITES = [
-  'Préparer les commandes en rassemblant les articles demandés selon les bons de commande.',
-  "Vérifier les produits en contrôlant les références, les quantités et l'état des marchandises.",
-  'Emballer les marchandises dans des cartons ou des emballages adaptés au transport.',
-  "Étiqueter les colis et apposer les étiquettes d'expédition nécessaires.",
-  "Organiser les commandes préparées dans les zones prévues pour l'expédition et la livraison.",
-  'Participer à la gestion des stocks en signalant les produits manquants, les erreurs de préparation et les marchandises endommagées.'
+  '• Préparer les commandes en rassemblant les articles demandés selon les bons de commande.',
+  "• Vérifier les produits en contrôlant les références, les quantités et l'état des marchandises.",
+  '• Emballer les marchandises dans des cartons ou des emballages adaptés au transport.',
+  "• Étiqueter les colis et apposer les étiquettes d'expédition nécessaires.",
+  "• Organiser les commandes préparées dans les zones prévues pour l'expédition et la livraison.",
+  '• Participer à la gestion des stocks en signalant les produits manquants, les erreurs de préparation et les marchandises endommagées.'
 ].join('\n');
 
 const MONTHS_FR_LOWER = [
@@ -93,10 +109,10 @@ export function formatPromesseDateLongFr(dateStr?: string): string {
   return clean;
 }
 
-let cachedFadedBlasonWatermark = '';
+let cachedDefaultLargeBlasonWatermark = '';
 
-async function getFadedBlasonWatermarkDataUrl(): Promise<string> {
-  if (cachedFadedBlasonWatermark) return cachedFadedBlasonWatermark;
+export async function getDefaultLargeBlasonWatermarkDataUrl(): Promise<string> {
+  if (cachedDefaultLargeBlasonWatermark) return cachedDefaultLargeBlasonWatermark;
   if (typeof document === 'undefined') return '';
 
   let rawBlason = await loadStaticImageAsPngDataUrl(CONTRACT_STATIC_ASSETS.blasonOriginal);
@@ -119,11 +135,11 @@ async function getFadedBlasonWatermarkDataUrl(): Promise<string> {
           return;
         }
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.globalAlpha = 0.09;
+        ctx.globalAlpha = 0.085;
         ctx.filter = 'grayscale(100%)';
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         const fadedUrl = canvas.toDataURL('image/png');
-        cachedFadedBlasonWatermark = fadedUrl;
+        cachedDefaultLargeBlasonWatermark = fadedUrl;
         resolve(fadedUrl);
       } catch {
         resolve('');
@@ -132,139 +148,6 @@ async function getFadedBlasonWatermarkDataUrl(): Promise<string> {
     img.onerror = () => resolve('');
     img.src = rawBlason;
   });
-}
-
-let cachedRightHeaderCrest = '';
-
-function getRightHeaderCrestDataUrl(): string {
-  if (cachedRightHeaderCrest) return cachedRightHeaderCrest;
-  if (typeof document === 'undefined') return '';
-
-  const canvas = document.createElement('canvas');
-  canvas.width = 340;
-  canvas.height = 150;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return '';
-
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.strokeStyle = '#8C8C8C';
-  ctx.fillStyle = '#9E9E9E';
-  ctx.lineWidth = 3;
-
-  // Left horizontal bars
-  ctx.fillRect(18, 62, 95, 7);
-  ctx.fillRect(8, 76, 105, 7);
-  ctx.fillRect(30, 90, 83, 7);
-
-  // Right horizontal bars
-  ctx.fillRect(227, 62, 95, 7);
-  ctx.fillRect(227, 76, 105, 7);
-  ctx.fillRect(227, 90, 83, 7);
-
-  // Central shield
-  ctx.beginPath();
-  ctx.moveTo(132, 42);
-  ctx.lineTo(208, 42);
-  ctx.lineTo(208, 86);
-  ctx.quadraticCurveTo(208, 122, 170, 138);
-  ctx.quadraticCurveTo(132, 122, 132, 86);
-  ctx.closePath();
-  ctx.fillStyle = '#B8B8B8';
-  ctx.fill();
-  ctx.strokeStyle = '#7A7A7A';
-  ctx.lineWidth = 3.5;
-  ctx.stroke();
-
-  // Inner shield details
-  ctx.strokeStyle = '#FFFFFF';
-  ctx.lineWidth = 2.5;
-  ctx.beginPath();
-  ctx.moveTo(140, 74);
-  ctx.quadraticCurveTo(170, 65, 200, 74);
-  ctx.moveTo(142, 88);
-  ctx.quadraticCurveTo(170, 79, 198, 88);
-  ctx.stroke();
-
-  // Top ship silhouette above shield
-  ctx.fillStyle = '#8A8A8A';
-  ctx.beginPath();
-  ctx.moveTo(144, 34);
-  ctx.lineTo(196, 34);
-  ctx.lineTo(188, 22);
-  ctx.lineTo(152, 22);
-  ctx.closePath();
-  ctx.fill();
-
-  cachedRightHeaderCrest = canvas.toDataURL('image/png');
-  return cachedRightHeaderCrest;
-}
-
-export async function createRectangularStampPngDataUrl(): Promise<string> {
-  if (typeof document === 'undefined') return '';
-  const canvas = document.createElement('canvas');
-  canvas.width = 760;
-  canvas.height = 360;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return '';
-
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.save();
-  ctx.translate(380, 180);
-  ctx.rotate((-7.5 * Math.PI) / 180);
-  ctx.translate(-380, -180);
-
-  const stampColor = '#1E5E7A';
-  ctx.strokeStyle = stampColor;
-  ctx.fillStyle = stampColor;
-
-  // Outer rounded rect
-  ctx.lineWidth = 5;
-  ctx.strokeRect(36, 40, 688, 280);
-  // Inner rounded rect
-  ctx.lineWidth = 2.5;
-  ctx.strokeRect(46, 50, 668, 260);
-
-  // Left Maritime Ship Emblem inside stamp
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(85, 155);
-  ctx.lineTo(205, 138);
-  ctx.lineTo(192, 195);
-  ctx.lineTo(95, 195);
-  ctx.closePath();
-  ctx.fill();
-
-  // Ship cabin
-  ctx.fillRect(120, 112, 52, 30);
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(145, 90);
-  ctx.lineTo(145, 115);
-  ctx.moveTo(175, 100);
-  ctx.lineTo(175, 140);
-  ctx.stroke();
-
-  ctx.font = 'bold 24px Arial, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('AtlanticLand', 148, 228);
-  ctx.font = 'bold 13px Arial, sans-serif';
-  ctx.fillText('T R A N S T E R A', 148, 246);
-  ctx.restore();
-
-  // Right text columns
-  ctx.textAlign = 'center';
-  ctx.font = 'bold 31px Georgia, "Times New Roman", serif';
-  ctx.fillText('ATLANTIC TRANSPORTPORT', 465, 100);
-
-  ctx.font = '26px Georgia, "Times New Roman", serif';
-  ctx.fillText('Transport & Logistique', 465, 138);
-  ctx.fillText('Canada', 465, 172);
-  ctx.fillText('atlantictransport.int@ik.me', 465, 208);
-  ctx.fillText("Numéro d'entreprise : 799094917", 465, 244);
-  ctx.fillText('Année de création : 2005', 465, 280);
-
-  ctx.restore();
-  return canvas.toDataURL('image/png');
 }
 
 function drawFooterPage(doc: jsPDF, pageNumber: number) {
@@ -279,20 +162,103 @@ function drawFooterPage(doc: jsPDF, pageNumber: number) {
 }
 
 function drawSectionHeaderBar(doc: jsPDF, y: number, title: string) {
-  // Light grey background bar
   doc.setFillColor(244, 244, 244);
   doc.rect(15, y, 182, 7.5, 'F');
 
-  // Small hollow circle bullet in ochre
   doc.setDrawColor(198, 125, 38);
   doc.setLineWidth(0.35);
   doc.circle(20.2, y + 4.1, 1.05, 'S');
 
-  // Section title in bold ochre
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11.5);
   doc.setTextColor(198, 125, 38);
   doc.text(title, 25.5, y + 5.3);
+}
+
+/**
+ * Draws a yellow highlight box (#FFFF00) behind text and renders the text in black on top,
+ * matching the reference EMBAUCHE_SALIMATA1.pdf.
+ */
+function drawHighlightedValue(
+  doc: jsPDF,
+  text: string,
+  x: number,
+  y: number,
+  fontSize = 10.5,
+  fontStyle: 'normal' | 'bold' = 'normal'
+) {
+  const clean = (text || '').trim();
+  if (!clean) return;
+  doc.setFont('helvetica', fontStyle);
+  doc.setFontSize(fontSize);
+  const textWidth = doc.getTextWidth(clean);
+
+  // Yellow highlight rectangle (#FFFF00)
+  doc.setFillColor(255, 255, 0);
+  doc.rect(x - 0.8, y - 4.2, textWidth + 1.8, 5.6, 'F');
+
+  // Text on top
+  doc.setTextColor(0, 0, 0);
+  doc.text(clean, x, y);
+}
+
+/**
+ * Computes PDF placement (x, y, width, height in mm) from admin asset settings.
+ */
+function computePdfPlacementMm(
+  cfg: PdfAssetItemSettings,
+  refZone: {
+    zoneX: number;
+    zoneY: number;
+    zoneW: number;
+    zoneH: number;
+    defaultWMm: number;
+    defaultHMm: number;
+    defaultWPx: number;
+    defaultHPx: number;
+  },
+  boxScaleX = 1,
+  boxScaleY = 1
+): { x: number; y: number; w: number; h: number } {
+  const baseW =
+    cfg.widthUnit === '%'
+      ? refZone.defaultWMm * (cfg.widthValue / 100)
+      : refZone.defaultWMm * (cfg.widthValue / refZone.defaultWPx);
+  const baseH =
+    cfg.heightUnit === '%'
+      ? refZone.defaultHMm * (cfg.heightValue / 100)
+      : refZone.defaultHMm * (cfg.heightValue / refZone.defaultHPx);
+
+  let anchorX = refZone.zoneX;
+  if (cfg.alignX === 'center') {
+    anchorX = refZone.zoneX + (refZone.zoneW - baseW) / 2;
+  } else if (cfg.alignX === 'right') {
+    anchorX = refZone.zoneX + refZone.zoneW - baseW;
+  }
+
+  let anchorY = refZone.zoneY;
+  if (cfg.alignY === 'middle') {
+    anchorY = refZone.zoneY + (refZone.zoneH - baseH) / 2;
+  } else if (cfg.alignY === 'bottom') {
+    anchorY = refZone.zoneY + refZone.zoneH - baseH;
+  }
+
+  // Convert pixel offsets to mm (~0.35mm per preview px)
+  const shiftXMm = (cfg.offsetX || 0) * 0.35;
+  const shiftYMm = (cfg.offsetY || 0) * 0.35;
+
+  const centerX = anchorX + baseW / 2 + shiftXMm;
+  const centerY = anchorY + baseH / 2 + shiftYMm;
+
+  const finalW = Math.max(2, baseW * boxScaleX);
+  const finalH = Math.max(2, baseH * boxScaleY);
+
+  return {
+    x: centerX - finalW / 2,
+    y: centerY - finalH / 2,
+    w: finalW,
+    h: finalH
+  };
 }
 
 export async function generatePromesseEmbauchePdfDoc(
@@ -305,30 +271,94 @@ export async function generatePromesseEmbauchePdfDoc(
     compress: true
   });
 
-  const [logoAtlanticUrl, logoCanadaUrl, fadedBlasonUrl, defaultSignatureUrl, defaultCachetUrl] =
-    await Promise.all([
-      loadStaticImageAsPngDataUrl(CONTRACT_STATIC_ASSETS.logoAtlantic),
-      loadStaticImageAsPngDataUrl(CONTRACT_STATIC_ASSETS.logoCanada),
-      getFadedBlasonWatermarkDataUrl(),
-      loadStaticImageAsPngDataUrl(CONTRACT_STATIC_ASSETS.signature),
-      loadStaticImageAsPngDataUrl(CONTRACT_STATIC_ASSETS.cachet)
-    ]);
+  const assetsConfig = normalizePdfAssetsConfig(data.assets_config || getSavedPdfAssetsConfig());
 
-  const rightHeaderCrestUrl = getRightHeaderCrestDataUrl();
+  // Load ONLY the user's static or uploaded files (no AI generation)
+  const [
+    defaultLogoAtlanticUrl,
+    logoCanadaUrl,
+    headerBlasonOriginalUrl,
+    headerBlasonFallbackUrl,
+    defaultLargeWatermarkUrl,
+    defaultSignatureUrl,
+    defaultCachetUrl
+  ] = await Promise.all([
+    loadStaticImageAsPngDataUrl(CONTRACT_STATIC_ASSETS.logoAtlantic),
+    loadStaticImageAsPngDataUrl(CONTRACT_STATIC_ASSETS.logoCanada),
+    loadStaticImageAsPngDataUrl(CONTRACT_STATIC_ASSETS.blasonOriginal),
+    loadStaticImageAsPngDataUrl(CONTRACT_STATIC_ASSETS.blasonFallback),
+    getDefaultLargeBlasonWatermarkDataUrl(),
+    loadStaticImageAsPngDataUrl(CONTRACT_STATIC_ASSETS.signature),
+    loadStaticImageAsPngDataUrl(CONTRACT_STATIC_ASSETS.cachet)
+  ]);
 
-  const signatureToUse =
-    data.signature_data_url && data.signature_data_url.trim().length > 0
-      ? data.signature_data_url
-      : defaultSignatureUrl;
+  // 1. Logo (custom uploaded or default logo-atlantic.png) + Admin settings
+  const rawLogo =
+    (data.logo_data_url && data.logo_data_url.trim()) ||
+    getSavedCustomLogo() ||
+    defaultLogoAtlanticUrl;
+  const cleanLogo = rawLogo
+    ? await convertUploadedImageForPdf(rawLogo, {
+        maxWidth: 700,
+        maxHeight: 350,
+        removeWhiteBackground: false
+      })
+    : defaultLogoAtlanticUrl;
+  const styledLogo = await renderAssetWithSettingsForPdf(cleanLogo, assetsConfig.logo);
 
-  const cachetToUse =
-    data.cachet_data_url && data.cachet_data_url.trim().length > 0
-      ? data.cachet_data_url
-      : defaultCachetUrl;
+  // 2(a) Filigrane 1: Blason au niveau de l'en-tête (exactement le fichier blason original.png)
+  const headerBlasonUrl = headerBlasonOriginalUrl || headerBlasonFallbackUrl;
+
+  // 2(b) Filigrane 2: Grand blason en filigrane très clair couvrant le reste de la page 1 (et page 2)
+  const customFiligraneRaw =
+    (data.filigrane_data_url && data.filigrane_data_url.trim()) || getSavedCustomFiligrane();
+  const cleanFiligrane = customFiligraneRaw
+    ? await convertUploadedImageForPdf(customFiligraneRaw, {
+        maxWidth: 900,
+        maxHeight: 1100,
+        removeWhiteBackground: false
+      })
+    : defaultLargeWatermarkUrl;
+  const styledFiligrane = await renderAssetWithSettingsForPdf(
+    cleanFiligrane,
+    assetsConfig.filigrane
+  );
+
+  // 4. Signature & Cachet: Directement les fichiers uploadés ou signature.png / cachet.png + Admin settings
+  const rawSignature =
+    (data.signature_data_url && data.signature_data_url.trim()) ||
+    getSavedCustomSignature() ||
+    defaultSignatureUrl;
+  const cleanSignature = rawSignature
+    ? await convertUploadedImageForPdf(rawSignature, {
+        maxWidth: 600,
+        maxHeight: 350,
+        removeWhiteBackground: true
+      })
+    : defaultSignatureUrl;
+  const styledSignature = await renderAssetWithSettingsForPdf(
+    cleanSignature,
+    assetsConfig.signature
+  );
+
+  const rawCachet =
+    (data.cachet_data_url && data.cachet_data_url.trim()) ||
+    getSavedCustomCachet() ||
+    defaultCachetUrl;
+  const cleanCachet = rawCachet
+    ? await convertUploadedImageForPdf(rawCachet, {
+        maxWidth: 700,
+        maxHeight: 450,
+        removeWhiteBackground: true
+      })
+    : defaultCachetUrl;
+  const styledCachet = await renderAssetWithSettingsForPdf(cleanCachet, assetsConfig.cachet);
 
   const nomCompletUpper = (data.nom_complet || 'SALIMATA TRAORER').trim().toUpperCase();
   const niValue = (data.ni || 'BC1129970').trim();
-  const dateHeaderSlash = formatPromesseDateSlash(data.date_emission || data.date_embauche);
+  const dateHeaderSlash = formatPromesseDateSlash(
+    data.date_etablissement || data.date_emission || data.date_embauche
+  );
   const datePriseFonctionLong = formatPromesseDateLongFr(data.date_embauche);
   const salutation =
     String(data.sexe || '').toLowerCase().startsWith('f') ||
@@ -338,33 +368,111 @@ export async function generatePromesseEmbauchePdfDoc(
 
   const salaireHoraireFormatted = String(data.salaire_horaire ?? '22').trim();
 
+  const filigraneInFront = (assetsConfig.filigrane.zIndex ?? 0) > 10;
+
+  const drawFiligranePage1 = () => {
+    if (!styledFiligrane.dataUrl) return;
+    try {
+      const pos = computePdfPlacementMm(
+        assetsConfig.filigrane,
+        {
+          zoneX: 15,
+          zoneY: 90,
+          zoneW: 180,
+          zoneH: 158,
+          defaultWMm: 114,
+          defaultHMm: 142,
+          defaultWPx: 290,
+          defaultHPx: 360
+        },
+        styledFiligrane.boxScaleX,
+        styledFiligrane.boxScaleY
+      );
+      doc.addImage(styledFiligrane.dataUrl, 'PNG', pos.x, pos.y, pos.w, pos.h, undefined, 'FAST');
+    } catch {
+      // Ignore invalid image format
+    }
+  };
+
+  const drawFiligranePage2 = () => {
+    if (!styledFiligrane.dataUrl) return;
+    try {
+      const pos = computePdfPlacementMm(
+        assetsConfig.filigrane,
+        {
+          zoneX: 15,
+          zoneY: 24,
+          zoneW: 180,
+          zoneH: 158,
+          defaultWMm: 114,
+          defaultHMm: 142,
+          defaultWPx: 290,
+          defaultHPx: 360
+        },
+        styledFiligrane.boxScaleX,
+        styledFiligrane.boxScaleY
+      );
+      doc.addImage(styledFiligrane.dataUrl, 'PNG', pos.x, pos.y, pos.w, pos.h, undefined, 'FAST');
+    } catch {
+      // Ignore invalid image format
+    }
+  };
+
   // ============================================================================
   // PAGE 1
   // ============================================================================
   doc.setFillColor(255, 255, 255);
   doc.rect(0, 0, 210, 297, 'F');
 
-  // 1. Filigrane Blason Canada (center of Page 1)
-  if (fadedBlasonUrl) {
-    doc.addImage(fadedBlasonUrl, 'PNG', 52, 96, 106, 132, undefined, 'FAST');
+  // Filigrane (b) en arrière-plan (si z-index <= 10)
+  if (!filigraneInFront) {
+    drawFiligranePage1();
   }
 
-  // 2. Top-Left Header: Logo Atlantic Transport + coordonnées Surrey BC
-  if (logoAtlanticUrl) {
-    doc.addImage(logoAtlanticUrl, 'PNG', 14, 6, 67, 23, undefined, 'FAST');
+  // 1. En-tête gauche : Logo avec réglages admin (largeur, hauteur, opacité, teinte, X/Y, alignement, rotation)
+  if (styledLogo.dataUrl) {
+    try {
+      const logoPos = computePdfPlacementMm(
+        assetsConfig.logo,
+        {
+          zoneX: 14,
+          zoneY: 6,
+          zoneW: 76,
+          zoneH: 25,
+          defaultWMm: 67,
+          defaultHMm: 23,
+          defaultWPx: 180,
+          defaultHPx: 60
+        },
+        styledLogo.boxScaleX,
+        styledLogo.boxScaleY
+      );
+      doc.addImage(
+        styledLogo.dataUrl,
+        'PNG',
+        logoPos.x,
+        logoPos.y,
+        logoPos.w,
+        logoPos.h,
+        undefined,
+        'FAST'
+      );
+    } catch {
+      // Ignore logo render error
+    }
   }
 
-  // Top-Right Header: Government of Canada + grand Canada
+  // En-tête droite : EXACTEMENT le fichier logo-canada.png
   if (logoCanadaUrl) {
     doc.addImage(logoCanadaUrl, 'PNG', 139, 7, 56, 19.5, undefined, 'FAST');
   }
 
-  // Small grey coat of arms below Canada logo on right
-  if (rightHeaderCrestUrl) {
-    doc.addImage(rightHeaderCrestUrl, 'PNG', 165, 43.5, 31, 13.5, undefined, 'FAST');
+  // Filigrane (a) : Blason au niveau de l'en-tête (à droite sous le logo Canada)
+  if (headerBlasonUrl) {
+    doc.addImage(headerBlasonUrl, 'PNG', 163, 42, 34, 15.5, undefined, 'FAST');
   }
 
-  // Left Company Info (Green #3A6E48)
+  // Coordonnées gauche (Vert #3A6E48)
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.5);
   doc.setTextColor(58, 110, 72);
@@ -379,19 +487,19 @@ export async function generatePromesseEmbauchePdfDoc(
   doc.setTextColor(27, 108, 168);
   doc.text('atlantictransport.int@ik.me', 12.5 + emailPrefixW, 53);
 
-  // Center Date & NE (Bold Green #3A6E48)
+  // Date d'établissement ("A Surrey, le [DATE]") & NE au centre
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10.5);
   doc.setTextColor(58, 110, 72);
   doc.text(`A Surrey, le ${dateHeaderSlash}`, 111, 38, { align: 'center' });
   doc.text("Numéro d'entreprise (NE): 799094917", 111, 44, { align: 'center' });
 
-  // Horizontal line above banner
+  // Ligne horizontale au-dessus du bandeau
   doc.setDrawColor(155, 155, 155);
   doc.setLineWidth(0.4);
   doc.line(12.5, 59, 197.5, 59);
 
-  // 3. Navy Blue Banner "PROMESSE D'EMBAUCHE"
+  // Bandeau bleu marine "PROMESSE D'EMBAUCHE"
   doc.setFillColor(12, 35, 102);
   doc.rect(12.5, 64.5, 185, 15.5, 'F');
   doc.setFont('helvetica', 'bold');
@@ -399,12 +507,12 @@ export async function generatePromesseEmbauchePdfDoc(
   doc.setTextColor(255, 255, 255);
   doc.text("PROMESSE D'EMBAUCHE", 105, 74.8, { align: 'center' });
 
-  // Horizontal line below banner
+  // Ligne horizontale sous le bandeau
   doc.setDrawColor(155, 155, 155);
   doc.setLineWidth(0.4);
   doc.line(12.5, 86.5, 197.5, 86.5);
 
-  // 4. Row "NI: [NI]" and "Destinataire: [NOM]"
+  // Ligne "NI: [NI]" et "Destinataire: [NOM]"
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
   doc.setTextColor(198, 136, 44);
@@ -426,7 +534,7 @@ export async function generatePromesseEmbauchePdfDoc(
   doc.setTextColor(0, 0, 0);
   doc.text(nomCompletUpper, destStartX + destLabelW, 96.5);
 
-  // 5. Objet & Texte d'introduction
+  // Objet & Texte d'introduction
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
   doc.setTextColor(198, 125, 38);
@@ -441,7 +549,6 @@ export async function generatePromesseEmbauchePdfDoc(
   doc.setTextColor(0, 0, 0);
   doc.text(`${salutation},`, 12.5, 122.5);
 
-  // Intro line 1 with bold "Atlantic Transport ltd"
   const introPart1 = 'Nous avons le plaisir de vous informer que la société ';
   const introBold = 'Atlantic Transport ltd';
   const introPart2 = ' a décidé de vous embaucher à';
@@ -455,65 +562,83 @@ export async function generatePromesseEmbauchePdfDoc(
   doc.text(introPart2, 12.5 + w1 + w2, 128.5);
   doc.text("la suite de l'étude favorable de votre candidature.", 12.5, 134.5);
 
-  // 6. Section "Informations sur le poste:"
+  // Section "Informations sur le poste:" (avec surlignage jaune #FFFF00 identique à l'exemplaire)
   drawSectionHeaderBar(doc, 142.5, 'Informations sur le poste:');
 
   doc.setDrawColor(0, 0, 0);
   doc.setLineWidth(0.35);
 
-  // Row 1: Poste
+  // Row 1: Poste (surligné en jaune)
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
   doc.setTextColor(0, 0, 0);
   doc.text('Poste :', 28.5, 157);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10.5);
-  doc.text(data.poste || 'Préparatrice de Commande', 49.5, 157);
+  drawHighlightedValue(
+    doc,
+    data.poste || 'Préparatrice de Commande',
+    49.5,
+    157,
+    10.5,
+    'normal'
+  );
   doc.line(28.5, 165.8, 188, 165.8);
 
-  // Row 2: Type de contrat
+  // Row 2: Type de contrat (surligné en jaune)
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
+  doc.setTextColor(0, 0, 0);
   doc.text('Type de contrat :', 28.5, 170.5);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
-  doc.text(
+  drawHighlightedValue(
+    doc,
     data.type_contrat || 'Contrat à Durée Déterminée (CDI) de 2 ans',
     62.5,
-    170.5
+    170.5,
+    10,
+    'normal'
   );
   doc.line(28.5, 179.2, 188, 179.2);
 
-  // Row 3: Date de prise de fonction
+  // Row 3: Date de prise de fonction (surligné en jaune)
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
+  doc.setTextColor(0, 0, 0);
   doc.text('Date de prise de fonction :', 28.5, 184);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10.5);
-  doc.text(datePriseFonctionLong, 88.5, 184);
+  drawHighlightedValue(doc, datePriseFonctionLong, 88.5, 184, 10.5, 'normal');
   doc.line(28.5, 192.6, 188, 192.6);
 
-  // Row 4: Lieu de travail
+  // Row 4: Lieu de travail (surligné en jaune)
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
+  doc.setTextColor(0, 0, 0);
   doc.text('Lieu de travail :', 28.5, 197.5);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10.5);
-  doc.text(data.lieu_travail || 'Surrey, Colombie-Britanique, Canada', 62.5, 197.5);
+  drawHighlightedValue(
+    doc,
+    data.lieu_travail || 'Surrey, Colombie-Britanique, Canada',
+    62.5,
+    197.5,
+    10.5,
+    'normal'
+  );
   doc.line(28.5, 206.2, 188, 206.2);
 
-  // Row 5: Horaire
+  // Row 5: Horaire (surligné en jaune)
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
+  doc.setTextColor(0, 0, 0);
   doc.text('Horaire :', 28.5, 211);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
-  doc.text(data.horaire || 'Temps plein – 40 heures par semaine', 52, 211);
+  drawHighlightedValue(
+    doc,
+    data.horaire || 'Temps plein – 40 heures par semaine',
+    52,
+    211,
+    10,
+    'normal'
+  );
 
-  // 7. Section "Rémunération et avantages :"
+  // Section "Rémunération et avantages :"
   drawSectionHeaderBar(doc, 218.5, 'Rémunération et avantages :');
 
-  // Bullet 1: Salaire
+  // Bullet 1: Salaire (surligné en jaune)
   doc.setFillColor(0, 0, 0);
   doc.circle(20, 229.2, 0.75, 'F');
   doc.setFont('helvetica', 'bold');
@@ -521,15 +646,22 @@ export async function generatePromesseEmbauchePdfDoc(
   doc.setTextColor(0, 0, 0);
   doc.text('Salaire : ', 25.5, 230.5);
   const salLabelW = doc.getTextWidth('Salaire : ');
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(11);
-  doc.text(`${salaireHoraireFormatted} CAD par heure`, 25.5 + salLabelW, 230.5);
+  drawHighlightedValue(
+    doc,
+    `${salaireHoraireFormatted} CAD par heure`,
+    25.5 + salLabelW,
+    230.5,
+    11,
+    'normal'
+  );
   doc.line(19, 235.5, 179, 235.5);
 
   // Bullet 2
+  doc.setFillColor(0, 0, 0);
   doc.circle(20, 239.2, 0.75, 'F');
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
+  doc.setTextColor(0, 0, 0);
   doc.text('Congés payés conformément à la législation en vigueur', 25.5, 240.5);
   doc.line(19, 244.5, 179, 244.5);
 
@@ -542,6 +674,11 @@ export async function generatePromesseEmbauchePdfDoc(
   doc.circle(20, 256.8, 0.75, 'F');
   doc.text("Possibilités d'évolution professionnelle", 25.5, 258);
 
+  // Filigrane (b) au premier plan si z-index > 10
+  if (filigraneInFront) {
+    drawFiligranePage1();
+  }
+
   // Footer Page 1
   drawFooterPage(doc, 1);
 
@@ -552,12 +689,12 @@ export async function generatePromesseEmbauchePdfDoc(
   doc.setFillColor(255, 255, 255);
   doc.rect(0, 0, 210, 297, 'F');
 
-  // 1. Filigrane Blason Canada on Page 2
-  if (fadedBlasonUrl) {
-    doc.addImage(fadedBlasonUrl, 'PNG', 52, 32, 106, 132, undefined, 'FAST');
+  // Grand blason en filigrane sur la Page 2 (en arrière-plan si z-index <= 10)
+  if (!filigraneInFront) {
+    drawFiligranePage2();
   }
 
-  // 2. Section "Vos principales responsabilités"
+  // Section "Vos principales responsabilités"
   drawSectionHeaderBar(doc, 12.5, 'Vos principales responsabilités');
 
   const rawLines = (
@@ -584,7 +721,7 @@ export async function generatePromesseEmbauchePdfDoc(
     currentY += 2.6;
   }
 
-  // 3. NB autorisations légales + formules de politesse
+  // NB autorisations légales + formules de politesse
   const nbStartY = Math.max(currentY + 14, 92.5);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10.2);
@@ -616,10 +753,9 @@ export async function generatePromesseEmbauchePdfDoc(
     salutationEndY
   );
 
-  // 4. Signatures Block (Left: Employer + signature.png + cachet.png / Right: Employee)
+  // Bloc Signatures (Gauche : Pour Atlantic Transport Ltd. / ANTOINE FORESTIN + signature.png + cachet.png)
   const sigHeaderY = Math.max(salutationEndY + 19, 141);
 
-  // Left block
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11.5);
   doc.setTextColor(0, 0, 0);
@@ -634,23 +770,71 @@ export async function generatePromesseEmbauchePdfDoc(
   doc.setFontSize(10);
   doc.text('Signature : .........................', 25.5, sigLineY);
 
-  // Cachet & Signature images provided by Admin on the left block
-  if (cachetToUse) {
+  // Utilisation DIRECTE des fichiers cachet.png et signature.png avec les réglages admin
+  if (styledCachet.dataUrl) {
     try {
-      doc.addImage(cachetToUse, 'PNG', 36, sigHeaderY + 16, 56, 30, undefined, 'FAST');
+      const cachetPos = computePdfPlacementMm(
+        assetsConfig.cachet,
+        {
+          zoneX: 35,
+          zoneY: sigHeaderY + 12,
+          zoneW: 68,
+          zoneH: 36,
+          defaultWMm: 56,
+          defaultHMm: 30,
+          defaultWPx: 155,
+          defaultHPx: 84
+        },
+        styledCachet.boxScaleX,
+        styledCachet.boxScaleY
+      );
+      doc.addImage(
+        styledCachet.dataUrl,
+        'PNG',
+        cachetPos.x,
+        cachetPos.y,
+        cachetPos.w,
+        cachetPos.h,
+        undefined,
+        'FAST'
+      );
     } catch {
       // Ignore invalid image format
     }
   }
-  if (signatureToUse) {
+  if (styledSignature.dataUrl) {
     try {
-      doc.addImage(signatureToUse, 'PNG', 38, sigHeaderY + 19, 44, 22, undefined, 'FAST');
+      const sigPos = computePdfPlacementMm(
+        assetsConfig.signature,
+        {
+          zoneX: 25,
+          zoneY: sigHeaderY + 12,
+          zoneW: 72,
+          zoneH: 36,
+          defaultWMm: 46,
+          defaultHMm: 24,
+          defaultWPx: 130,
+          defaultHPx: 68
+        },
+        styledSignature.boxScaleX,
+        styledSignature.boxScaleY
+      );
+      doc.addImage(
+        styledSignature.dataUrl,
+        'PNG',
+        sigPos.x,
+        sigPos.y,
+        sigPos.w,
+        sigPos.h,
+        undefined,
+        'FAST'
+      );
     } catch {
       // Ignore invalid image format
     }
   }
 
-  // Right block
+  // Bloc Droite : Pour l'employer / [NOM SALARIE]
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11.5);
   doc.text("Pour l'employer", 144.5, sigHeaderY);
@@ -663,7 +847,7 @@ export async function generatePromesseEmbauchePdfDoc(
   doc.setFontSize(10);
   doc.text('Signature : .........................', 150, sigLineY);
 
-  // 5. Mention "Fait en double exemplaire" + thick black bottom line
+  // Mention "Fait en double exemplaire"
   const doubleExY = Math.max(sigLineY + 34.5, 213.5);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
@@ -671,6 +855,11 @@ export async function generatePromesseEmbauchePdfDoc(
 
   doc.setFillColor(0, 0, 0);
   doc.rect(33.5, doubleExY + 5.5, 143, 1.2, 'F');
+
+  // Grand blason au premier plan sur la Page 2 si z-index > 10
+  if (filigraneInFront) {
+    drawFiligranePage2();
+  }
 
   // Footer Page 2
   drawFooterPage(doc, 2);

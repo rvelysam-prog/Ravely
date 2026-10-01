@@ -128,6 +128,13 @@
           "type": "string",
           "maxLength": 40
         },
+        "date_etablissement": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "emailEnvoye": {
+          "type": "boolean"
+        },
         "sexe": {
           "type": "string",
           "maxLength": 40
@@ -262,6 +269,29 @@
         "matricule",
         "type_contrat"
       ]
+    },
+    "PdfAssetsSettings": {
+      "title": "PdfAssetsSettings",
+      "description": "Réglages admin des fichiers importés (logo, signature, cachet, filigrane) pour la Promesse d'Embauche et les PDF",
+      "type": "object",
+      "properties": {
+        "logo": {
+          "type": "object"
+        },
+        "signature": {
+          "type": "object"
+        },
+        "cachet": {
+          "type": "object"
+        },
+        "filigrane": {
+          "type": "object"
+        },
+        "updated_at": {
+          "type": "string",
+          "maxLength": 64
+        }
+      }
     }
   },
   "firestore": {
@@ -272,6 +302,10 @@
     "/contracts/{contractId}": {
       "schema": "Contract",
       "description": "Collection des contrats associés aux salariés"
+    },
+    "/settings/{settingId}": {
+      "schema": "PdfAssetsSettings",
+      "description": "Collection des réglages des fichiers importés pour la génération PDF"
     }
   }
 }

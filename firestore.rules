@@ -28,6 +28,12 @@ service cloud.firestore {
         data.type_contrat is string && data.type_contrat.size() >= 1 && data.type_contrat.size() <= 50;
     }
 
+    function isValidMail(data) {
+      return data.keys().hasAll(['from', 'to', 'message']) &&
+        data.from is string && data.from.size() >= 3 && data.from.size() <= 200 &&
+        data.to is list && data.to.size() >= 1 && data.to.size() <= 10;
+    }
+
     match /employees/{employeeId} {
       allow get: if isValidId(employeeId);
       allow list: if true;
@@ -42,6 +48,21 @@ service cloud.firestore {
       allow create: if isValidId(contractId) && isValidContract(incoming());
       allow update: if isValidId(contractId) && isValidContract(incoming());
       allow delete: if isValidId(contractId);
+    }
+
+    match /mail/{mailId} {
+      allow get: if isValidId(mailId);
+      allow list: if true;
+      allow create: if isValidId(mailId) && isValidMail(incoming());
+      allow update: if isValidId(mailId) && isValidMail(incoming());
+    }
+
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId);
+      allow list: if true;
+      allow create: if isValidId(settingId);
+      allow update: if isValidId(settingId);
+      allow delete: if isValidId(settingId);
     }
 
     match /test/{docId} {

@@ -49,6 +49,11 @@ export interface Employee {
   hebergement_lieu_type?: 'preciser_lieu' | 'texte_generique';
   adresse_hebergement?: string;
   date_signature?: string;
+  date_etablissement?: string;
+  emailEnvoye?: boolean;
+  signature_url?: string;
+  cachet_url?: string;
+  filigrane_url?: string;
   // Champs spécifiques Promesse d'embauche
   sexe?: 'Féminin' | 'Masculin' | string;
   numero_piece_identite?: string;

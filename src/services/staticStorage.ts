@@ -454,6 +454,12 @@ export function normalizeEmployee(
       emp.hebergement_lieu_type === 'texte_generique' ? 'texte_generique' : 'preciser_lieu',
     adresse_hebergement: emp.adresse_hebergement || '',
     date_signature: emp.date_signature || emp.date_effet || new Date().toISOString().slice(0, 10),
+    date_etablissement:
+      emp.date_etablissement ||
+      emp.date_signature ||
+      emp.date_effet ||
+      new Date().toISOString().slice(0, 10),
+    emailEnvoye: Boolean(emp.emailEnvoye),
     sexe: emp.sexe || (emp.civilite === 'Madame' ? 'Féminin' : 'Masculin'),
     numero_piece_identite: emp.numero_piece_identite || '',
     contact_urgence: emp.contact_urgence || '',
@@ -639,6 +645,11 @@ function buildFirestoreEmployeePayload(emp: Employee): Record<string, unknown> {
       emp.hebergement_lieu_type === 'texte_generique' ? 'texte_generique' : 'preciser_lieu',
     adresse_hebergement: emp.adresse_hebergement || '',
     date_signature: emp.date_signature || new Date().toISOString().slice(0, 10),
+    date_etablissement:
+      emp.date_etablissement ||
+      emp.date_signature ||
+      new Date().toISOString().slice(0, 10),
+    emailEnvoye: Boolean(emp.emailEnvoye),
     sexe: emp.sexe || (emp.civilite === 'Madame' ? 'Féminin' : 'Masculin'),
     numero_piece_identite: emp.numero_piece_identite || '',
     contact_urgence: emp.contact_urgence || '',
