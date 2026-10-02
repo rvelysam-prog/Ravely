@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import { CONTRACT_STATIC_ASSETS, loadStaticImageAsPngDataUrl } from './contractPdfGenerator';
 import {
+  DEFAULT_SIGNATURE_SALARIE_RICH_HTML,
   PdfAssetItemSettings,
   PdfImportedAssetsConfig,
   convertUploadedImageForPdf,
@@ -9,8 +10,10 @@ import {
   getSavedCustomLogo,
   getSavedCustomSignature,
   getSavedPdfAssetsConfig,
+  getSavedSignatureSalarieHtml,
   normalizePdfAssetsConfig,
-  renderAssetWithSettingsForPdf
+  renderAssetWithSettingsForPdf,
+  resolveSignatureSalarieHtmlVariables
 } from './departmentsAndEmailService';
 
 export interface PromesseEmbaucheData {
@@ -45,6 +48,7 @@ export interface PromesseEmbaucheData {
   cachet_data_url?: string;
   filigrane_data_url?: string;
   assets_config?: PdfImportedAssetsConfig;
+  signature_salarie_html?: string;
 }
 
 export const DEFAULT_PROMESSE_RESPONSABILITES = [
@@ -126,9 +130,12 @@ export async function getDefaultLargeBlasonWatermarkDataUrl(): Promise<string> {
     img.crossOrigin = 'anonymous';
     img.onload = () => {
       try {
+        const rawW = img.naturalWidth || img.width || 600;
+        const rawH = img.naturalHeight || img.height || 750;
+        const maxScale = Math.min(1, 480 / Math.max(rawW, rawH));
         const canvas = document.createElement('canvas');
-        canvas.width = img.naturalWidth || img.width || 600;
-        canvas.height = img.naturalHeight || img.height || 750;
+        canvas.width = Math.max(1, Math.round(rawW * maxScale));
+        canvas.height = Math.max(1, Math.round(rawH * maxScale));
         const ctx = canvas.getContext('2d');
         if (!ctx) {
           resolve('');
@@ -834,18 +841,40 @@ export async function generatePromesseEmbauchePdfDoc(
     }
   }
 
-  // Bloc Droite : Pour l'employer / [NOM SALARIE]
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11.5);
-  doc.text("Pour l'employer", 144.5, sigHeaderY);
+  // Bloc Droite : Partie Signature Salarié (Modifiable via l'Éditeur de Texte Riche)
+  const rawSalarieSigHtml =
+    (data.signature_salarie_html && data.signature_salarie_html.trim()) ||
+    getSavedSignatureSalarieHtml() ||
+    DEFAULT_SIGNATURE_SALARIE_RICH_HTML;
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(13.2);
-  doc.text(nomCompletUpper, 144, sigHeaderY + 10.5);
+  const isDefaultSalarieSig =
+    rawSalarieSigHtml.replace(/\s+/g, ' ').trim() ===
+    DEFAULT_SIGNATURE_SALARIE_RICH_HTML.replace(/\s+/g, ' ').trim();
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  doc.text('Signature : .........................', 150, sigLineY);
+  if (isDefaultSalarieSig) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11.5);
+    doc.setTextColor(0, 0, 0);
+    doc.text("Pour l'employer", 144.5, sigHeaderY);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(13.2);
+    doc.text(nomCompletUpper, 144, sigHeaderY + 10.5);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('Signature : .........................', 150, sigLineY);
+  } else {
+    const resolvedHtml = resolveSignatureSalarieHtmlVariables(rawSalarieSigHtml, {
+      nom_complet: nomCompletUpper,
+      poste: data.poste,
+      date_etablissement: dateHeaderSlash,
+      date_embauche: datePriseFonctionLong,
+      ni: niValue,
+      matricule: data.matricule
+    });
+    renderRichSignatureSalarieBlockToPdf(doc, resolvedHtml, 128, sigHeaderY, 68);
+  }
 
   // Mention "Fait en double exemplaire"
   const doubleExY = Math.max(sigLineY + 34.5, 213.5);
@@ -891,4 +920,412 @@ export async function downloadPromesseEmbauchePdf(
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, '_');
   doc.save(`PROMESSE_EMBAUCHE_${cleanName}.pdf`);
+}
+
+interface RichInlineStyle {
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  strike: boolean;
+  fontFamily: 'helvetica' | 'times' | 'courier';
+  fontSizePt: number;
+  colorRgb: [number, number, number];
+  bgColorRgb: [number, number, number] | null;
+}
+
+interface RichTextRun extends RichInlineStyle {
+  text: string;
+  imageSrc?: string;
+}
+
+interface RichBlockLine {
+  align: 'left' | 'center' | 'right';
+  marginTopMm: number;
+  isBullet: boolean;
+  runs: RichTextRun[];
+}
+
+function parseCssColorToRgb(colorStr?: string | null, fallback: [number, number, number] | null = [0, 0, 0]): [number, number, number] | null {
+  if (!colorStr) return fallback;
+  const clean = colorStr.trim().toLowerCase();
+  if (!clean || clean === 'transparent' || clean === 'none' || clean === 'inherit' || clean === 'rgba(0, 0, 0, 0)') {
+    return fallback;
+  }
+  const hexMatch = clean.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hexMatch) {
+    const h = hexMatch[1];
+    if (h.length === 3) {
+      return [
+        parseInt(h[0] + h[0], 16),
+        parseInt(h[1] + h[1], 16),
+        parseInt(h[2] + h[2], 16)
+      ];
+    }
+    return [
+      parseInt(h.slice(0, 2), 16),
+      parseInt(h.slice(2, 4), 16),
+      parseInt(h.slice(4, 6), 16)
+    ];
+  }
+  const rgbMatch = clean.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+  if (rgbMatch) {
+    return [
+      Math.min(255, Math.max(0, parseInt(rgbMatch[1], 10))),
+      Math.min(255, Math.max(0, parseInt(rgbMatch[2], 10))),
+      Math.min(255, Math.max(0, parseInt(rgbMatch[3], 10)))
+    ];
+  }
+  const namedColors: Record<string, [number, number, number]> = {
+    black: [0, 0, 0],
+    white: [255, 255, 255],
+    yellow: [255, 255, 0],
+    red: [220, 38, 38],
+    blue: [12, 35, 102],
+    green: [58, 110, 72],
+    orange: [198, 125, 38],
+    gray: [100, 116, 139],
+    grey: [100, 116, 139]
+  };
+  if (namedColors[clean]) return namedColors[clean];
+  return fallback;
+}
+
+function parseFontSizeToPt(rawSize?: string | null, fallbackPt = 11): number {
+  if (!rawSize) return fallbackPt;
+  const clean = rawSize.trim().toLowerCase();
+  if (clean.endsWith('px')) {
+    const px = parseFloat(clean);
+    if (!Number.isNaN(px) && px > 0) {
+      return Math.max(7.5, Math.min(22, px * 0.78));
+    }
+  }
+  if (clean.endsWith('pt')) {
+    const pt = parseFloat(clean);
+    if (!Number.isNaN(pt) && pt > 0) {
+      return Math.max(7.5, Math.min(22, pt));
+    }
+  }
+  const fontAttrMap: Record<string, number> = {
+    '1': 8.5,
+    '2': 10,
+    '3': 11.5,
+    '4': 13.2,
+    '5': 15.5,
+    '6': 18,
+    '7': 21
+  };
+  if (fontAttrMap[clean]) return fontAttrMap[clean];
+  return fallbackPt;
+}
+
+function renderRichSignatureSalarieBlockToPdf(
+  doc: jsPDF,
+  html: string,
+  zoneX: number,
+  startY: number,
+  zoneW: number
+) {
+  if (typeof DOMParser === 'undefined') {
+    const plain = html
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(div|p|li|h[1-6])>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .trim();
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(11);
+    doc.setTextColor(0, 0, 0);
+    const wrapped = doc.splitTextToSize(plain, zoneW) as string[];
+    let y = startY;
+    for (const l of wrapped) {
+      doc.text(l, zoneX, y);
+      y += 5.5;
+    }
+    return;
+  }
+
+  const parsed = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html');
+  const root = parsed.body.firstElementChild || parsed.body;
+
+  const lines: RichBlockLine[] = [];
+  let currentLine: RichBlockLine = {
+    align: 'left',
+    marginTopMm: 0,
+    isBullet: false,
+    runs: []
+  };
+
+  const pushCurrentLine = (nextAlign: 'left' | 'center' | 'right' = 'left', marginTopMm = 0, isBullet = false) => {
+    if (currentLine.runs.length > 0 || currentLine.marginTopMm > 0) {
+      lines.push(currentLine);
+    }
+    currentLine = {
+      align: nextAlign,
+      marginTopMm,
+      isBullet,
+      runs: []
+    };
+  };
+
+  const defaultStyle: RichInlineStyle = {
+    bold: false,
+    italic: false,
+    underline: false,
+    strike: false,
+    fontFamily: 'helvetica',
+    fontSizePt: 11,
+    colorRgb: [0, 0, 0],
+    bgColorRgb: null
+  };
+
+  const walkNode = (node: Node, style: RichInlineStyle, inheritedAlign: 'left' | 'center' | 'right') => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const txt = (node.textContent || '').replace(/\r/g, '');
+      if (txt) {
+        currentLine.runs.push({
+          ...style,
+          text: txt
+        });
+      }
+      return;
+    }
+
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const el = node as HTMLElement;
+    const tag = el.tagName.toLowerCase();
+
+    if (tag === 'br') {
+      pushCurrentLine(inheritedAlign, 1.2, false);
+      return;
+    }
+
+    if (tag === 'img') {
+      const src = el.getAttribute('src') || '';
+      if (src.startsWith('data:image/')) {
+        currentLine.runs.push({
+          ...style,
+          text: '',
+          imageSrc: src
+        });
+      }
+      return;
+    }
+
+    const nextStyle: RichInlineStyle = {
+      ...style,
+      colorRgb: [...style.colorRgb] as [number, number, number],
+      bgColorRgb: style.bgColorRgb ? ([...style.bgColorRgb] as [number, number, number]) : null
+    };
+
+    if (tag === 'b' || tag === 'strong' || tag === 'h1' || tag === 'h2' || tag === 'h3' || tag === 'h4') {
+      nextStyle.bold = true;
+    }
+    if (tag === 'i' || tag === 'em') {
+      nextStyle.italic = true;
+    }
+    if (tag === 'u') {
+      nextStyle.underline = true;
+    }
+    if (tag === 's' || tag === 'strike' || tag === 'del') {
+      nextStyle.strike = true;
+    }
+
+    const inlineFw = el.style?.fontWeight || '';
+    if (inlineFw === 'bold' || parseInt(inlineFw, 10) >= 600) {
+      nextStyle.bold = true;
+    } else if (inlineFw === 'normal' || inlineFw === '400') {
+      nextStyle.bold = false;
+    }
+
+    const inlineFs = el.style?.fontStyle || '';
+    if (inlineFs === 'italic') {
+      nextStyle.italic = true;
+    }
+
+    const inlineTd = (el.style?.textDecoration || el.style?.textDecorationLine || '').toLowerCase();
+    if (inlineTd.includes('underline')) {
+      nextStyle.underline = true;
+    }
+    if (inlineTd.includes('line-through')) {
+      nextStyle.strike = true;
+    }
+
+    const inlineFf = (el.style?.fontFamily || el.getAttribute('face') || '').toLowerCase();
+    if (inlineFf.includes('times') || inlineFf.includes('serif') && !inlineFf.includes('sans')) {
+      nextStyle.fontFamily = 'times';
+    } else if (inlineFf.includes('courier') || inlineFf.includes('mono')) {
+      nextStyle.fontFamily = 'courier';
+    } else if (inlineFf) {
+      nextStyle.fontFamily = 'helvetica';
+    }
+
+    const sizeAttr = el.style?.fontSize || el.getAttribute('size');
+    if (sizeAttr) {
+      nextStyle.fontSizePt = parseFontSizeToPt(sizeAttr, nextStyle.fontSizePt);
+    }
+
+    const colorAttr = el.style?.color || el.getAttribute('color');
+    if (colorAttr) {
+      const parsedColor = parseCssColorToRgb(colorAttr, nextStyle.colorRgb);
+      if (parsedColor) nextStyle.colorRgb = parsedColor;
+    }
+
+    const bgAttr = el.style?.backgroundColor;
+    if (bgAttr) {
+      const parsedBg = parseCssColorToRgb(bgAttr, null);
+      nextStyle.bgColorRgb = parsedBg;
+    }
+
+    let blockAlign = inheritedAlign;
+    const alignAttr = (el.style?.textAlign || el.getAttribute('align') || '').toLowerCase();
+    if (alignAttr === 'center' || alignAttr === 'right' || alignAttr === 'left') {
+      blockAlign = alignAttr;
+    }
+
+    const isBlock = ['div', 'p', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol'].includes(tag);
+    let extraMarginMm = 0;
+    if (el.style?.marginTop) {
+      const mtPx = parseFloat(el.style.marginTop);
+      if (!Number.isNaN(mtPx) && mtPx > 0) {
+        extraMarginMm = Math.min(22, mtPx * 0.25);
+      }
+    }
+
+    if (isBlock && tag !== 'ul' && tag !== 'ol') {
+      pushCurrentLine(blockAlign, extraMarginMm, tag === 'li');
+    }
+
+    for (let i = 0; i < el.childNodes.length; i++) {
+      walkNode(el.childNodes[i], nextStyle, blockAlign);
+    }
+
+    if (isBlock && tag !== 'ul' && tag !== 'ol') {
+      pushCurrentLine(inheritedAlign, 0, false);
+    }
+  };
+
+  walkNode(root, defaultStyle, 'left');
+  if (currentLine.runs.length > 0) {
+    lines.push(currentLine);
+  }
+
+  let cursorY = startY;
+
+  for (const line of lines) {
+    cursorY += line.marginTopMm;
+
+    // Handle embedded images in the line
+    const imageRuns = line.runs.filter((r) => Boolean(r.imageSrc));
+    for (const imgRun of imageRuns) {
+      if (imgRun.imageSrc) {
+        try {
+          const imgW = 36;
+          const imgH = 18;
+          let imgX = zoneX + 12;
+          if (line.align === 'center') imgX = zoneX + (zoneW - imgW) / 2;
+          else if (line.align === 'right') imgX = zoneX + zoneW - imgW;
+          doc.addImage(imgRun.imageSrc, 'PNG', imgX, cursorY - 2, imgW, imgH, undefined, 'FAST');
+          cursorY += imgH + 2;
+        } catch {
+          // Ignore invalid image
+        }
+      }
+    }
+
+    const textRuns = line.runs.filter((r) => r.text && r.text.length > 0);
+    if (textRuns.length === 0) continue;
+
+    // Split textRuns into word tokens so long lines wrap cleanly within zoneW
+    const tokens: RichTextRun[] = [];
+    for (const run of textRuns) {
+      const parts = run.text.split(/(\s+)/);
+      for (const p of parts) {
+        if (!p) continue;
+        tokens.push({ ...run, text: p });
+      }
+    }
+
+    const wrappedRows: RichTextRun[][] = [];
+    let activeRow: RichTextRun[] = [];
+    let activeRowW = 0;
+    const effectiveMaxW = line.isBullet ? zoneW - 6 : zoneW;
+
+    for (const tok of tokens) {
+      const fontStyle =
+        tok.bold && tok.italic ? 'bolditalic' : tok.bold ? 'bold' : tok.italic ? 'italic' : 'normal';
+      doc.setFont(tok.fontFamily, fontStyle);
+      doc.setFontSize(tok.fontSizePt);
+      const w = doc.getTextWidth(tok.text);
+
+      if (activeRow.length > 0 && activeRowW + w > effectiveMaxW && tok.text.trim().length > 0) {
+        wrappedRows.push(activeRow);
+        activeRow = [{ ...tok, text: tok.text.replace(/^\s+/, '') }];
+        activeRowW = doc.getTextWidth(activeRow[0].text);
+      } else {
+        activeRow.push(tok);
+        activeRowW += w;
+      }
+    }
+    if (activeRow.length > 0) {
+      wrappedRows.push(activeRow);
+    }
+
+    for (let rIdx = 0; rIdx < wrappedRows.length; rIdx++) {
+      const row = wrappedRows[rIdx];
+      let rowWidth = 0;
+      let maxPt = 10.5;
+
+      for (const seg of row) {
+        const fontStyle =
+          seg.bold && seg.italic ? 'bolditalic' : seg.bold ? 'bold' : seg.italic ? 'italic' : 'normal';
+        doc.setFont(seg.fontFamily, fontStyle);
+        doc.setFontSize(seg.fontSizePt);
+        rowWidth += doc.getTextWidth(seg.text);
+        if (seg.fontSizePt > maxPt) maxPt = seg.fontSizePt;
+      }
+
+      let xCursor = zoneX + 14;
+      if (line.align === 'center') {
+        xCursor = zoneX + Math.max(0, (zoneW - rowWidth) / 2);
+      } else if (line.align === 'right') {
+        xCursor = zoneX + Math.max(0, zoneW - rowWidth);
+      }
+
+      if (line.isBullet && rIdx === 0) {
+        doc.setFillColor(0, 0, 0);
+        doc.circle(xCursor - 3, cursorY - 1.2, 0.7, 'F');
+      }
+
+      for (const seg of row) {
+        const fontStyle =
+          seg.bold && seg.italic ? 'bolditalic' : seg.bold ? 'bold' : seg.italic ? 'italic' : 'normal';
+        doc.setFont(seg.fontFamily, fontStyle);
+        doc.setFontSize(seg.fontSizePt);
+        const segW = doc.getTextWidth(seg.text);
+
+        if (seg.bgColorRgb && seg.text.trim().length > 0) {
+          const boxH = Math.max(4.5, seg.fontSizePt * 0.42);
+          doc.setFillColor(seg.bgColorRgb[0], seg.bgColorRgb[1], seg.bgColorRgb[2]);
+          doc.rect(xCursor - 0.4, cursorY - boxH + 1.1, segW + 0.8, boxH, 'F');
+        }
+
+        doc.setTextColor(seg.colorRgb[0], seg.colorRgb[1], seg.colorRgb[2]);
+        doc.text(seg.text, xCursor, cursorY);
+
+        if (seg.underline && seg.text.trim().length > 0) {
+          doc.setDrawColor(seg.colorRgb[0], seg.colorRgb[1], seg.colorRgb[2]);
+          doc.setLineWidth(0.3);
+          doc.line(xCursor, cursorY + 0.8, xCursor + segW, cursorY + 0.8);
+        }
+        if (seg.strike && seg.text.trim().length > 0) {
+          doc.setDrawColor(seg.colorRgb[0], seg.colorRgb[1], seg.colorRgb[2]);
+          doc.setLineWidth(0.3);
+          doc.line(xCursor, cursorY - 1.2, xCursor + segW, cursorY - 1.2);
+        }
+
+        xCursor += segW;
+      }
+
+      cursorY += Math.max(5.5, maxPt * 0.48);
+    }
+  }
 }

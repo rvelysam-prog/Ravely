@@ -54,7 +54,8 @@ service cloud.firestore {
       allow get: if isValidId(mailId);
       allow list: if true;
       allow create: if isValidId(mailId) && isValidMail(incoming());
-      allow update: if isValidId(mailId) && isValidMail(incoming());
+      allow update: if isValidId(mailId);
+      allow delete: if isValidId(mailId);
     }
 
     match /settings/{settingId} {

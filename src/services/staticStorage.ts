@@ -460,6 +460,8 @@ export function normalizeEmployee(
       emp.date_effet ||
       new Date().toISOString().slice(0, 10),
     emailEnvoye: Boolean(emp.emailEnvoye),
+    emailError: emp.emailError || '',
+    mailDocId: emp.mailDocId || '',
     sexe: emp.sexe || (emp.civilite === 'Madame' ? 'Féminin' : 'Masculin'),
     numero_piece_identite: emp.numero_piece_identite || '',
     contact_urgence: emp.contact_urgence || '',
@@ -650,6 +652,8 @@ function buildFirestoreEmployeePayload(emp: Employee): Record<string, unknown> {
       emp.date_signature ||
       new Date().toISOString().slice(0, 10),
     emailEnvoye: Boolean(emp.emailEnvoye),
+    emailError: emp.emailError || '',
+    mailDocId: emp.mailDocId || '',
     sexe: emp.sexe || (emp.civilite === 'Madame' ? 'Féminin' : 'Masculin'),
     numero_piece_identite: emp.numero_piece_identite || '',
     contact_urgence: emp.contact_urgence || '',

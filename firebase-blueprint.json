@@ -135,6 +135,14 @@
         "emailEnvoye": {
           "type": "boolean"
         },
+        "emailError": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "mailDocId": {
+          "type": "string",
+          "maxLength": 128
+        },
         "sexe": {
           "type": "string",
           "maxLength": 40

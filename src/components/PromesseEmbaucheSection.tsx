@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   FileText,
   Download,
@@ -15,7 +15,19 @@ import {
   Save,
   RotateCcw,
   Plus,
-  Trash2
+  Trash2,
+  Bold,
+  Italic,
+  Underline,
+  Strikethrough,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  List,
+  Type,
+  Highlighter,
+  Briefcase,
+  PenTool
 } from 'lucide-react';
 import { Employee } from '../types';
 import {
@@ -41,6 +53,7 @@ import {
 import {
   AssetUnit,
   DEFAULT_PDF_ASSETS_CONFIG,
+  DEFAULT_SIGNATURE_SALARIE_RICH_HTML,
   HorizontalAlign,
   ImportedAssetKey,
   OFFICIAL_DEPARTMENTS,
@@ -51,22 +64,27 @@ import {
   convertUploadedImageForPdf,
   findDepartmentByPoste,
   findDepartmentDefinition,
+  findPosteDefinition,
   formatMissionsWithBullets,
   getDeduplicatedDepartmentsList,
+  getMissionsForPosteOrDepartment,
   getSavedCustomCachet,
   getSavedCustomFiligrane,
   getSavedCustomLogo,
   getSavedCustomSignature,
   getSavedPdfAssetsConfig,
+  getSavedSignatureSalarieHtml,
   loadPdfAssetsConfigFromFirestore,
   parseMissionsFromText,
+  resolveSignatureSalarieHtmlVariables,
   savePdfAssetsConfigToFirestore,
   sendCandidatureAcceptanceEmailViaFirebase,
   setSavedCustomCachet,
   setSavedCustomFiligrane,
   setSavedCustomLogo,
   setSavedCustomSignature,
-  setSavedPdfAssetsConfig
+  setSavedPdfAssetsConfig,
+  setSavedSignatureSalarieHtml
 } from '../services/departmentsAndEmailService';
 
 interface PromesseEmbaucheSectionProps {
@@ -124,10 +142,91 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
     lieu_travail: 'Surrey, Colombie-Britanique, Canada',
     horaire: 'Temps plein – 40 heures par semaine',
     ni: 'BC1129970',
-    responsabilites_text: formatMissionsWithBullets(OFFICIAL_DEPARTMENTS[1].missions)
+    responsabilites_text: formatMissionsWithBullets(
+      getMissionsForPosteOrDepartment('Préparatrice de Commande', 'DEPARTEMENT LOGISTIQUE ET ENTREPOSAGE')
+    )
   });
 
   const [newMissionInput, setNewMissionInput] = useState('');
+  const [showAllDeptPostesCatalog, setShowAllDeptPostesCatalog] = useState(false);
+
+  // Éditeur de texte riche pour la partie Signature Salarié (Bloc droite Page 2)
+  const [signatureSalarieHtml, setSignatureSalarieHtml] = useState<string>(() =>
+    getSavedSignatureSalarieHtml()
+  );
+  const [showRawSignatureHtml, setShowRawSignatureHtml] = useState(false);
+  const richSignatureEditorRef = useRef<HTMLDivElement | null>(null);
+
+  const updateSignatureSalarieRichHtml = (nextHtml: string, syncDom = false) => {
+    setSignatureSalarieHtml(nextHtml);
+    setSavedSignatureSalarieHtml(nextHtml);
+    if (syncDom && richSignatureEditorRef.current && richSignatureEditorRef.current.innerHTML !== nextHtml) {
+      richSignatureEditorRef.current.innerHTML = nextHtml;
+    }
+  };
+
+  useEffect(() => {
+    if (
+      richSignatureEditorRef.current &&
+      document.activeElement !== richSignatureEditorRef.current &&
+      richSignatureEditorRef.current.innerHTML !== signatureSalarieHtml
+    ) {
+      richSignatureEditorRef.current.innerHTML = signatureSalarieHtml;
+    }
+  }, [signatureSalarieHtml, showRawSignatureHtml]);
+
+  const execRichSignatureCommand = (command: string, value?: string) => {
+    if (!richSignatureEditorRef.current) return;
+    richSignatureEditorRef.current.focus();
+    try {
+      document.execCommand(command, false, value);
+    } catch {
+      // Ignore execCommand errors
+    }
+    const updated = richSignatureEditorRef.current.innerHTML;
+    setSignatureSalarieHtml(updated);
+    setSavedSignatureSalarieHtml(updated);
+  };
+
+  const handleInsertSignatureSnippet = (snippetHtml: string) => {
+    if (richSignatureEditorRef.current) {
+      richSignatureEditorRef.current.focus();
+      try {
+        const ok = document.execCommand('insertHTML', false, snippetHtml);
+        if (ok) {
+          const updated = richSignatureEditorRef.current.innerHTML;
+          setSignatureSalarieHtml(updated);
+          setSavedSignatureSalarieHtml(updated);
+          return;
+        }
+      } catch {
+        // Fallback below
+      }
+    }
+    const next = `${signatureSalarieHtml}<div>${snippetHtml}</div>`;
+    updateSignatureSalarieRichHtml(next, true);
+  };
+
+  const handleUploadEmployeeSignatureImageInRichEditor = (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const raw = typeof reader.result === 'string' ? reader.result : '';
+      if (!raw) return;
+      const converted = await convertUploadedImageForPdf(raw, {
+        maxWidth: 420,
+        maxHeight: 220,
+        removeWhiteBackground: true
+      });
+      handleInsertSignatureSnippet(
+        `<div style="margin-top: 6px;"><img src="${converted}" alt="Signature salarié" style="max-height: 58px; max-width: 160px; object-fit: contain; display: inline-block;" /></div>`
+      );
+    };
+    reader.readAsDataURL(file);
+  };
 
   // Fichiers uploadés par l'admin : logo, signature, cachet, et filigrane (blason)
   const [logoDataUrl, setLogoDataUrl] = useState<string>(() => getSavedCustomLogo());
@@ -261,6 +360,10 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
   const currentDeptDef =
     findDepartmentDefinition(form.departement) || OFFICIAL_DEPARTMENTS[1];
 
+  const currentPosteDef =
+    findPosteDefinition(form.poste, currentDeptDef.name)?.poste ||
+    currentDeptDef.postesDetail[0];
+
   const updateAssetItemSetting = <K extends keyof PdfAssetItemSettings>(
     assetKey: ImportedAssetKey,
     field: K,
@@ -323,53 +426,74 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
     setSettingsSavedBadge('Réglages par défaut restaurés dans Firestore');
   };
 
-  // Sélection d'un département -> affiche les 6 sous-rubriques et pré-remplit automatiquement avec "• "
+  // Sélection d'un département -> sélectionne le 1er poste possible du département et pré-remplit ses 6 missions spécifiques en puces "• "
   const handleDepartmentChange = (newDeptName: string) => {
     const matched = findDepartmentDefinition(newDeptName);
     if (matched) {
+      const existingPosteInDept = matched.postesDetail.find(
+        (p) => p.titre.toLowerCase() === form.poste.trim().toLowerCase()
+      );
+      const chosenPoste = existingPosteInDept || matched.postesDetail[0];
+      const missionsToApply = chosenPoste ? chosenPoste.missions : matched.missions;
+
       setForm((prev) => ({
         ...prev,
         departement: matched.name,
-        responsabilites_text: formatMissionsWithBullets(matched.missions)
+        poste: chosenPoste ? chosenPoste.titre : prev.poste,
+        responsabilites_text: formatMissionsWithBullets(missionsToApply)
       }));
     } else {
       const customMatch = deduplicatedDepartments.find((d) => d.name === newDeptName);
+      const firstCustomPoste = customMatch?.postesDetail?.[0];
       setForm((prev) => ({
         ...prev,
         departement: newDeptName,
+        poste: firstCustomPoste ? firstCustomPoste.titre : prev.poste,
         responsabilites_text: customMatch
-          ? formatMissionsWithBullets(customMatch.missions)
+          ? formatMissionsWithBullets(
+              firstCustomPoste ? firstCustomPoste.missions : customMatch.missions
+            )
           : prev.responsabilites_text
       }));
     }
   };
 
-  // Sélection ou saisie d'un poste lié -> détecte le département correspondant (ou utilise le département actif) et pré-remplit les 6 missions en puces "•"
+  // Sélection ou saisie d'un poste -> détecte le poste exact (et ses 6 responsabilités/missions dédiées) ainsi que son département
   const handlePosteChange = (newPoste: string, forceApplyMissions = false) => {
-    const deptFromPoste = findDepartmentByPoste(newPoste);
+    const matchedPosteObj = findPosteDefinition(newPoste, form.departement);
+    const deptFromPoste = matchedPosteObj?.department || findDepartmentByPoste(newPoste);
     const targetDept = deptFromPoste || findDepartmentDefinition(form.departement);
+    const targetMissions = matchedPosteObj
+      ? matchedPosteObj.poste.missions
+      : targetDept?.missions;
 
     setForm((prev) => {
-      const isCurrentlyStandardDeptMissions =
+      const isCurrentlyStandardMissions =
         !prev.responsabilites_text.trim() ||
         OFFICIAL_DEPARTMENTS.some(
           (d) =>
             formatMissionsWithBullets(d.missions).trim() === prev.responsabilites_text.trim() ||
-            d.missions.join('\n').trim() === prev.responsabilites_text.trim()
+            d.missions.join('\n').trim() === prev.responsabilites_text.trim() ||
+            d.postesDetail.some(
+              (p) =>
+                formatMissionsWithBullets(p.missions).trim() ===
+                  prev.responsabilites_text.trim() ||
+                p.missions.join('\n').trim() === prev.responsabilites_text.trim()
+            )
         ) ||
         prev.responsabilites_text.trim() === DEFAULT_PROMESSE_RESPONSABILITES.trim();
 
       const shouldUpdateMissions =
-        Boolean(targetDept) &&
-        (forceApplyMissions || Boolean(deptFromPoste) || isCurrentlyStandardDeptMissions);
+        Boolean(targetMissions) &&
+        (forceApplyMissions || Boolean(matchedPosteObj) || Boolean(deptFromPoste) || isCurrentlyStandardMissions);
 
       return {
         ...prev,
         poste: newPoste,
         departement: deptFromPoste ? deptFromPoste.name : prev.departement,
         responsabilites_text:
-          shouldUpdateMissions && targetDept
-            ? formatMissionsWithBullets(targetDept.missions)
+          shouldUpdateMissions && targetMissions
+            ? formatMissionsWithBullets(targetMissions)
             : prev.responsabilites_text
       };
     });
@@ -589,7 +713,8 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
       signature_data_url: signatureDataUrl,
       cachet_data_url: cachetDataUrl,
       filigrane_data_url: filigraneDataUrl,
-      assets_config: assetsConfig
+      assets_config: assetsConfig,
+      signature_salarie_html: signatureSalarieHtml
     };
   };
 
@@ -663,18 +788,29 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
         form.email.trim() || `${finalMatricule.toLowerCase()}@atlantictransport.ca`;
 
       // Send automatic notification email via Firebase Extension Trigger Email ("mail" collection)
-      const { emailEnvoye } = await sendCandidatureAcceptanceEmailViaFirebase({
-        toEmail: recipientEmail,
-        nomComplet: fullName,
-        civilite,
-        poste: form.poste.trim(),
-        departement: form.departement.trim(),
-        dateEmbauche: formatPromesseDateLongFr(form.date_embauche),
-        dateEtablissement: formatPromesseDateSlash(
-          form.date_etablissement || form.date_embauche
-        ),
+      const { emailEnvoye, emailError, mailDocId, deliveryState } =
+        await sendCandidatureAcceptanceEmailViaFirebase({
+          toEmail: recipientEmail,
+          nomComplet: fullName,
+          civilite,
+          poste: form.poste.trim(),
+          departement: form.departement.trim(),
+          dateEmbauche: formatPromesseDateLongFr(form.date_embauche),
+          dateEtablissement: formatPromesseDateSlash(
+            form.date_etablissement || form.date_embauche
+          ),
+          matricule: finalMatricule,
+          pdfDataUri
+        });
+
+      console.log('[PromesseEmbauche] Ajout salarié & Notification email :', {
         matricule: finalMatricule,
-        pdfDataUri
+        to: [recipientEmail],
+        from: 'atlantictransport.int@ik.me',
+        mailDocId,
+        deliveryState,
+        emailEnvoye,
+        emailError: emailError || null
       });
 
       const employeeRecord: Employee = {
@@ -710,6 +846,8 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
         date_signature: form.date_etablissement || form.date_embauche,
         date_etablissement: form.date_etablissement || form.date_embauche,
         emailEnvoye,
+        emailError: emailError || '',
+        mailDocId: mailDocId || '',
         sexe: form.sexe,
         numero_piece_identite: form.numero_piece_identite.trim(),
         contact_urgence: form.contact_urgence.trim(),
@@ -1154,78 +1292,190 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
               </select>
             </div>
 
-            {/* Encadré affichant les 6 sous-rubriques / missions types du département sélectionné */}
-            <div className="sm:col-span-4 bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2 text-xs font-bold text-[#0B2545]">
-                  <Building2 className="w-4 h-4 text-amber-600" />
-                  <span>
-                    6 Sous-rubriques / Missions types — {currentDeptDef.name} :
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setForm((prev) => ({
-                      ...prev,
-                      responsabilites_text: formatMissionsWithBullets(currentDeptDef.missions)
-                    }))
-                  }
-                  className="text-xs font-semibold text-amber-700 hover:text-amber-900 underline"
-                >
-                  Ré-appliquer ces 6 missions en puces « • »
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                {currentDeptDef.missions.map((mission, idx) => (
-                  <div
-                    key={idx}
-                    className="text-xs bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-700 flex items-start gap-2"
-                  >
-                    <span className="font-mono font-bold text-amber-600 shrink-0">
-                      • {idx + 1}.
+            {/* Encadré affichant les Postes possibles du département et les 6 principales responsabilités/missions de chaque poste */}
+            <div className="sm:col-span-4 bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-4">
+              {/* Liste des postes possibles pour ce département */}
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-xs font-bold text-[#0B2545]">
+                    <Briefcase className="w-4 h-4 text-amber-600" />
+                    <span>
+                      Postes possibles — {currentDeptDef.name} ({currentDeptDef.postesDetail.length} postes avec 6 responsabilités/missions chacun) :
                     </span>
-                    <span>{mission}</span>
                   </div>
-                ))}
+                  <button
+                    type="button"
+                    onClick={() => setShowAllDeptPostesCatalog((prev) => !prev)}
+                    className="text-xs font-semibold text-[#0B2545] hover:text-amber-700 underline"
+                  >
+                    {showAllDeptPostesCatalog
+                      ? 'Masquer le détail de tous les postes'
+                      : `Voir les ${currentDeptDef.postesDetail.length} postes & leurs 6 responsabilités`}
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {currentDeptDef.postesDetail.map((posteItem) => {
+                    const isSelected =
+                      form.poste.trim().toLowerCase() === posteItem.titre.toLowerCase();
+                    return (
+                      <button
+                        key={posteItem.titre}
+                        type="button"
+                        onClick={() => handlePosteChange(posteItem.titre, true)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all flex items-center gap-1.5 ${
+                          isSelected
+                            ? 'bg-[#0B2545] text-white border-[#0B2545] shadow-xs'
+                            : 'bg-white text-slate-700 border-slate-300 hover:border-[#0B2545]'
+                        }`}
+                      >
+                        <span>{posteItem.titre}</span>
+                        <span
+                          className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                            isSelected
+                              ? 'bg-amber-400 text-[#0B2545] font-bold'
+                              : 'bg-slate-100 text-slate-500'
+                          }`}
+                        >
+                          6 missions
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
-              {/* Sélection rapide d'un poste lié au département */}
-              <div className="pt-1 flex flex-wrap items-center gap-1.5">
-                <span className="text-[11px] font-semibold text-slate-600 mr-1">
-                  Postes liés (clic pour sélectionner et pré-remplir les 6 missions) :
-                </span>
-                {currentDeptDef.postesLies.map((linkedPoste) => (
-                  <button
-                    key={linkedPoste}
-                    type="button"
-                    onClick={() => handlePosteChange(linkedPoste, true)}
-                    className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors ${
-                      form.poste.toLowerCase() === linkedPoste.toLowerCase()
-                        ? 'bg-[#0B2545] text-white border-[#0B2545]'
-                        : 'bg-white text-slate-700 border-slate-300 hover:border-[#0B2545]'
-                    }`}
-                  >
-                    {linkedPoste}
-                  </button>
-                ))}
+              {/* Catalogue complet dépliable : Tous les postes du département avec leurs 6 missions */}
+              {showAllDeptPostesCatalog && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-slate-200">
+                  {currentDeptDef.postesDetail.map((pItem) => {
+                    const isCurrent =
+                      form.poste.trim().toLowerCase() === pItem.titre.toLowerCase();
+                    return (
+                      <div
+                        key={pItem.titre}
+                        onClick={() => handlePosteChange(pItem.titre, true)}
+                        className={`p-3 rounded-xl border cursor-pointer transition-all space-y-2 ${
+                          isCurrent
+                            ? 'bg-amber-50/70 border-amber-400 ring-1 ring-amber-400'
+                            : 'bg-white border-slate-200 hover:border-slate-300'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-bold text-[#0B2545]">
+                            {pItem.titre}
+                          </span>
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-[#0B2545] text-white">
+                            {isCurrent ? 'Poste actif' : 'Cliquer pour choisir'}
+                          </span>
+                        </div>
+                        <ul className="space-y-1 text-[11px] text-slate-700">
+                          {pItem.missions.map((m, mIdx) => (
+                            <li key={mIdx} className="flex items-start gap-1.5">
+                              <span className="text-amber-600 font-bold shrink-0">•</span>
+                              <span>{m}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Les 6 principales responsabilités/missions du poste sélectionné */}
+              <div className="pt-2 border-t border-slate-200 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-xs font-bold text-[#0B2545]">
+                    <Building2 className="w-4 h-4 text-amber-600" />
+                    <span>
+                      6 Principales responsabilités / missions du poste «{' '}
+                      <span className="text-amber-700">{currentPosteDef.titre}</span> » :
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setForm((prev) => ({
+                          ...prev,
+                          responsabilites_text: formatMissionsWithBullets(currentPosteDef.missions)
+                        }))
+                      }
+                      className="text-xs font-semibold text-amber-700 hover:text-amber-900 underline"
+                    >
+                      Ré-appliquer les 6 missions de ce poste
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setForm((prev) => ({
+                          ...prev,
+                          responsabilites_text: formatMissionsWithBullets(currentDeptDef.missions)
+                        }))
+                      }
+                      className="text-xs font-semibold text-slate-600 hover:text-[#0B2545] underline"
+                    >
+                      Appliquer les 6 sous-rubriques générales du département
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {currentPosteDef.missions.map((mission, idx) => (
+                    <div
+                      key={idx}
+                      className="text-xs bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-700 flex items-start gap-2"
+                    >
+                      <span className="font-mono font-bold text-amber-600 shrink-0">
+                        • {idx + 1}.
+                      </span>
+                      <span>{mission}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
 
             <div className="sm:col-span-2">
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Poste (Saisie libre ou sélection d&apos;un poste lié → pré-remplit les 6 missions) *
+                Poste (Sélection dans la liste du département ou saisie libre → 6 missions auto) *
               </label>
-              <input
-                type="text"
-                required
-                list="postes-lies-datalist"
-                value={form.poste}
-                onChange={(e) => handlePosteChange(e.target.value)}
-                placeholder="Ex: Préparatrice de Commande"
-                className="w-full min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm focus:border-[#0B2545] focus:outline-none"
-              />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <select
+                  value={
+                    currentDeptDef.postesDetail.some(
+                      (p) => p.titre.toLowerCase() === form.poste.trim().toLowerCase()
+                    )
+                      ? currentDeptDef.postesDetail.find(
+                          (p) => p.titre.toLowerCase() === form.poste.trim().toLowerCase()
+                        )?.titre
+                      : ''
+                  }
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      handlePosteChange(e.target.value, true);
+                    }
+                  }}
+                  className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm bg-slate-50 font-semibold text-[#0B2545] focus:border-[#0B2545] focus:outline-none"
+                >
+                  <option value="">-- Choisir un poste du département --</option>
+                  {currentDeptDef.postesDetail.map((p) => (
+                    <option key={p.titre} value={p.titre}>
+                      {p.titre} (6 missions)
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  required
+                  list="postes-lies-datalist"
+                  value={form.poste}
+                  onChange={(e) => handlePosteChange(e.target.value)}
+                  placeholder="Ou saisir un poste..."
+                  className="w-full min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm focus:border-[#0B2545] focus:outline-none"
+                />
+              </div>
               <datalist id="postes-lies-datalist">
                 {allLinkedPostes.map((item, i) => (
                   <option key={i} value={item.poste}>
@@ -2199,6 +2449,326 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
           </div>
         </div>
 
+        {/* Section 5 : Partie Signature Salarié — Éditeur de Texte Riche (Modèle Promesse d'Embauche Page 2) */}
+        <div className="pt-2 border-t border-slate-100 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <PenTool className="w-4 h-4 text-amber-600" />
+              <h4 className="text-xs font-bold uppercase tracking-wider text-amber-700">
+                5. Partie Signature Salarié (Page 2 · Bloc Droite) — Éditeur de Texte Riche
+              </h4>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowRawSignatureHtml((prev) => !prev)}
+                className="px-2.5 py-1 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-[11px] font-semibold text-slate-700"
+              >
+                {showRawSignatureHtml ? 'Mode Visuel Riche (WYSIWYG)' : 'Voir / Éditer Code HTML'}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  updateSignatureSalarieRichHtml(DEFAULT_SIGNATURE_SALARIE_RICH_HTML, true)
+                }
+                className="px-2.5 py-1 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-[11px] font-semibold text-amber-900 inline-flex items-center gap-1"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Restaurer le bloc signature salarié par défaut</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-300 bg-slate-50 p-4 space-y-3">
+            {/* Barre d'outils de l'éditeur de texte riche */}
+            <div className="flex flex-wrap items-center gap-1.5 bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs">
+              {/* Style de texte : Gras, Italique, Souligné, Barré */}
+              <button
+                type="button"
+                onClick={() => execRichSignatureCommand('bold')}
+                title="Gras"
+                className="p-2 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-800"
+              >
+                <Bold className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => execRichSignatureCommand('italic')}
+                title="Italique"
+                className="p-2 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-800"
+              >
+                <Italic className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => execRichSignatureCommand('underline')}
+                title="Souligné"
+                className="p-2 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-800"
+              >
+                <Underline className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => execRichSignatureCommand('strikeThrough')}
+                title="Barré"
+                className="p-2 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-800"
+              >
+                <Strikethrough className="w-3.5 h-3.5" />
+              </button>
+
+              <div className="h-5 w-[1px] bg-slate-200 mx-1" />
+
+              {/* Police de caractères */}
+              <div className="inline-flex items-center gap-1">
+                <Type className="w-3.5 h-3.5 text-slate-500" />
+                <select
+                  onChange={(e) => {
+                    if (e.target.value) execRichSignatureCommand('fontName', e.target.value);
+                  }}
+                  defaultValue="Arial"
+                  className="px-2 py-1 rounded-lg border border-slate-200 text-xs bg-slate-50 text-slate-800"
+                >
+                  <option value="Arial">Police : Helvetica / Arial</option>
+                  <option value="Times New Roman">Police : Times / Serif</option>
+                  <option value="Courier New">Police : Courier / Mono</option>
+                </select>
+              </div>
+
+              {/* Taille du texte */}
+              <select
+                onChange={(e) => {
+                  if (e.target.value) execRichSignatureCommand('fontSize', e.target.value);
+                }}
+                defaultValue="3"
+                className="px-2 py-1 rounded-lg border border-slate-200 text-xs bg-slate-50 text-slate-800"
+              >
+                <option value="2">Taille : Petit (10pt)</option>
+                <option value="3">Taille : Normal (11.5pt)</option>
+                <option value="4">Taille : Moyen (13.2pt)</option>
+                <option value="5">Taille : Grand (15.5pt)</option>
+                <option value="6">Taille : Très grand (18pt)</option>
+              </select>
+
+              <div className="h-5 w-[1px] bg-slate-200 mx-1" />
+
+              {/* Alignement */}
+              <button
+                type="button"
+                onClick={() => execRichSignatureCommand('justifyLeft')}
+                title="Aligner à gauche"
+                className="p-2 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-800"
+              >
+                <AlignLeft className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => execRichSignatureCommand('justifyCenter')}
+                title="Centrer"
+                className="p-2 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-800"
+              >
+                <AlignCenter className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => execRichSignatureCommand('justifyRight')}
+                title="Aligner à droite"
+                className="p-2 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-800"
+              >
+                <AlignRight className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => execRichSignatureCommand('insertUnorderedList')}
+                title="Liste à puces"
+                className="p-2 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-800"
+              >
+                <List className="w-3.5 h-3.5" />
+              </button>
+
+              <div className="h-5 w-[1px] bg-slate-200 mx-1" />
+
+              {/* Couleur du texte */}
+              <div className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-200 bg-slate-50">
+                <span className="text-[11px] font-semibold text-slate-600">Texte :</span>
+                <input
+                  type="color"
+                  defaultValue="#000000"
+                  onChange={(e) => execRichSignatureCommand('foreColor', e.target.value)}
+                  className="w-5 h-5 rounded cursor-pointer border-0"
+                  title="Choisir la couleur du texte"
+                />
+                {['#000000', '#0C2366', '#3A6E48', '#C67D26'].map((col) => (
+                  <button
+                    key={col}
+                    type="button"
+                    onClick={() => execRichSignatureCommand('foreColor', col)}
+                    style={{ backgroundColor: col }}
+                    className="w-4 h-4 rounded-full border border-white ring-1 ring-slate-300"
+                    title={`Couleur ${col}`}
+                  />
+                ))}
+              </div>
+
+              {/* Surlignage (Jaune #FFFF00 ou transparent) */}
+              <div className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-200 bg-slate-50">
+                <Highlighter className="w-3.5 h-3.5 text-amber-600" />
+                <button
+                  type="button"
+                  onClick={() => execRichSignatureCommand('hiliteColor', '#FFFF00')}
+                  className="px-2 py-0.5 rounded bg-[#FFFF00] text-black text-[11px] font-bold border border-amber-400"
+                  title="Surligner en jaune (#FFFF00)"
+                >
+                  Jaune
+                </button>
+                <button
+                  type="button"
+                  onClick={() => execRichSignatureCommand('hiliteColor', 'transparent')}
+                  className="px-2 py-0.5 rounded bg-white text-slate-600 text-[11px] border border-slate-300"
+                  title="Retirer le surlignage"
+                >
+                  Aucun
+                </button>
+              </div>
+
+              {/* Import d'une image de signature salarié dans l'éditeur riche */}
+              <label className="px-2.5 py-1.5 rounded-lg bg-[#0B2545] hover:bg-[#134074] text-white text-[11px] font-semibold cursor-pointer inline-flex items-center gap-1 ml-auto">
+                <Upload className="w-3 h-3" />
+                <span>+ Image signature salarié</span>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={handleUploadEmployeeSignatureImageInRichEditor}
+                  className="hidden"
+                />
+              </label>
+            </div>
+
+            {/* Boutons d'insertion rapide de variables dynamiques & mentions RH */}
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+              <span className="font-semibold text-slate-600 mr-1">
+                Insérer en 1 clic :
+              </span>
+              <button
+                type="button"
+                onClick={() => handleInsertSignatureSnippet('<span>{{NOM_SALARIE}}</span>')}
+                className="px-2 py-1 rounded-lg bg-white border border-slate-300 hover:border-[#0B2545] font-mono text-slate-800"
+              >
+                + {'{{NOM_SALARIE}}'}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  handleInsertSignatureSnippet(
+                    '<span style="background-color: #FFFF00;">{{NOM_SALARIE}}</span>'
+                  )
+                }
+                className="px-2 py-1 rounded-lg bg-[#FFFF00] border border-amber-400 font-mono font-bold text-black"
+              >
+                + {'{{NOM_SALARIE}}'} (Surligné jaune)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleInsertSignatureSnippet('<span>{{POSTE}}</span>')}
+                className="px-2 py-1 rounded-lg bg-white border border-slate-300 hover:border-[#0B2545] font-mono text-slate-800"
+              >
+                + {'{{POSTE}}'}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleInsertSignatureSnippet('<span>{{DATE_ETABLISSEMENT}}</span>')}
+                className="px-2 py-1 rounded-lg bg-white border border-slate-300 hover:border-[#0B2545] font-mono text-slate-800"
+              >
+                + {'{{DATE_ETABLISSEMENT}}'}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  handleInsertSignatureSnippet(
+                    '<div style="margin-top: 6px;"><em>« Lu et approuvé, bon pour accord »</em></div>'
+                  )
+                }
+                className="px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-300 hover:bg-amber-100 font-semibold text-amber-900"
+              >
+                + « Lu et approuvé, bon pour accord »
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  handleInsertSignatureSnippet(
+                    '<div style="margin-top: 14px;"><strong>Signature : .........................</strong></div>'
+                  )
+                }
+                className="px-2.5 py-1 rounded-lg bg-white border border-slate-300 hover:border-[#0B2545] font-semibold text-slate-800"
+              >
+                + Ligne Signature
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  handleInsertSignatureSnippet(
+                    '<div style="margin-top: 6px;"><strong>Date : ....../....../..........</strong></div>'
+                  )
+                }
+                className="px-2.5 py-1 rounded-lg bg-white border border-slate-300 hover:border-[#0B2545] font-semibold text-slate-800"
+              >
+                + Ligne Date
+              </button>
+            </div>
+
+            {/* Zone d'édition riche WYSIWYG + Aperçu résolu côte à côte */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700 block">
+                  Zone d&apos;édition riche (Modifiez librement le texte, les styles, les couleurs et la mise en page) :
+                </label>
+                {showRawSignatureHtml ? (
+                  <textarea
+                    rows={6}
+                    value={signatureSalarieHtml}
+                    onChange={(e) => updateSignatureSalarieRichHtml(e.target.value, false)}
+                    className="w-full p-3 rounded-xl border border-slate-300 bg-white font-mono text-xs text-slate-800 focus:border-[#0B2545] focus:outline-none"
+                  />
+                ) : (
+                  <div
+                    ref={richSignatureEditorRef}
+                    contentEditable
+                    suppressContentEditableWarning
+                    onInput={(e) => {
+                      const html = (e.currentTarget as HTMLDivElement).innerHTML;
+                      setSignatureSalarieHtml(html);
+                      setSavedSignatureSalarieHtml(html);
+                    }}
+                    className="min-h-[140px] p-4 rounded-xl border-2 border-slate-300 bg-white text-black text-sm leading-relaxed focus:border-[#0B2545] focus:outline-none shadow-inner"
+                  />
+                )}
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700 block">
+                  Rendu en direct du bloc Signature Salarié (tel qu&apos;imprimé sur la Page 2 du PDF) :
+                </label>
+                <div className="min-h-[140px] p-4 rounded-xl border border-dashed border-amber-400 bg-white text-black flex flex-col justify-center">
+                  <div
+                    className="text-xs sm:text-sm leading-relaxed space-y-1"
+                    dangerouslySetInnerHTML={{
+                      __html: resolveSignatureSalarieHtmlVariables(signatureSalarieHtml, {
+                        nom_complet: previewData.nom_complet,
+                        poste: previewData.poste,
+                        date_etablissement: formatPromesseDateSlash(
+                          previewData.date_etablissement || previewData.date_embauche
+                        ),
+                        date_embauche: formatPromesseDateLongFr(previewData.date_embauche),
+                        ni: previewData.ni,
+                        matricule: previewData.matricule
+                      })
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* Boutons d'action */}
         <div className="pt-4 border-t border-slate-200 flex flex-wrap items-center justify-end gap-3">
           <button
@@ -2555,17 +3125,22 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
                 </div>
 
                 <div className="space-y-2 text-right sm:text-left sm:pl-8">
-                  <div className="font-bold text-xs sm:text-sm">
-                    Pour l&apos;employer
-                  </div>
-                  <div className="text-sm sm:text-base uppercase tracking-wide">
-                    {previewData.nom_complet}
-                  </div>
-                  <div className="pt-4 min-h-[92px]">
-                    <div className="text-xs font-bold">
-                      Signature : .........................
-                    </div>
-                  </div>
+                  <div
+                    className="text-xs sm:text-sm leading-relaxed space-y-1 rounded-lg p-1.5 -m-1.5 border border-transparent hover:border-amber-400/80 transition-colors"
+                    title="Partie signature salarié (modifiable dans l'Éditeur de Texte Riche ci-dessus)"
+                    dangerouslySetInnerHTML={{
+                      __html: resolveSignatureSalarieHtmlVariables(signatureSalarieHtml, {
+                        nom_complet: previewData.nom_complet,
+                        poste: previewData.poste,
+                        date_etablissement: formatPromesseDateSlash(
+                          previewData.date_etablissement || previewData.date_embauche
+                        ),
+                        date_embauche: formatPromesseDateLongFr(previewData.date_embauche),
+                        ni: previewData.ni,
+                        matricule: previewData.matricule
+                      })
+                    }}
+                  />
                 </div>
               </div>
 

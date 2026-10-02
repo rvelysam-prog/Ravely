@@ -66,7 +66,9 @@ import {
   OFFICIAL_DEPARTMENTS,
   convertUploadedImageForPdf,
   findDepartmentDefinition,
+  findPosteDefinition,
   getDeduplicatedDepartmentsList,
+  getMissionsForPosteOrDepartment,
   getSavedCustomCachet,
   getSavedCustomFiligrane,
   getSavedCustomSignature,
@@ -76,8 +78,9 @@ import {
   setSavedCustomSignature
 } from '../services/departmentsAndEmailService';
 import { PromesseEmbaucheSection } from './PromesseEmbaucheSection';
+import { EmailLogsSection } from './EmailLogsSection';
 
-type AdminTab = 'employees' | 'promesse' | 'cms' | 'messages' | 'json';
+type AdminTab = 'employees' | 'promesse' | 'mail_logs' | 'cms' | 'messages' | 'json';
 
 function resolveInitialAdminTab(): AdminTab {
   if (typeof window === 'undefined') return 'employees';
@@ -85,6 +88,9 @@ function resolveInitialAdminTab(): AdminTab {
   const hash = window.location.hash.toLowerCase();
   if (path.includes('/admin/promesse-embauche') || hash.includes('promesse-embauche')) {
     return 'promesse';
+  }
+  if (path.includes('/admin/logs-emails') || hash.includes('logs-emails')) {
+    return 'mail_logs';
   }
   return 'employees';
 }
@@ -511,9 +517,10 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             : '',
         date_signature: empForm.date_etablissement || todayIso,
         date_etablissement: empForm.date_etablissement || todayIso,
-        emailEnvoye: editingEmployee?.emailEnvoye ?? true,
-        responsabilites:
-          (findDepartmentDefinition(empForm.departement) || OFFICIAL_DEPARTMENTS[1]).missions,
+        emailEnvoye: editingEmployee?.emailEnvoye ?? false,
+        emailError: editingEmployee?.emailError ?? '',
+        mailDocId: editingEmployee?.mailDocId ?? '',
+        responsabilites: getMissionsForPosteOrDepartment(empForm.poste, empForm.departement),
         photo: resolvedPhotoBase64,
         photo_url: resolvedPhotoBase64,
         contrat_pdf_url: '',
@@ -550,8 +557,10 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
         setCachedContractPdf(savedEmp.matricule, pdfDataUri);
 
         if (!editingEmployee) {
-          const matchedDept =
-            findDepartmentDefinition(savedEmp.departement) || OFFICIAL_DEPARTMENTS[1];
+          const posteMissions = getMissionsForPosteOrDepartment(
+            savedEmp.poste,
+            savedEmp.departement
+          );
           const promessePdfDataUri = await generatePromesseEmbauchePdfDataUri({
             nom_complet: savedEmp.nom_complet,
             date_naissance: savedEmp.date_naissance,
@@ -577,10 +586,10 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             lieu_travail: savedEmp.lieu_travail,
             horaire: savedEmp.horaires,
             ni: savedEmp.ni || 'BC1129970',
-            responsabilites: matchedDept.missions
+            responsabilites: posteMissions
           });
 
-          await sendCandidatureAcceptanceEmailViaFirebase({
+          const mailResult = await sendCandidatureAcceptanceEmailViaFirebase({
             toEmail: savedEmp.email,
             nomComplet: savedEmp.nom_complet,
             civilite: savedEmp.civilite,
@@ -593,6 +602,27 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             matricule: savedEmp.matricule,
             pdfDataUri: promessePdfDataUri
           });
+
+          console.log('[AdminBackoffice] Ajout salarié & création doc mail :', {
+            matricule: savedEmp.matricule,
+            to: [savedEmp.email],
+            from: 'atlantictransport.int@ik.me',
+            mailDocId: mailResult.mailDocId,
+            deliveryState: mailResult.deliveryState,
+            emailEnvoye: mailResult.emailEnvoye,
+            emailError: mailResult.emailError || null
+          });
+
+          // Met à jour le document salarié dans Firestore avec emailEnvoye, emailError et mailDocId
+          const empWithEmailStatus: Employee = {
+            ...savedEmp,
+            emailEnvoye: mailResult.emailEnvoye,
+            emailError: mailResult.emailError || '',
+            mailDocId: mailResult.mailDocId || ''
+          };
+          await writeEmployeeToFirestore(empWithEmailStatus, true);
+          const refreshedAfterMail = await fetchEmployeesFromFirestore();
+          setEmployees(refreshedAfterMail);
         }
 
         if (autoDownloadPdfOnSave) {
@@ -1050,6 +1080,19 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
         <button
           type="button"
+          onClick={() => switchAdminTab('mail_logs')}
+          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
+            activeTab === 'mail_logs'
+              ? 'bg-[#0B2545] text-white shadow-sm'
+              : 'text-slate-700 hover:text-slate-950'
+          }`}
+        >
+          <Mail className="w-4 h-4 text-emerald-500" />
+          <span>Logs emails (Collection mail)</span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => switchAdminTab('json')}
           className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
             activeTab === 'json'
@@ -1097,6 +1140,8 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           }}
         />
       )}
+
+      {activeTab === 'mail_logs' && <EmailLogsSection />}
 
       {feedback && (
         <div
@@ -1823,16 +1868,25 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                 </div>
               </div>
 
-              {/* Row 3: Département (12 départements sans doublon + 3 sous-rubriques) + Poste occupé + Type de contrat */}
+              {/* Row 3: Département (12 départements sans doublon + postes possibles avec 6 responsabilités chacun) + Poste occupé + Type de contrat */}
               <div className="space-y-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200">
                 <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
                   <div className="sm:col-span-12">
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Département (Affiche les 6 sous-rubriques / missions types pré-remplies) *
+                      Département (Affiche la liste des postes possibles et les 6 principales responsabilités du poste) *
                     </label>
                     <select
                       value={empForm.departement}
-                      onChange={(e) => setEmpForm({ ...empForm, departement: e.target.value })}
+                      onChange={(e) => {
+                        const newDept = e.target.value;
+                        const deptObj = findDepartmentDefinition(newDept);
+                        const firstPoste = deptObj?.postesDetail?.[0]?.titre || empForm.poste;
+                        setEmpForm({
+                          ...empForm,
+                          departement: newDept,
+                          poste: firstPoste
+                        });
+                      }}
                       className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-bold bg-white text-[#0B2545]"
                     >
                       {getDeduplicatedDepartmentsList(employees.map((e) => e.departement)).map(
@@ -1846,24 +1900,65 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  {(
-                    findDepartmentDefinition(empForm.departement) || OFFICIAL_DEPARTMENTS[1]
-                  ).missions.map((mission, idx) => (
-                    <div
-                      key={idx}
-                      className="text-[11px] bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-slate-700"
-                    >
-                      <strong className="text-amber-600 font-mono mr-1">{idx + 1}.</strong>
-                      {mission}
-                    </div>
-                  ))}
+                {/* Liste des postes possibles pour ce département */}
+                <div className="space-y-1.5">
+                  <span className="text-[11px] font-bold text-[#0B2545] block">
+                    Postes possibles du département (cliquer pour sélectionner le poste et ses 6 responsabilités) :
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(
+                      findDepartmentDefinition(empForm.departement) || OFFICIAL_DEPARTMENTS[1]
+                    ).postesDetail.map((pItem) => {
+                      const isActive =
+                        empForm.poste.trim().toLowerCase() === pItem.titre.toLowerCase();
+                      return (
+                        <button
+                          key={pItem.titre}
+                          type="button"
+                          onClick={() => setEmpForm({ ...empForm, poste: pItem.titre })}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors ${
+                            isActive
+                              ? 'bg-[#0B2545] text-white border-[#0B2545]'
+                              : 'bg-white text-slate-700 border-slate-300 hover:border-[#0B2545]'
+                          }`}
+                        >
+                          {pItem.titre}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 6 principales responsabilités/missions du poste sélectionné */}
+                <div className="space-y-1.5 pt-1">
+                  <span className="text-[11px] font-bold text-amber-800 block">
+                    6 Principales responsabilités / missions du poste «{' '}
+                    {findPosteDefinition(empForm.poste, empForm.departement)?.poste.titre ||
+                      empForm.poste ||
+                      'Poste sélectionné'}{' '}
+                    » :
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {getMissionsForPosteOrDepartment(empForm.poste, empForm.departement).map(
+                      (mission, idx) => (
+                        <div
+                          key={idx}
+                          className="text-[11px] bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-slate-700"
+                        >
+                          <strong className="text-amber-600 font-mono mr-1">
+                            • {idx + 1}.
+                          </strong>
+                          {mission}
+                        </div>
+                      )
+                    )}
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 pt-1">
                   <div className="sm:col-span-7">
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Poste occupé (Article II) *
+                      Poste occupé (Article II — sélection ou saisie libre) *
                     </label>
                     <input
                       type="text"

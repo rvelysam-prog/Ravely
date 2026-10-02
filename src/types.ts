@@ -51,6 +51,8 @@ export interface Employee {
   date_signature?: string;
   date_etablissement?: string;
   emailEnvoye?: boolean;
+  emailError?: string;
+  mailDocId?: string;
   signature_url?: string;
   cachet_url?: string;
   filigrane_url?: string;
