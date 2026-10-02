@@ -2749,7 +2749,7 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
                 </label>
                 <div className="min-h-[140px] p-4 rounded-xl border border-dashed border-amber-400 bg-white text-black flex flex-col justify-center">
                   <div
-                    className="text-xs sm:text-sm leading-relaxed space-y-1"
+                    className="text-xs sm:text-sm leading-relaxed space-y-1 break-words overflow-hidden [overflow-wrap:anywhere] [word-break:break-word]"
                     dangerouslySetInnerHTML={{
                       __html: resolveSignatureSalarieHtmlVariables(signatureSalarieHtml, {
                         nom_complet: previewData.nom_complet,
@@ -3069,13 +3069,14 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
                 </p>
               </div>
 
-              {/* Bloc Signatures Gauche & Droite */}
+              {/* Bloc Signatures Gauche & Droite — Strictement côte à côte, le nom du salarié restant confiné dans sa propre colonne */}
               <div className="pt-6 grid grid-cols-2 gap-6 items-start">
-                <div className="space-y-2">
+                {/* Colonne Gauche : Employeur (Atlantic Transport Ltd.) */}
+                <div className="w-full min-w-0 space-y-2 break-words text-left">
                   <div className="font-bold text-xs sm:text-sm">
                     Pour Atlantic Transport Ltd.
                   </div>
-                  <div className="text-sm sm:text-base uppercase tracking-wide">
+                  <div className="text-sm sm:text-base uppercase tracking-wide break-words">
                     {previewData.manager || 'ANTOINE FORESTIN'}
                   </div>
                   <div className="relative pt-4 min-h-[115px]">
@@ -3124,9 +3125,10 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
                   </div>
                 </div>
 
-                <div className="space-y-2 text-right sm:text-left sm:pl-8">
+                {/* Colonne Droite : Salarié (Strictement cantonnée dans sa propre colonne, retour à la ligne automatique sans empiéter ni passer sous l'employeur) */}
+                <div className="w-full min-w-0 space-y-2 text-left pl-2 sm:pl-4 break-words overflow-hidden">
                   <div
-                    className="text-xs sm:text-sm leading-relaxed space-y-1 rounded-lg p-1.5 -m-1.5 border border-transparent hover:border-amber-400/80 transition-colors"
+                    className="text-xs sm:text-sm leading-relaxed space-y-1 rounded-lg p-1.5 -m-1.5 border border-transparent hover:border-amber-400/80 transition-colors break-words overflow-hidden [overflow-wrap:anywhere] [word-break:break-word]"
                     title="Partie signature salarié (modifiable dans l'Éditeur de Texte Riche ci-dessus)"
                     dangerouslySetInnerHTML={{
                       __html: resolveSignatureSalarieHtmlVariables(signatureSalarieHtml, {

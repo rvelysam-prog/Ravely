@@ -1179,7 +1179,7 @@ const LS_SIGNATURE_SALARIE_HTML_KEY = 'atlantic_promesse_signature_salarie_html_
 
 export const DEFAULT_SIGNATURE_SALARIE_RICH_HTML =
   `<div><strong>Pour l'employer</strong></div>` +
-  `<div style="font-size: 16px; margin-top: 6px;">{{NOM_SALARIE}}</div>` +
+  `<div style="font-size: 16px; margin-top: 6px; word-break: break-word; overflow-wrap: anywhere;">{{NOM_SALARIE}}</div>` +
   `<div style="margin-top: 28px;"><strong>Signature : .........................</strong></div>`;
 
 export function getSavedSignatureSalarieHtml(): string {

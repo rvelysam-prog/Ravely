@@ -763,19 +763,29 @@ export async function generatePromesseEmbauchePdfDoc(
   // Bloc Signatures (Gauche : Pour Atlantic Transport Ltd. / ANTOINE FORESTIN + signature.png + cachet.png)
   const sigHeaderY = Math.max(salutationEndY + 19, 141);
 
+  // Colonne Gauche : Employeur (Atlantic Transport Ltd.) — Aligné à X = 25.5mm
+  const employeurColX = 25.5;
+  const employeurColW = 80;
+
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11.5);
   doc.setTextColor(0, 0, 0);
-  doc.text('Pour Atlantic Transport Ltd.', 25.5, sigHeaderY);
+  doc.text('Pour Atlantic Transport Ltd.', employeurColX, sigHeaderY);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(13.2);
-  doc.text((data.manager || 'ANTOINE FORESTIN').trim().toUpperCase(), 14.2, sigHeaderY + 10.5);
+  const managerName = (data.manager || 'ANTOINE FORESTIN').trim().toUpperCase();
+  const managerLines = doc.splitTextToSize(managerName, employeurColW) as string[];
+  let mY = sigHeaderY + 10.5;
+  for (const mLine of managerLines) {
+    doc.text(mLine, employeurColX, mY);
+    mY += 5.5;
+  }
 
-  const sigLineY = sigHeaderY + 37.5;
+  const sigLineY = Math.max(mY + 18, sigHeaderY + 37.5);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
-  doc.text('Signature : .........................', 25.5, sigLineY);
+  doc.text('Signature : .........................', employeurColX, sigLineY);
 
   // Utilisation DIRECTE des fichiers cachet.png et signature.png avec les réglages admin
   if (styledCachet.dataUrl) {
@@ -841,7 +851,12 @@ export async function generatePromesseEmbauchePdfDoc(
     }
   }
 
-  // Bloc Droite : Partie Signature Salarié (Modifiable via l'Éditeur de Texte Riche)
+  // Colonne Droite : Partie Signature Salarié (Strictement cantonnée dans sa propre colonne [126mm .. 194mm])
+  // Les 2 blocs restent rigoureusement côte à côte : le nom du salarié fait un retour à la ligne
+  // UNIQUEMENT à l'intérieur de sa colonne (largeur max 68mm) sans jamais passer sous l'employeur.
+  const salarieColX = 126;
+  const salarieColW = 68;
+
   const rawSalarieSigHtml =
     (data.signature_salarie_html && data.signature_salarie_html.trim()) ||
     getSavedSignatureSalarieHtml() ||
@@ -851,19 +866,29 @@ export async function generatePromesseEmbauchePdfDoc(
     rawSalarieSigHtml.replace(/\s+/g, ' ').trim() ===
     DEFAULT_SIGNATURE_SALARIE_RICH_HTML.replace(/\s+/g, ' ').trim();
 
+  let salarieEndY = sigLineY;
+
   if (isDefaultSalarieSig) {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(11.5);
     doc.setTextColor(0, 0, 0);
-    doc.text("Pour l'employer", 144.5, sigHeaderY);
+    doc.text("Pour l'employer", salarieColX, sigHeaderY);
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(13.2);
-    doc.text(nomCompletUpper, 144, sigHeaderY + 10.5);
+    // Découpage automatique du nom long en lignes confinées dans salarieColW (68mm)
+    const nameLines = doc.splitTextToSize(nomCompletUpper, salarieColW) as string[];
+    let nY = sigHeaderY + 10.5;
+    for (const nLine of nameLines) {
+      doc.text(nLine, salarieColX, nY);
+      nY += 5.5;
+    }
 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(10);
-    doc.text('Signature : .........................', 150, sigLineY);
+    const finalSigLineY = Math.max(nY + 14, sigLineY);
+    doc.text('Signature : .........................', salarieColX, finalSigLineY);
+    salarieEndY = finalSigLineY;
   } else {
     const resolvedHtml = resolveSignatureSalarieHtmlVariables(rawSalarieSigHtml, {
       nom_complet: nomCompletUpper,
@@ -873,11 +898,17 @@ export async function generatePromesseEmbauchePdfDoc(
       ni: niValue,
       matricule: data.matricule
     });
-    renderRichSignatureSalarieBlockToPdf(doc, resolvedHtml, 128, sigHeaderY, 68);
+    salarieEndY = renderRichSignatureSalarieBlockToPdf(
+      doc,
+      resolvedHtml,
+      salarieColX,
+      sigHeaderY,
+      salarieColW
+    );
   }
 
   // Mention "Fait en double exemplaire"
-  const doubleExY = Math.max(sigLineY + 34.5, 213.5);
+  const doubleExY = Math.max(sigLineY + 34.5, salarieEndY + 18, 213.5);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
   doc.text('Fait en double exemplaire', 105, doubleExY, { align: 'center' });
@@ -1024,7 +1055,7 @@ function renderRichSignatureSalarieBlockToPdf(
   zoneX: number,
   startY: number,
   zoneW: number
-) {
+): number {
   if (typeof DOMParser === 'undefined') {
     const plain = html
       .replace(/<br\s*\/?>/gi, '\n')
@@ -1040,7 +1071,7 @@ function renderRichSignatureSalarieBlockToPdf(
       doc.text(l, zoneX, y);
       y += 5.5;
     }
-    return;
+    return y;
   }
 
   const parsed = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html');
@@ -1236,18 +1267,38 @@ function renderRichSignatureSalarieBlockToPdf(
 
     // Split textRuns into word tokens so long lines wrap cleanly within zoneW
     const tokens: RichTextRun[] = [];
+    const effectiveMaxW = line.isBullet ? zoneW - 6 : zoneW;
+
     for (const run of textRuns) {
       const parts = run.text.split(/(\s+)/);
       for (const p of parts) {
         if (!p) continue;
-        tokens.push({ ...run, text: p });
+        const fontStyle =
+          run.bold && run.italic ? 'bolditalic' : run.bold ? 'bold' : run.italic ? 'italic' : 'normal';
+        doc.setFont(run.fontFamily, fontStyle);
+        doc.setFontSize(run.fontSizePt);
+        const tokW = doc.getTextWidth(p);
+        // Sécurité mot ultra-long : s'il dépasse à lui seul la largeur de la colonne, le scinder
+        if (tokW > effectiveMaxW && p.trim().length > 1) {
+          let chunk = '';
+          for (const char of p) {
+            if (doc.getTextWidth(chunk + char) > effectiveMaxW && chunk.length > 0) {
+              tokens.push({ ...run, text: chunk });
+              chunk = char;
+            } else {
+              chunk += char;
+            }
+          }
+          if (chunk) tokens.push({ ...run, text: chunk });
+        } else {
+          tokens.push({ ...run, text: p });
+        }
       }
     }
 
     const wrappedRows: RichTextRun[][] = [];
     let activeRow: RichTextRun[] = [];
     let activeRowW = 0;
-    const effectiveMaxW = line.isBullet ? zoneW - 6 : zoneW;
 
     for (const tok of tokens) {
       const fontStyle =
@@ -1283,7 +1334,8 @@ function renderRichSignatureSalarieBlockToPdf(
         if (seg.fontSizePt > maxPt) maxPt = seg.fontSizePt;
       }
 
-      let xCursor = zoneX + 14;
+      // xCursor démarre STRICTEMENT à zoneX (sans décalage +14) afin de rester cantonné dans sa colonne
+      let xCursor = zoneX;
       if (line.align === 'center') {
         xCursor = zoneX + Math.max(0, (zoneW - rowWidth) / 2);
       } else if (line.align === 'right') {
@@ -1328,4 +1380,6 @@ function renderRichSignatureSalarieBlockToPdf(
       cursorY += Math.max(5.5, maxPt * 0.48);
     }
   }
+
+  return cursorY;
 }
