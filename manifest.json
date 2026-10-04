@@ -1,0 +1,27 @@
+{
+  "background_color": "#d6d6d2",
+  "description": "ATLANTIC TRANSPORT LTD à Surrey, BC, Canada. Transport Multimodal Global, Solutions d'Entreposage &amp; Gestion de la Supply Chain, Commission de Transport &amp; Formalités Douanières.",
+  "dir": "ltr",
+  "display": "standalone",
+  "name": "atlantictransport-ltd-int-ca.netlify",
+  "orientation": "any",
+  "scope": "/",
+  "short_name": "atlantictransport-ltd-int-ca.netlify",
+  "start_url": "/",
+  "theme_color": "#9fad30",
+  "icons": [
+    {
+      "src": "https://atlantictransport-ltd-int-ca.netlify.app/favicon.ico",
+      "type": "image/x-icon",
+      "isSquare": false,
+      "isPng": false,
+      "isWebp": false,
+      "isJpg": false,
+      "width": 0,
+      "is512x512": false,
+      "is256x256": false,
+      "is192x192": false
+    }
+  ],
+  "id": "akon42"
+}
