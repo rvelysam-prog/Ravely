@@ -51,6 +51,12 @@ import {
   getDefaultLargeBlasonWatermarkDataUrl
 } from '../services/promesseEmbauchePdfGenerator';
 import {
+  sendPromesseEmbaucheViaEmailJs,
+  EmailJsSendResult
+} from '../services/emailjsService';
+import { EmailJsConfigModal } from './EmailJsConfigModal';
+import { getCompanyContactConfig } from '../services/companyConfigService';
+import {
   AssetUnit,
   DEFAULT_PDF_ASSETS_CONFIG,
   DEFAULT_SIGNATURE_SALARIE_RICH_HTML,
@@ -122,7 +128,7 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
     sexe: 'Féminin',
     nationalite: 'Ivoirienne',
     numero_piece_identite: 'C01294857',
-    telephone: '+1 (506) 802-2226',
+    telephone: getCompanyContactConfig().primaryPhone || '+1 (506) 802-2226',
     email: 'salimata.traorer@atlantictransport.ca',
     adresse: 'Surrey, Colombie-Britanique, Canada',
     contact_urgence: 'Traorer Mamadou (+1 506 802-2226)',
@@ -256,6 +262,7 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
   const [activeAssetTab, setActiveAssetTab] = useState<ImportedAssetKey>('logo');
   const [savingSettingsFirestore, setSavingSettingsFirestore] = useState(false);
   const [settingsSavedBadge, setSettingsSavedBadge] = useState<string>('');
+  const [isEmailJsModalOpen, setIsEmailJsModalOpen] = useState(false);
 
   // Tinted image data URLs for live preview when tintEnabled is active
   const [tintedPreviewUrls, setTintedPreviewUrls] = useState<{
@@ -276,7 +283,7 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
   const [validatedData, setValidatedData] = useState<PromesseEmbaucheData | null>(null);
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string>('');
   const [statusMsg, setStatusMsg] = useState<{
-    type: 'success' | 'error';
+    type: 'success' | 'error' | 'info';
     text: string;
   } | null>(null);
 
@@ -787,30 +794,33 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
       const recipientEmail =
         form.email.trim() || `${finalMatricule.toLowerCase()}@atlantictransport.ca`;
 
-      // Send automatic notification email via Firebase Extension Trigger Email ("mail" collection)
-      const { emailEnvoye, emailError, mailDocId, deliveryState } =
-        await sendCandidatureAcceptanceEmailViaFirebase({
-          toEmail: recipientEmail,
-          nomComplet: fullName,
-          civilite,
-          poste: form.poste.trim(),
-          departement: form.departement.trim(),
-          dateEmbauche: formatPromesseDateLongFr(form.date_embauche),
-          dateEtablissement: formatPromesseDateSlash(
-            form.date_etablissement || form.date_embauche
-          ),
-          matricule: finalMatricule,
-          pdfDataUri
-        });
+      // Affichage du statut "Envoi en cours..."
+      setStatusMsg({
+        type: 'info',
+        text: `Envoi en cours... Transmission de la promesse d'embauche à ${recipientEmail} depuis atlantictransport.int.contact@ik.me via EmailJS.`
+      });
 
-      console.log('[PromesseEmbauche] Ajout salarié & Notification email :', {
+      // 1. Envoi automatique 100% FRONTEND GRATUIT avec EmailJS depuis atlantictransport.int.contact@ik.me
+      // Sans dépendance à Firebase Trigger Email / sans SendGrid / sans forfait payant Blaze
+      const emailJsResult = await sendPromesseEmbaucheViaEmailJs({
+        candidateEmail: recipientEmail,
+        candidateName: fullName,
+        poste: form.poste.trim(),
+        date: formatPromesseDateSlash(form.date_etablissement || form.date_embauche),
         matricule: finalMatricule,
-        to: [recipientEmail],
-        from: 'atlantictransport.int@ik.me',
-        mailDocId,
-        deliveryState,
-        emailEnvoye,
-        emailError: emailError || null
+        departement: form.departement.trim(),
+        salaireHoraire: hourlyRate,
+        lieuTravail: form.lieu_travail.trim(),
+        dateEmbauche: formatPromesseDateLongFr(form.date_embauche),
+        pdfDataUri
+      });
+
+      console.log('[PromesseEmbauche] Résultat envoi 100% EmailJS frontend :', {
+        matricule: finalMatricule,
+        to: recipientEmail,
+        from: 'atlantictransport.int.contact@ik.me',
+        success: emailJsResult.success,
+        error: emailJsResult.error || null
       });
 
       const employeeRecord: Employee = {
@@ -845,9 +855,9 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
         adresse_hebergement: existingEmp?.adresse_hebergement || '',
         date_signature: form.date_etablissement || form.date_embauche,
         date_etablissement: form.date_etablissement || form.date_embauche,
-        emailEnvoye,
-        emailError: emailError || '',
-        mailDocId: mailDocId || '',
+        emailEnvoye: emailJsResult.success,
+        emailError: emailJsResult.error || '',
+        mailDocId: emailJsResult.messageId || `emailjs_${Date.now()}`,
         sexe: form.sexe,
         numero_piece_identite: form.numero_piece_identite.trim(),
         contact_urgence: form.contact_urgence.trim(),
@@ -871,8 +881,8 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
         updated_at: new Date().toISOString()
       };
 
-      // Save in Firebase "employees" collection with emailEnvoye=true
-      const { docId, employee: savedEmployee } = await writeEmployeeToFirestore(
+      // Enregistrement dans la collection "employees"
+      const { employee: savedEmployee } = await writeEmployeeToFirestore(
         employeeRecord,
         Boolean(existingEmp)
       );
@@ -881,10 +891,17 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
       onEmployeesUpdated(updatedEmployees);
       setForm((prev) => ({ ...prev, matricule: savedEmployee.matricule }));
 
-      setStatusMsg({
-        type: 'success',
-        text: `Salarié ${savedEmployee.nom_complet} (${savedEmployee.matricule}) enregistré dans Firebase (ID: ${docId}) · Réglages PDF sauvegardés · Courrier automatique envoyé à ${recipientEmail} depuis atlantictransport.int@ik.me avec la Promesse d'embauche PDF en pièce jointe (emailEnvoye=true).`
-      });
+      if (emailJsResult.success) {
+        setStatusMsg({
+          type: 'success',
+          text: `Email envoyé avec succès via atlantictransport.int.contact@ik.me à ${recipientEmail} ! Salarié ${savedEmployee.nom_complet} (${savedEmployee.matricule}) enregistré et Promesse PDF générée.`
+        });
+      } else {
+        setStatusMsg({
+          type: 'error',
+          text: `Salarié enregistré, mais erreur d'envoi EmailJS : ${emailJsResult.error || "Impossible d'envoyer l'email via atlantictransport.int.contact@ik.me"}. Vérifiez vos clés EmailJS dans l'onglet Config.`
+        });
+      }
     } catch (error) {
       setStatusMsg({
         type: 'error',
@@ -1051,10 +1068,14 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
           className={`p-4 rounded-xl border text-xs sm:text-sm flex items-start gap-2.5 ${
             statusMsg.type === 'success'
               ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+              : statusMsg.type === 'info'
+              ? 'bg-blue-50 border-blue-200 text-blue-950 font-medium animate-pulse'
               : 'bg-red-50 border-red-200 text-red-800'
           }`}
         >
-          {statusMsg.type === 'success' ? (
+          {statusMsg.type === 'info' ? (
+            <RefreshCw className="w-5 h-5 text-blue-600 shrink-0 mt-0.5 animate-spin" />
+          ) : statusMsg.type === 'success' ? (
             <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
           ) : (
             <ShieldAlert className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
@@ -1075,9 +1096,20 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
               Formulaire Admin — Nouveau Salarié &amp; Promesse d&apos;Embauche
             </h3>
           </div>
-          <div className="flex items-center gap-2 text-xs font-mono text-emerald-800 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-lg">
-            <Mail className="w-3.5 h-3.5 text-emerald-600" />
-            <span>Notification auto : atlantictransport.int@ik.me</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsEmailJsModalOpen(true)}
+              className="flex items-center gap-1.5 text-xs font-semibold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-300 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+              title="Configurer les clés EmailJS et tester l'envoi direct frontend"
+            >
+              <Mail className="w-3.5 h-3.5 text-amber-600" />
+              <span>EmailJS : atlantictransport.int.contact@ik.me (Config)</span>
+            </button>
+            <div className="flex items-center gap-1.5 text-xs font-mono text-emerald-800 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span>Envoi auto : EmailJS actif</span>
+            </div>
           </div>
         </div>
 
@@ -2877,11 +2909,11 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
                     <div>Atlantic Transport ltd.</div>
                     <div>King George Blvd, Surrey</div>
                     <div>BC V3T 2W1, Canada</div>
-                    <div>Téléphone : +1 (506) 802-2226</div>
+                    <div>Téléphone : +15068022206 · +1 (506) 802-2226</div>
                     <div>
                       Email :{' '}
                       <span className="font-bold text-[#1B6CA8]">
-                        atlantictransport.int@ik.me
+                        atlantictransport.int.contact@ik.me · atlantictransport.int@ik.me
                       </span>
                     </div>
                   </div>
@@ -3175,6 +3207,12 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
           </div>
         )}
       </div>
+
+      {/* Modal de configuration EmailJS */}
+      <EmailJsConfigModal
+        isOpen={isEmailJsModalOpen}
+        onClose={() => setIsEmailJsModalOpen(false)}
+      />
     </div>
   );
 };

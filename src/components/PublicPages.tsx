@@ -750,47 +750,73 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
               <div className="flex items-start gap-3">
                 <Phone className="w-5 h-5 text-[#F59E0B] shrink-0 mt-0.5" />
-                <div>
-                  <span className="block text-xs text-gray-400">Téléphone / WhatsApp</span>
-                  <a
-                    href={`tel:${settings.phone.replace(/[^+\d]/g, '')}`}
-                    className="font-mono tabular-nums font-bold text-[#F59E0B] hover:underline"
-                  >
-                    {settings.phone}
-                  </a>
+                <div className="space-y-1">
+                  <span className="block text-xs text-gray-400">Téléphones Directs (Appel &amp; WhatsApp)</span>
+                  <div className="flex flex-wrap items-center gap-x-2 font-mono tabular-nums">
+                    <a
+                      href="tel:+15068022206"
+                      className="font-bold text-[#F59E0B] hover:underline text-base"
+                      title="Téléphone principal"
+                    >
+                      +15068022206
+                    </a>
+                    <span className="text-xs text-[#D4A017] uppercase font-semibold">(Principal)</span>
+                    <span className="text-gray-500">·</span>
+                    <a
+                      href="tel:+15068022226"
+                      className="text-gray-300 hover:text-white hover:underline text-sm"
+                      title="Numéro secondaire"
+                    >
+                      +1 (506) 802-2226
+                    </a>
+                  </div>
                 </div>
               </div>
 
               <div className="flex items-start gap-3">
                 <Mail className="w-5 h-5 text-[#F59E0B] shrink-0 mt-0.5" />
-                <div>
-                  <span className="block text-xs text-gray-400">E-mail Officiel</span>
-                  <a
-                    href={`mailto:${settings.email}`}
-                    className="font-medium text-white hover:text-[#F59E0B] break-all"
-                  >
-                    {settings.email}
-                  </a>
+                <div className="space-y-1">
+                  <span className="block text-xs text-gray-400">Adresses E-mails Officielles</span>
+                  <div className="space-y-1">
+                    <div>
+                      <a
+                        href="mailto:atlantictransport.int.contact@ik.me"
+                        className="font-bold text-[#F59E0B] hover:underline break-all block text-sm"
+                        title="Email principal"
+                      >
+                        atlantictransport.int.contact@ik.me <span className="text-xs text-amber-300 font-normal">(Principal &amp; Expéditeur officiel)</span>
+                      </a>
+                    </div>
+                    <div>
+                      <a
+                        href="mailto:atlantictransport.int@ik.me"
+                        className="text-gray-300 hover:text-white hover:underline break-all block text-xs"
+                        title="Email secondaire"
+                      >
+                        atlantictransport.int@ik.me (Secondaire)
+                      </a>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
 
             <div className="pt-4 border-t border-white/10 flex flex-col sm:flex-row gap-3">
               <a
-                href={`https://wa.me/${cleanWhatsapp}`}
+                href="https://wa.me/15068022206"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex-1 min-h-[44px] px-4 py-2.5 rounded-xl bg-[#F59E0B] hover:bg-[#D97706] text-gray-950 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-colors whitespace-nowrap"
               >
                 <MessageCircle className="w-4 h-4" />
-                <span>Écrire sur WhatsApp</span>
+                <span>Écrire sur WhatsApp (+15068022206)</span>
               </a>
               <a
-                href={`tel:${settings.phone.replace(/[^+\d]/g, '')}`}
+                href="tel:+15068022206"
                 className="flex-1 min-h-[44px] px-4 py-2.5 rounded-xl bg-white/10 text-white font-semibold text-xs sm:text-sm flex items-center justify-center gap-2 hover:bg-white/20 transition-colors whitespace-nowrap"
               >
                 <Phone className="w-4 h-4 text-[#F59E0B]" />
-                <span>Appeler maintenant</span>
+                <span>Appeler (+15068022206)</span>
               </a>
             </div>
           </div>

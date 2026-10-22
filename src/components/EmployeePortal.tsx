@@ -704,8 +704,8 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
                         <p>Atlantic Transport ltd.</p>
                         <p>King George Blvd, Surrey</p>
                         <p>BC V3T 2W1, Canada</p>
-                        <p>Téléphone: +1 (506) 802-2226</p>
-                        <p>Email : atlantictransport.int@ik.me</p>
+                        <p>Téléphone: +15068022206 · +1 (506) 802-2226</p>
+                        <p>Email : atlantictransport.int.contact@ik.me · atlantictransport.int@ik.me</p>
                       </div>
                     </div>
 

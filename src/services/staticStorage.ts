@@ -75,9 +75,11 @@ export const DEFAULT_SITE_SETTINGS: SiteSettings = {
   company_name: 'ATLANTIC TRANSPORT LTD',
   slogan: 'Le monde sans frontières, votre logistique sans limites.',
   address: 'King George Blvd, Surrey, BC V3T 2W1, Canada',
-  phone: '+1 (506) 802-2226',
-  whatsapp: '15068022226',
-  email: 'atlantictransport.int@ik.me',
+  phone: '+15068022206',
+  phone_secondary: '+1 (506) 802-2226',
+  whatsapp: '15068022206',
+  email: 'atlantictransport.int.contact@ik.me',
+  email_secondary: 'atlantictransport.int@ik.me',
   logo_url: '',
   services: [
     {

@@ -486,13 +486,13 @@ export async function generatePromesseEmbauchePdfDoc(
   doc.text('Atlantic Transport ltd.', 12.5, 33);
   doc.text('King George Blvd, Surrey', 12.5, 38);
   doc.text('BC V3T 2W1, Canada', 12.5, 43);
-  doc.text('Téléphone : +1 (506) 802-2226', 12.5, 48);
+  doc.text('Téléphone : +15068022206 · +1 (506) 802-2226', 12.5, 48);
   doc.text('Email : ', 12.5, 53);
 
   const emailPrefixW = doc.getTextWidth('Email : ');
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(27, 108, 168);
-  doc.text('atlantictransport.int@ik.me', 12.5 + emailPrefixW, 53);
+  doc.text('atlantictransport.int.contact@ik.me · atlantictransport.int@ik.me', 12.5 + emailPrefixW, 53);
 
   // Date d'établissement ("A Surrey, le [DATE]") & NE au centre
   doc.setFont('helvetica', 'bold');

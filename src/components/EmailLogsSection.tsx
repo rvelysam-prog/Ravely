@@ -10,7 +10,8 @@ import {
   Eye,
   FileText,
   Server,
-  ShieldCheck
+  ShieldCheck,
+  Key
 } from 'lucide-react';
 import {
   MailDeliveryState,
@@ -19,8 +20,7 @@ import {
   OFFICIAL_SENDER_EMAIL,
   deleteMailLogFromFirestore,
   fetchMailLogsFromFirestore,
-   retryMailDocumentInFirestore,
-  sendCandidatureAcceptanceEmailViaFirebase,
+  retryMailDocumentInFirestore,
   subscribeToMailLogsFirestore
 } from '../services/departmentsAndEmailService';
 import {
@@ -28,22 +28,40 @@ import {
   formatPromesseDateSlash,
   generatePromesseEmbauchePdfDataUri
 } from '../services/promesseEmbauchePdfGenerator';
+import {
+  sendPromesseEmbaucheViaEmailJs,
+  getLocalEmailJsLogs,
+  EmailJsSendResult
+} from '../services/emailjsService';
+import {
+  EMAILJS_PUBLIC_KEY,
+  EMAILJS_SERVICE_ID,
+  EMAILJS_TEMPLATE_ID,
+  EMAILJS_SENDER_EMAIL,
+  INFOMANIAK_SMTP_SETTINGS,
+  getEmailJsConfig,
+  EmailJsConfig
+} from '../config/emailjsConfig';
+import { EmailJsConfigModal } from './EmailJsConfigModal';
 
 export const EmailLogsSection: React.FC = () => {
   const [logs, setLogs] = useState<MailLogDocument[]>([]);
+  const [emailJsLogs, setEmailJsLogs] = useState<EmailJsSendResult[]>(() => getLocalEmailJsLogs());
   const [loading, setLoading] = useState<boolean>(true);
   const [stateFilter, setStateFilter] = useState<'ALL' | MailDeliveryState>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState<boolean>(false);
+  const [currentConfig, setCurrentConfig] = useState<EmailJsConfig>(() => getEmailJsConfig());
 
-  // Test Gmail form state (Point 5)
+  // Test Gmail form state
   const [testGmail, setTestGmail] = useState<string>('rvelysam@gmail.com');
   const [testNom, setTestNom] = useState<string>('SALIMATA TRAORER');
   const [testPoste, setTestPoste] = useState<string>('Préparatrice de Commande');
   const [sendingTest, setSendingTest] = useState<boolean>(false);
   const [feedback, setFeedback] = useState<{
-    type: 'success' | 'error' | 'warning';
+    type: 'success' | 'error' | 'warning' | 'info';
     text: string;
   } | null>(null);
 
@@ -67,6 +85,7 @@ export const EmailLogsSection: React.FC = () => {
     try {
       const fresh = await fetchMailLogsFromFirestore();
       setLogs(fresh);
+      setEmailJsLogs(getLocalEmailJsLogs());
     } finally {
       setLoading(false);
     }
@@ -83,7 +102,11 @@ export const EmailLogsSection: React.FC = () => {
     }
 
     setSendingTest(true);
-    setFeedback(null);
+    // Affiche "Envoi en cours..."
+    setFeedback({
+      type: 'info',
+      text: 'Envoi en cours...'
+    });
 
     try {
       const testMatricule = `EMP-2026-TEST${Math.floor(100 + Math.random() * 899)}`;
@@ -96,10 +119,10 @@ export const EmailLogsSection: React.FC = () => {
         sexe: 'Féminin',
         nationalite: 'Canadienne',
         numero_piece_identite: 'C01294857',
-        telephone: '+1 (506) 802-2226',
+        telephone: '+15068022206',
         email: testGmail.trim(),
         adresse: 'Surrey, Colombie-Britanique, Canada',
-        contact_urgence: 'Contact Urgence (+1 506 802-2226)',
+        contact_urgence: 'Contact Urgence (+15068022206)',
         poste: testPoste.trim(),
         departement: OFFICIAL_DEPARTMENTS[1].name,
         manager: 'ANTOINE FORESTIN',
@@ -114,40 +137,35 @@ export const EmailLogsSection: React.FC = () => {
         responsabilites: OFFICIAL_DEPARTMENTS[1].missions
       });
 
-      const result = await sendCandidatureAcceptanceEmailViaFirebase({
-        toEmail: testGmail.trim(),
-        nomComplet: testNom.trim().toUpperCase(),
-        civilite: 'Madame',
+      // 100% EmailJS frontend sans Firebase Trigger Email / sans SendGrid / sans forfait payant Blaze
+      const result = await sendPromesseEmbaucheViaEmailJs({
+        candidateEmail: testGmail.trim(),
+        candidateName: testNom.trim().toUpperCase(),
         poste: testPoste.trim(),
+        date: formatPromesseDateSlash(todayIso),
+        matricule: testMatricule,
         departement: OFFICIAL_DEPARTMENTS[1].name,
         dateEmbauche: formatPromesseDateLongFr('2027-01-04'),
-        dateEtablissement: formatPromesseDateSlash(todayIso),
-        matricule: testMatricule,
         pdfDataUri
       });
 
-      await handleManualRefresh();
+      setEmailJsLogs(getLocalEmailJsLogs());
 
-      if (result.deliveryState === 'SUCCESS') {
+      if (result.success) {
         setFeedback({
           type: 'success',
-          text: `Email de test envoyé avec succès à ${testGmail.trim()} (ID doc mail : ${result.mailDocId}, delivery.state = SUCCESS). Pensez à vérifier le dossier Spams / Courrier indésirable de Gmail.`
-        });
-      } else if (result.deliveryState === 'PENDING') {
-        setFeedback({
-          type: 'warning',
-          text: `Document créé dans la collection Firestore « mail » (ID : ${result.mailDocId}, to: ["${testGmail.trim()}"], from: "${OFFICIAL_SENDER_EMAIL}") avec le PDF en base64. État actuel : delivery.state = PENDING. Si l'email n'arrive pas dans la boîte de réception ou les Spams Gmail, vérifiez la configuration SMTP (mail.infomaniak.com) / SendGrid de l'extension Trigger Email ci-dessous.`
+          text: `Email envoyé avec succès via ${EMAILJS_SENDER_EMAIL}`
         });
       } else {
         setFeedback({
           type: 'error',
-          text: `Échec lors du traitement de l'email (ID : ${result.mailDocId}, delivery.state = ERROR) : ${result.emailError}`
+          text: `Erreur d’envoi via ${EMAILJS_SENDER_EMAIL} : ${result.error || result.statusText || 'Échec de transmission EmailJS'}`
         });
       }
     } catch (err) {
       setFeedback({
         type: 'error',
-        text: err instanceof Error ? err.message : String(err)
+        text: `Erreur d’envoi via ${EMAILJS_SENDER_EMAIL} : ${err instanceof Error ? err.message : String(err)}`
       });
     } finally {
       setSendingTest(false);
@@ -231,24 +249,34 @@ export const EmailLogsSection: React.FC = () => {
           <div className="space-y-1">
             <div className="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-wider text-[#0B2545] bg-blue-50 border border-blue-200 px-2.5 py-1 rounded-md font-semibold">
               <Server className="w-3.5 h-3.5 text-blue-700" />
-              <span>Firebase Extension Trigger Email · Collection « mail »</span>
+              <span>Solution 100% EmailJS Frontend Gratuit · SMTP Infomaniak</span>
             </div>
             <h2 className="font-display font-bold text-xl sm:text-2xl text-[#0B2545]">
-              Logs Emails &amp; Suivi de Livraison (<code className="font-mono text-base">delivery.state</code>)
+              Suivi des Envois &amp; Configuration EmailJS
             </h2>
             <p className="text-xs sm:text-sm text-slate-600">
-              Surveillance en temps réel de la collection Firestore <code className="font-mono bg-slate-100 px-1.5 py-0.5 rounded">mail</code> : statut <strong className="text-amber-700">PENDING</strong> / <strong className="text-emerald-700">SUCCESS</strong> / <strong className="text-red-700">ERROR</strong>, vérification des pièces jointes PDF en base64 et diagnostic SMTP (<code className="font-mono">atlantictransport.int@ik.me</code>).
+              Envoi automatique direct depuis le frontend via EmailJS (<code className="font-mono bg-slate-100 px-1.5 py-0.5 rounded">emailjs-com</code>) sans dépendance à Firebase Trigger Email, sans SendGrid et sans abonnement payant Blaze. Expéditeur officiel : <strong className="text-[#0B2545] font-mono">{EMAILJS_SENDER_EMAIL}</strong> (connecté à Infomaniak <code className="font-mono">{INFOMANIAK_SMTP_SETTINGS.host}:{INFOMANIAK_SMTP_SETTINGS.port}</code>).
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={handleManualRefresh}
-            className="min-h-[42px] px-4 py-2 rounded-xl border border-slate-300 bg-slate-50 hover:bg-slate-100 text-xs sm:text-sm font-semibold text-slate-700 inline-flex items-center gap-2 self-start lg:self-auto"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            <span>Actualiser la collection « mail »</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2 self-start lg:self-auto">
+            <button
+              type="button"
+              onClick={() => setIsConfigModalOpen(true)}
+              className="min-h-[42px] px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs sm:text-sm font-bold inline-flex items-center gap-2 cursor-pointer shadow-xs transition-colors"
+            >
+              <Key className="w-4 h-4" />
+              <span>Configurer EmailJS</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleManualRefresh}
+              className="min-h-[42px] px-4 py-2 rounded-xl border border-slate-300 bg-slate-50 hover:bg-slate-100 text-xs sm:text-sm font-semibold text-slate-700 inline-flex items-center gap-2 cursor-pointer transition-colors"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              <span>Actualiser</span>
+            </button>
+          </div>
         </div>
 
         {/* Compteurs d'état delivery.state */}
@@ -259,15 +287,15 @@ export const EmailLogsSection: React.FC = () => {
           </div>
           <div className="p-3.5 rounded-xl bg-emerald-50/70 border border-emerald-200">
             <span className="text-xs text-emerald-800 font-semibold block">
-              delivery.state : SUCCESS
+              Envois réussis
             </span>
             <span className="text-2xl font-display font-bold text-emerald-700">
-              {countSuccess}
+              {countSuccess + emailJsLogs.filter((l) => l.success).length}
             </span>
           </div>
           <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200">
             <span className="text-xs text-amber-900 font-semibold block">
-              delivery.state : PENDING
+              En cours / PENDING
             </span>
             <span className="text-2xl font-display font-bold text-amber-700">
               {countPending}
@@ -275,44 +303,48 @@ export const EmailLogsSection: React.FC = () => {
           </div>
           <div className="p-3.5 rounded-xl bg-red-50/70 border border-red-200">
             <span className="text-xs text-red-800 font-semibold block">
-              delivery.state : ERROR
+              Erreurs signalées
             </span>
             <span className="text-2xl font-display font-bold text-red-700">{countError}</span>
           </div>
         </div>
 
-        {/* Vérification des paramètres de l'extension Trigger Email & SMTP ik.me / SendGrid */}
+        {/* Diagnostic Configuration 100% EmailJS & SMTP Infomaniak */}
         <div className="p-4 rounded-xl bg-slate-900 text-slate-100 space-y-2 text-xs">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2 font-bold text-amber-400">
               <ShieldCheck className="w-4 h-4" />
               <span>
-                Diagnostic Configuration Firebase Extension « Trigger Email (firestore-send-email) »
+                Diagnostic EmailJS 100% Client-Side (Sans SendGrid / Sans Firebase Trigger Email / Sans Blaze)
               </span>
             </div>
             <span className="font-mono text-[11px] text-emerald-400">
-              Règles Firestore /mail/&#123;mailId&#125; : Autorisées (Admin RH)
+              Statut : Actif (Client Frontend)
             </span>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1 text-[11px] font-mono text-slate-300">
             <div className="bg-slate-800/90 p-2.5 rounded-lg border border-slate-700">
-              <span className="text-slate-400 block">1. Collection &amp; Schéma :</span>
+              <span className="text-slate-400 block">1. Variables de Template EmailJS :</span>
               <span className="text-white font-semibold">
-                Collection : mail | to: [email] | message.subject | message.html | message.attachments (Base64)
-              </span>
-            </div>
-            <div className="bg-slate-800/90 p-2.5 rounded-lg border border-slate-700">
-              <span className="text-slate-400 block">2. Expéditeur &amp; Base Firestore :</span>
-              <span className="text-white font-semibold">
-                from : {OFFICIAL_SENDER_EMAIL}
+                Template ID : {currentConfig.templateId}
                 <br />
-                DB : ai-studio-atlantictranspor-cd8ee793...
+                Vars : &#123;&#123;nom_complet&#125;&#125;, &#123;&#123;matricule&#125;&#125;, &#123;&#123;poste&#125;&#125;, &#123;&#123;message_html&#125;&#125;, &#123;&#123;pdf_base64&#125;&#125;
               </span>
             </div>
             <div className="bg-slate-800/90 p-2.5 rounded-lg border border-slate-700">
-              <span className="text-slate-400 block">3. Paramètres SMTP ik.me / SendGrid :</span>
+              <span className="text-slate-400 block">2. Expéditeur Unique &amp; Identifiants :</span>
+              <span className="text-white font-semibold">
+                from_email : {EMAILJS_SENDER_EMAIL}
+                <br />
+                Service : {currentConfig.serviceId}
+              </span>
+            </div>
+            <div className="bg-slate-800/90 p-2.5 rounded-lg border border-slate-700">
+              <span className="text-slate-400 block">3. Serveur SMTP Infomaniak :</span>
               <span className="text-amber-300 font-semibold">
-                Serveur SMTP ik.me : mail.infomaniak.com (Port 465 SSL ou 587 TLS) ou SendGrid (smtp.sendgrid.net)
+                Host : {INFOMANIAK_SMTP_SETTINGS.host} (Port {INFOMANIAK_SMTP_SETTINGS.port})
+                <br />
+                Compte : {INFOMANIAK_SMTP_SETTINGS.user}
               </span>
             </div>
           </div>
@@ -328,18 +360,18 @@ export const EmailLogsSection: React.FC = () => {
           <div className="flex items-center gap-2">
             <Send className="w-4 h-4 text-[#0B2545]" />
             <h3 className="font-display font-bold text-base text-[#0B2545]">
-              Tester l&apos;envoi vers une adresse Gmail (avec Promesse d&apos;Embauche PDF en Base64)
+              Tester l&apos;envoi automatique d&apos;une Promesse d&apos;Embauche (avec PDF Base64)
             </h3>
           </div>
           <span className="text-xs text-slate-500">
-            Expéditeur : <strong className="font-mono text-slate-800">{OFFICIAL_SENDER_EMAIL}</strong> (Vérifiez aussi l&apos;onglet Spams / Promotions de Gmail)
+            Expéditeur unique : <strong className="font-mono text-slate-800">{EMAILJS_SENDER_EMAIL}</strong>
           </span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
           <div className="sm:col-span-4">
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Adresse Gmail destinataire (<code className="font-mono">to: [email]</code>) *
+              Adresse email destinataire (<code className="font-mono">to_email</code>) *
             </label>
             <input
               type="email"
@@ -381,10 +413,10 @@ export const EmailLogsSection: React.FC = () => {
             <button
               type="submit"
               disabled={sendingTest}
-              className="w-full min-h-[42px] px-4 py-2 rounded-xl bg-[#0B2545] hover:bg-[#134074] text-white text-xs font-bold inline-flex items-center justify-center gap-2 disabled:opacity-60"
+              className="w-full min-h-[42px] px-4 py-2 rounded-xl bg-[#0B2545] hover:bg-[#134074] text-white text-xs font-bold inline-flex items-center justify-center gap-2 disabled:opacity-60 cursor-pointer"
             >
               <Mail className="w-4 h-4 text-amber-400" />
-              <span>{sendingTest ? 'Envoi...' : 'Tester Gmail'}</span>
+              <span>{sendingTest ? 'Envoi en cours...' : 'Tester l’envoi'}</span>
             </button>
           </div>
         </div>
@@ -394,12 +426,16 @@ export const EmailLogsSection: React.FC = () => {
             className={`p-3.5 rounded-xl border text-xs sm:text-sm flex items-start gap-2.5 ${
               feedback.type === 'success'
                 ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                : feedback.type === 'info'
+                ? 'bg-blue-50 border-blue-200 text-blue-950 font-medium animate-pulse'
                 : feedback.type === 'warning'
                 ? 'bg-amber-50 border-amber-300 text-amber-950'
                 : 'bg-red-50 border-red-200 text-red-800'
             }`}
           >
-            {feedback.type === 'success' ? (
+            {feedback.type === 'info' ? (
+              <RefreshCw className="w-5 h-5 text-blue-600 shrink-0 mt-0.5 animate-spin" />
+            ) : feedback.type === 'success' ? (
               <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
             ) : (
               <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
@@ -618,6 +654,14 @@ export const EmailLogsSection: React.FC = () => {
           </div>
         )}
       </div>
+
+      <EmailJsConfigModal
+        isOpen={isConfigModalOpen}
+        onClose={() => {
+          setIsConfigModalOpen(false);
+          setCurrentConfig(getEmailJsConfig());
+        }}
+      />
     </div>
   );
 };

@@ -12,8 +12,10 @@ export interface SiteSettings {
   slogan: string;
   address: string;
   phone: string;
+  phone_secondary?: string;
   whatsapp: string;
   email: string;
+  email_secondary?: string;
   logo_url: string;
   services: ServiceItem[];
 }

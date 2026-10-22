@@ -24,7 +24,9 @@ import {
   Ban,
   ExternalLink,
   Lock,
-  QrCode
+  QrCode,
+  RefreshCw,
+  AlertTriangle
 } from 'lucide-react';
 import { ContactMessage, Employee, SiteSettings } from '../types';
 import { BrandLogo } from './BrandLogo';
@@ -79,8 +81,25 @@ import {
 } from '../services/departmentsAndEmailService';
 import { PromesseEmbaucheSection } from './PromesseEmbaucheSection';
 import { EmailLogsSection } from './EmailLogsSection';
+import { sendPromesseEmbaucheViaEmailJs } from '../services/emailjsService';
+import { EmailJsConfigModal } from './EmailJsConfigModal';
+import { Globe, CreditCard, Code, PhoneCall, Sparkles as SparklesIcon } from 'lucide-react';
+import { InfomaniakWebmailTab } from './admin/InfomaniakWebmailTab';
+import { EmailHtmlCodeGeneratorModal } from './admin/EmailHtmlCodeGeneratorModal';
+import { EmployeeBadgeGeneratorModal } from './admin/EmployeeBadgeGeneratorModal';
+import { CompanyContactSettingsModal } from './admin/CompanyContactSettingsModal';
+import { getCompanyContactConfig } from '../services/companyConfigService';
 
-type AdminTab = 'employees' | 'promesse' | 'mail_logs' | 'cms' | 'messages' | 'json';
+type AdminTab =
+  | 'employees'
+  | 'promesse'
+  | 'mail_logs'
+  | 'webmail'
+  | 'badges'
+  | 'email_code'
+  | 'cms'
+  | 'messages'
+  | 'json';
 
 function resolveInitialAdminTab(): AdminTab {
   if (typeof window === 'undefined') return 'employees';
@@ -91,6 +110,15 @@ function resolveInitialAdminTab(): AdminTab {
   }
   if (path.includes('/admin/logs-emails') || hash.includes('logs-emails')) {
     return 'mail_logs';
+  }
+  if (path.includes('/admin/webmail') || hash.includes('webmail')) {
+    return 'webmail';
+  }
+  if (path.includes('/admin/badges') || hash.includes('badges')) {
+    return 'badges';
+  }
+  if (path.includes('/admin/code-mail') || hash.includes('code-mail')) {
+    return 'email_code';
   }
   return 'employees';
 }
@@ -147,7 +175,10 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
   const [nextMatricule, setNextMatricule] = useState<string>(() => getNextMatricule());
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
-  const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [feedback, setFeedback] = useState<{
+    type: 'success' | 'error' | 'info';
+    text: string;
+  } | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
   const [generatingPdfId, setGeneratingPdfId] = useState<number | null>(null);
 
@@ -165,7 +196,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     civilite: 'Monsieur' as 'Monsieur' | 'Madame',
     nom_complet: '',
     email: '',
-    telephone: '+1 (506) 802-2226',
+    telephone: getCompanyContactConfig().primaryPhone || '+1 (506) 802-2226',
     adresse: '',
     date_naissance: '1990-05-15',
     nationalite: 'Canadienne',
@@ -242,6 +273,19 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
   // Password Reset Modal
   const [resetModalEmp, setResetModalEmp] = useState<Employee | null>(null);
   const [tempResetPassword, setTempResetPassword] = useState('');
+  const [isEmailJsModalOpen, setIsEmailJsModalOpen] = useState(false);
+
+  // Modals et états pour les nouveaux modules
+  const [isCompanyContactModalOpen, setIsCompanyContactModalOpen] = useState(false);
+  const [isEmailCodeModalOpen, setIsEmailCodeModalOpen] = useState(false);
+  const [isBadgeModalOpen, setIsBadgeModalOpen] = useState(false);
+  const [badgeTargetEmployee, setBadgeTargetEmployee] = useState<Employee | null>(null);
+  const [emailCodeTargetEmployee, setEmailCodeTargetEmployee] = useState<Employee | null>(null);
+  const [webmailInitialContent, setWebmailInitialContent] = useState<{
+    recipient?: string;
+    subject?: string;
+    htmlBody?: string;
+  } | undefined>(undefined);
 
   // Site CMS Editor State
   const [cmsForm, setCmsForm] = useState<SiteSettings>(settings);
@@ -557,6 +601,12 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
         setCachedContractPdf(savedEmp.matricule, pdfDataUri);
 
         if (!editingEmployee) {
+          // Affiche "Envoi en cours..."
+          setFeedback({
+            type: 'info',
+            text: 'Envoi en cours...'
+          });
+
           const posteMissions = getMissionsForPosteOrDepartment(
             savedEmp.poste,
             savedEmp.departement
@@ -589,40 +639,58 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             responsabilites: posteMissions
           });
 
-          const mailResult = await sendCandidatureAcceptanceEmailViaFirebase({
-            toEmail: savedEmp.email,
-            nomComplet: savedEmp.nom_complet,
-            civilite: savedEmp.civilite,
+          // Envoi direct automatique côté frontend avec EmailJS depuis atlantictransport.int.contact@ik.me
+          // 100% GRATUIT sans dépendance à Firebase Trigger Email / sans SendGrid / sans forfait Blaze
+          let ejsResult = await sendPromesseEmbaucheViaEmailJs({
+            candidateEmail: savedEmp.email,
+            candidateName: savedEmp.nom_complet,
             poste: savedEmp.poste,
-            departement: savedEmp.departement,
-            dateEmbauche: formatPromesseDateLongFr(savedEmp.date_embauche),
-            dateEtablissement: formatPromesseDateSlash(
+            date: formatPromesseDateSlash(
               savedEmp.date_etablissement || savedEmp.date_signature
             ),
             matricule: savedEmp.matricule,
+            departement: savedEmp.departement,
+            salaireHoraire: savedEmp.salaire_horaire || 22,
+            lieuTravail: savedEmp.lieu_travail,
+            dateEmbauche: formatPromesseDateLongFr(savedEmp.date_embauche),
             pdfDataUri: promessePdfDataUri
           });
 
-          console.log('[AdminBackoffice] Ajout salarié & création doc mail :', {
+          console.log('[AdminBackoffice] Ajout salarié & envoi 100% EmailJS :', {
             matricule: savedEmp.matricule,
-            to: [savedEmp.email],
-            from: 'atlantictransport.int@ik.me',
-            mailDocId: mailResult.mailDocId,
-            deliveryState: mailResult.deliveryState,
-            emailEnvoye: mailResult.emailEnvoye,
-            emailError: mailResult.emailError || null
+            to: savedEmp.email,
+            from: 'atlantictransport.int.contact@ik.me',
+            success: ejsResult.success,
+            error: ejsResult.error || null
           });
 
           // Met à jour le document salarié dans Firestore avec emailEnvoye, emailError et mailDocId
           const empWithEmailStatus: Employee = {
             ...savedEmp,
-            emailEnvoye: mailResult.emailEnvoye,
-            emailError: mailResult.emailError || '',
-            mailDocId: mailResult.mailDocId || ''
+            emailEnvoye: ejsResult.success,
+            emailError: ejsResult.error || '',
+            mailDocId: ejsResult.messageId || `emailjs_${Date.now()}`
           };
           await writeEmployeeToFirestore(empWithEmailStatus, true);
           const refreshedAfterMail = await fetchEmployeesFromFirestore();
           setEmployees(refreshedAfterMail);
+
+          if (ejsResult.success) {
+            setFeedback({
+              type: 'success',
+              text: 'Email envoyé avec succès via atlantictransport.int.contact@ik.me'
+            });
+          } else {
+            setFeedback({
+              type: 'error',
+              text: `Erreur d’envoi via atlantictransport.int.contact@ik.me : ${ejsResult.error || ejsResult.statusText || 'Échec d’envoi'}`
+            });
+          }
+        } else {
+          setFeedback({
+            type: 'success',
+            text: `Salarié ${savedEmp.nom_complet} (${savedEmp.matricule}) mis à jour dans Firestore (ID: ${docId}) et Contrat PDF (${savedEmp.type_contrat}) régénéré.`
+          });
         }
 
         if (autoDownloadPdfOnSave) {
@@ -636,13 +704,6 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       } catch (pdfErr) {
         console.error('Erreur lors de la génération du PDF:', pdfErr);
       }
-
-      setFeedback({
-        type: 'success',
-        text: editingEmployee
-          ? `Salarié ${savedEmp.nom_complet} (${savedEmp.matricule}) mis à jour dans Firestore (ID: ${docId}) et Contrat PDF (${savedEmp.type_contrat}) régénéré.`
-          : `Salarié ${savedEmp.nom_complet} (${savedEmp.matricule}) enregistré dans Firestore collection "employees" (ID: ${docId}) et Contrat PDF (${savedEmp.type_contrat}) généré !`
-      });
     } catch (error) {
       const readableError = formatReadableFirestoreError(error);
       console.error('Échec de l’enregistrement Firestore :', error);
@@ -986,6 +1047,26 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
         <div className="flex flex-wrap items-center gap-2.5">
           <button
             type="button"
+            onClick={() => setIsCompanyContactModalOpen(true)}
+            className="min-h-[44px] px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors whitespace-nowrap shadow-sm cursor-pointer"
+            title="Configurer les numéros de téléphone et emails de l'entreprise"
+          >
+            <PhoneCall className="w-4 h-4 text-sky-200" />
+            <span>Coordonnées Entreprise</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsEmailJsModalOpen(true)}
+            className="min-h-[44px] px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors whitespace-nowrap shadow-sm cursor-pointer"
+            title="Configurer les 3 clés EmailJS et tester l'envoi"
+          >
+            <Mail className="w-4 h-4" />
+            <span>EmailJS Frontend (Config)</span>
+          </button>
+
+          <button
+            type="button"
             onClick={handleExportEmployesJson}
             className="min-h-[44px] px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors whitespace-nowrap shadow-sm"
           >
@@ -1093,6 +1174,45 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
         <button
           type="button"
+          onClick={() => switchAdminTab('webmail')}
+          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
+            activeTab === 'webmail'
+              ? 'bg-[#0B2545] text-white shadow-sm'
+              : 'text-slate-700 hover:text-slate-950'
+          }`}
+        >
+          <Globe className="w-4 h-4 text-sky-400" />
+          <span>Navigateur &amp; Messagerie Infomaniak (VPN)</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => switchAdminTab('badges')}
+          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
+            activeTab === 'badges'
+              ? 'bg-[#0B2545] text-white shadow-sm'
+              : 'text-slate-700 hover:text-slate-950'
+          }`}
+        >
+          <CreditCard className="w-4 h-4 text-amber-400" />
+          <span>Cartes Professionnelles</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => switchAdminTab('email_code')}
+          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
+            activeTab === 'email_code'
+              ? 'bg-[#0B2545] text-white shadow-sm'
+              : 'text-slate-700 hover:text-slate-950'
+          }`}
+        >
+          <Code className="w-4 h-4 text-emerald-400" />
+          <span>Générateur Code Mail (HTML)</span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => switchAdminTab('json')}
           className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
             activeTab === 'json'
@@ -1143,22 +1263,178 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
       {activeTab === 'mail_logs' && <EmailLogsSection />}
 
+      {activeTab === 'webmail' && (
+        <InfomaniakWebmailTab initialEmailContent={webmailInitialContent} />
+      )}
+
+      {activeTab === 'badges' && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono uppercase text-amber-500 font-bold">
+                  Cartes &amp; Badges Salariés
+                </span>
+                <span className="text-xs bg-slate-100 px-2 py-0.5 rounded-full font-bold text-slate-700">
+                  {employees.length} salarié(s) disponible(s)
+                </span>
+              </div>
+              <h3 className="font-bold text-xl text-[#0B2545] mt-1">
+                Générateur de Carte Professionnelle Haute Définition
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-600 mt-1">
+                Générez, prévisualisez et imprimez les cartes professionnelles au format standard ISO avec QR Code dynamique scannable vers le portail personnel.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setBadgeTargetEmployee(employees[0] || null);
+                setIsBadgeModalOpen(true);
+              }}
+              className="px-5 py-2.5 rounded-xl bg-[#0B2545] hover:bg-[#143763] text-white font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm transition-colors whitespace-nowrap cursor-pointer"
+            >
+              <CreditCard className="w-4 h-4 text-amber-400" />
+              <span>Ouvrir l'Atelier Carte Salarié</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {employees.map((emp) => (
+              <div
+                key={emp.id}
+                className="bg-white rounded-2xl border border-slate-200 p-4 hover:border-amber-400 transition-colors shadow-2xs space-y-3"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-14 rounded-lg bg-slate-100 overflow-hidden shrink-0 border border-slate-200">
+                    <img
+                      src={emp.photo || emp.photo_url || ''}
+                      alt={emp.nom_complet}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <span className="font-mono text-xs font-bold text-amber-600 block">
+                      {emp.matricule}
+                    </span>
+                    <h4 className="font-bold text-sm text-[#0B2545] truncate">
+                      {emp.nom_complet}
+                    </h4>
+                    <p className="text-xs text-slate-500 truncate">{emp.poste}</p>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                  <span className="text-[11px] text-slate-400">
+                    {emp.type_contrat} · {emp.departement?.slice(0, 22)}...
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBadgeTargetEmployee(emp);
+                      setIsBadgeModalOpen(true);
+                    }}
+                    className="px-3 py-1 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100 text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    Voir la Carte Pro
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'email_code' && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono uppercase text-emerald-600 font-bold">
+                  Automatisation Messagerie &amp; Infomaniak
+                </span>
+              </div>
+              <h3 className="font-bold text-xl text-[#0B2545] mt-1">
+                Générateur de Code HTML (Promesse d'Embauche)
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-600 mt-1">
+                Générez le code source HTML ou le texte enrichi avec bouton 1-clic pour un collage immédiat dans le Webmail Infomaniak.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setEmailCodeTargetEmployee(employees[0] || null);
+                setIsEmailCodeModalOpen(true);
+              }}
+              className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm transition-colors whitespace-nowrap cursor-pointer"
+            >
+              <Code className="w-4 h-4" />
+              <span>Générer un Code HTML</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {employees.map((emp) => (
+              <div
+                key={emp.id}
+                className="bg-white rounded-2xl border border-slate-200 p-4 hover:border-emerald-400 transition-colors shadow-2xs space-y-3"
+              >
+                <div>
+                  <span className="font-mono text-xs font-bold text-amber-600 block">
+                    {emp.matricule}
+                  </span>
+                  <h4 className="font-bold text-sm text-[#0B2545] truncate">
+                    {emp.nom_complet}
+                  </h4>
+                  <p className="text-xs text-slate-500 truncate">{emp.poste}</p>
+                  <p className="text-xs text-slate-400 font-mono mt-0.5 truncate">{emp.email}</p>
+                </div>
+
+                <div className="pt-2 border-t border-slate-100 flex items-center justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEmailCodeTargetEmployee(emp);
+                      setIsEmailCodeModalOpen(true);
+                    }}
+                    className="px-3 py-1 rounded-lg bg-emerald-50 text-emerald-900 border border-emerald-200 hover:bg-emerald-100 text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    Générer Code Mail
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {feedback && (
         <div
           className={`p-4 rounded-xl border text-sm flex items-center justify-between gap-3 ${
             feedback.type === 'success'
               ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+              : feedback.type === 'info'
+              ? 'bg-blue-50 border-blue-200 text-blue-950 font-medium'
               : 'bg-red-50 border-red-200 text-red-800'
           }`}
         >
           <div className="flex items-center gap-2.5 break-all">
-            <CheckCircle2 className="w-5 h-5 shrink-0" />
+            {feedback.type === 'info' ? (
+              <RefreshCw className="w-5 h-5 shrink-0 animate-spin text-blue-600" />
+            ) : feedback.type === 'success' ? (
+              <CheckCircle2 className="w-5 h-5 shrink-0 text-emerald-600" />
+            ) : (
+              <AlertTriangle className="w-5 h-5 shrink-0 text-red-600" />
+            )}
             <span>{feedback.text}</span>
           </div>
           <button
             type="button"
             onClick={() => setFeedback(null)}
-            className="text-xs font-semibold underline shrink-0"
+            className="text-xs font-semibold underline shrink-0 cursor-pointer"
           >
             Fermer
           </button>
@@ -1303,6 +1579,33 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                                 : `Télécharger PDF (${isCdd ? 'CDD' : 'CDI'})`}
                             </span>
                           </button>
+                          <div className="flex items-center gap-2 pt-0.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setBadgeTargetEmployee(emp);
+                                setIsBadgeModalOpen(true);
+                              }}
+                              className="text-[11px] text-sky-700 hover:text-sky-950 inline-flex items-center gap-1 font-semibold cursor-pointer"
+                              title="Générer la carte professionnelle avec QR Code"
+                            >
+                              <CreditCard className="w-3 h-3 text-sky-600" />
+                              <span>Carte Pro</span>
+                            </button>
+                            <span className="text-slate-300">·</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEmailCodeTargetEmployee(emp);
+                                setIsEmailCodeModalOpen(true);
+                              }}
+                              className="text-[11px] text-amber-700 hover:text-amber-950 inline-flex items-center gap-1 font-semibold cursor-pointer"
+                              title="Générer le code HTML de promesse d'embauche pour Infomaniak"
+                            >
+                              <Code className="w-3 h-3 text-amber-600" />
+                              <span>Code Mail</span>
+                            </button>
+                          </div>
                           {onOpenDirectEmployeeLink && (
                             <button
                               type="button"
@@ -1450,6 +1753,32 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                       <Download className="w-4 h-4" />
                       <span>Télécharger Contrat PDF ({isCdd ? 'CDD' : 'CDI'}) — Admin</span>
                     </button>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBadgeTargetEmployee(emp);
+                          setIsBadgeModalOpen(true);
+                        }}
+                        className="w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-sky-50 text-sky-900 border border-sky-200 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <CreditCard className="w-3.5 h-3.5 text-sky-600" />
+                        <span>Carte Pro</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEmailCodeTargetEmployee(emp);
+                          setIsEmailCodeModalOpen(true);
+                        }}
+                        className="w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-amber-50 text-amber-900 border border-amber-200 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <Code className="w-3.5 h-3.5 text-amber-600" />
+                        <span>Code Mail</span>
+                      </button>
+                    </div>
 
                     {onOpenDirectEmployeeLink && (
                       <button
@@ -2415,10 +2744,10 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                   className="min-h-[44px] px-6 py-2.5 rounded-xl bg-[#0B2545] text-white text-xs sm:text-sm font-bold hover:bg-[#134074]"
                 >
                   {savingEmp
-                    ? 'Génération du contrat PDF en cours...'
+                    ? 'Envoi en cours...'
                     : editingEmployee
                     ? 'Enregistrer & Régénérer le Contrat PDF'
-                    : 'Créer le salarié & Générer le Contrat PDF'}
+                    : 'Créer le salarié & Envoyer la promesse'}
                 </button>
               </div>
             </form>
@@ -2536,6 +2865,39 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           </div>
         </div>
       )}
+      {/* Modal de configuration EmailJS */}
+      <EmailJsConfigModal
+        isOpen={isEmailJsModalOpen}
+        onClose={() => setIsEmailJsModalOpen(false)}
+      />
+
+      {/* Modal de configuration des Coordonnées de l'Entreprise */}
+      <CompanyContactSettingsModal
+        isOpen={isCompanyContactModalOpen}
+        onClose={() => setIsCompanyContactModalOpen(false)}
+      />
+
+      {/* Modal de génération de Carte Professionnelle (Badge Salarié) */}
+      <EmployeeBadgeGeneratorModal
+        isOpen={isBadgeModalOpen}
+        onClose={() => setIsBadgeModalOpen(false)}
+        employee={badgeTargetEmployee}
+        employees={employees}
+        settings={settings}
+        onSelectEmployee={(emp) => setBadgeTargetEmployee(emp)}
+      />
+
+      {/* Modal de génération de Code Mail (Promesse d'Embauche HTML) */}
+      <EmailHtmlCodeGeneratorModal
+        isOpen={isEmailCodeModalOpen}
+        onClose={() => setIsEmailCodeModalOpen(false)}
+        employees={employees}
+        selectedEmployee={emailCodeTargetEmployee}
+        onOpenInWebmail={(content) => {
+          setWebmailInitialContent(content);
+          switchAdminTab('webmail');
+        }}
+      />
     </div>
   );
 };

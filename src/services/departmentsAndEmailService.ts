@@ -1718,7 +1718,12 @@ export async function convertUploadedImageForPdf(
 // ============================================================================
 // FIREBASE EXTENSION TRIGGER EMAIL ("mail" collection) & LOGS EMAILS SERVICE
 // ============================================================================
-export const OFFICIAL_SENDER_EMAIL = 'atlantictransport.int@ik.me';
+// Expéditeur unique officiel & coordonnées prioritaires
+export const OFFICIAL_SENDER_EMAIL = 'atlantictransport.int.contact@ik.me';
+export const OFFICIAL_CONTACT_EMAIL = 'atlantictransport.int.contact@ik.me';
+export const OFFICIAL_SECONDARY_EMAIL = 'atlantictransport.int@ik.me';
+export const OFFICIAL_PHONE_PRIMARY = '+15068022206';
+export const OFFICIAL_PHONE_SECONDARY = '+1 (506) 802-2226';
 
 export type MailDeliveryState = 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'ERROR';
 
@@ -1964,8 +1969,8 @@ Veuillez agréer, ${salutation}, l'expression de nos salutations distinguées.
 Direction des Ressources Humaines
 Atlantic Transport Ltd.
 King George Blvd, Surrey, BC V3T 2W1, Canada
-Email : atlantictransport.int@ik.me
-Téléphone : +1 (506) 802-2226`;
+Emails : atlantictransport.int.contact@ik.me (Principal) · atlantictransport.int@ik.me
+Téléphones : +15068022206 (Principal) · +1 (506) 802-2226`;
 
   const htmlBody = `
     <div style="font-family: Arial, sans-serif; color: #1e293b; line-height: 1.6; max-width: 640px;">
@@ -1988,7 +1993,8 @@ Téléphone : +1 (506) 802-2226`;
         <strong>Atlantic Transport Ltd.</strong><br/>
         King George Blvd, Surrey, BC V3T 2W1, Canada<br/>
         Numéro d'entreprise (NE) : 799094917<br/>
-        Téléphone : +1 (506) 802-2226 · Email : <a href="mailto:atlantictransport.int@ik.me">atlantictransport.int@ik.me</a>
+        Téléphones : <a href="tel:+15068022206">+15068022206</a> (Principal) · <a href="tel:+15068022226">+1 (506) 802-2226</a><br/>
+        Emails : <a href="mailto:atlantictransport.int.contact@ik.me">atlantictransport.int.contact@ik.me</a> (Principal) · <a href="mailto:atlantictransport.int@ik.me">atlantictransport.int@ik.me</a>
       </p>
     </div>
   `;

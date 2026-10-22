@@ -38,25 +38,47 @@ export const Header: React.FC<HeaderProps> = ({
       {/* Barre Top Noire #0A0A0A 11px avec adresse/téléphone/email à gauche et "Transitaire & Douanes Agréés CBSA / OEA" à droite */}
       <div className="bg-[#0A0A0A] text-gray-300 text-[11px] leading-tight border-b border-white/10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 flex flex-col sm:flex-row items-center justify-between gap-1.5">
-          <div className="flex flex-wrap items-center justify-center sm:justify-start gap-x-4 gap-y-1">
+          <div className="flex flex-wrap items-center justify-center sm:justify-start gap-x-3.5 gap-y-1">
             <span className="inline-flex items-center gap-1.5 text-gray-300">
               <MapPin className="w-3 h-3 text-[#D4A017] shrink-0" />
               <span>{settings.address}</span>
             </span>
-            <a
-              href={`tel:${settings.phone.replace(/[^+\d]/g, '')}`}
-              className="inline-flex items-center gap-1.5 text-gray-300 hover:text-white font-mono tabular-nums transition-colors"
-            >
+            <div className="inline-flex items-center gap-1.5 text-gray-300 font-mono tabular-nums">
               <Phone className="w-3 h-3 text-[#D4A017] shrink-0" />
-              <span>{settings.phone}</span>
-            </a>
-            <a
-              href={`mailto:${settings.email}`}
-              className="inline-flex items-center gap-1.5 text-gray-300 hover:text-white transition-colors"
-            >
+              <a
+                href="tel:+15068022206"
+                className="text-[#D4A017] hover:text-white font-bold transition-colors"
+                title="Téléphone principal : +15068022206"
+              >
+                +15068022206
+              </a>
+              <span className="text-gray-500">/</span>
+              <a
+                href="tel:+15068022226"
+                className="text-gray-300 hover:text-white transition-colors"
+                title="Numéro secondaire : +1 (506) 802-2226"
+              >
+                +1 (506) 802-2226
+              </a>
+            </div>
+            <div className="inline-flex items-center gap-1.5 text-gray-300">
               <Mail className="w-3 h-3 text-[#D4A017] shrink-0" />
-              <span>{settings.email}</span>
-            </a>
+              <a
+                href="mailto:atlantictransport.int.contact@ik.me"
+                className="text-[#D4A017] hover:text-white font-medium transition-colors"
+                title="Email principal : atlantictransport.int.contact@ik.me"
+              >
+                atlantictransport.int.contact@ik.me
+              </a>
+              <span className="text-gray-500">/</span>
+              <a
+                href="mailto:atlantictransport.int@ik.me"
+                className="text-gray-300 hover:text-white transition-colors"
+                title="Email secondaire : atlantictransport.int@ik.me"
+              >
+                atlantictransport.int@ik.me
+              </a>
+            </div>
           </div>
 
           <div className="font-semibold text-[#D4A017] tracking-wide uppercase whitespace-nowrap">
@@ -327,34 +349,62 @@ export const Footer: React.FC<FooterProps> = ({
                 <MapPin className="w-4 h-4 text-[#D4A017] shrink-0 mt-1" />
                 <span className="text-gray-200 leading-snug">{settings.address}</span>
               </li>
-              <li className="flex items-center gap-2.5">
-                <Phone className="w-4 h-4 text-[#D4A017] shrink-0" />
-                <a
-                  href={`tel:${settings.phone.replace(/[^+\d]/g, '')}`}
-                  className="text-gray-200 hover:text-[#F59E0B] transition-colors font-mono tabular-nums"
-                >
-                  {settings.phone}
-                </a>
+              <li className="flex items-start gap-2.5">
+                <Phone className="w-4 h-4 text-[#D4A017] shrink-0 mt-1" />
+                <div className="space-y-1 font-mono tabular-nums">
+                  <div>
+                    <a
+                      href="tel:+15068022206"
+                      className="text-white hover:text-[#F59E0B] transition-colors block font-bold"
+                      title="Téléphone principal"
+                    >
+                      +15068022206 <span className="text-[10px] text-[#D4A017] uppercase font-sans font-semibold ml-1">(Principal)</span>
+                    </a>
+                  </div>
+                  <div>
+                    <a
+                      href="tel:+15068022226"
+                      className="text-gray-400 hover:text-white transition-colors block text-xs"
+                      title="Numéro secondaire"
+                    >
+                      +1 (506) 802-2226 <span className="text-[10px] text-gray-500 font-sans">(Secondaire)</span>
+                    </a>
+                  </div>
+                </div>
               </li>
               <li className="flex items-center gap-2.5">
                 <MessageCircle className="w-4 h-4 text-[#D4A017] shrink-0" />
                 <a
-                  href={`https://wa.me/${cleanWhatsapp}`}
+                  href="https://wa.me/15068022206"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-gray-200 hover:text-[#F59E0B] transition-colors"
                 >
-                  WhatsApp Direct : {settings.phone}
+                  WhatsApp Direct : +15068022206
                 </a>
               </li>
-              <li className="flex items-center gap-2.5">
-                <Mail className="w-4 h-4 text-[#D4A017] shrink-0" />
-                <a
-                  href={`mailto:${settings.email}`}
-                  className="text-gray-200 hover:text-[#F59E0B] transition-colors break-all"
-                >
-                  {settings.email}
-                </a>
+              <li className="flex items-start gap-2.5">
+                <Mail className="w-4 h-4 text-[#D4A017] shrink-0 mt-1" />
+                <div className="space-y-1 break-all">
+                  <div>
+                    <a
+                      href="mailto:atlantictransport.int.contact@ik.me"
+                      className="text-white hover:text-[#F59E0B] transition-colors block font-medium"
+                      title="Email principal"
+                    >
+                      atlantictransport.int.contact@ik.me <span className="text-[10px] text-[#D4A017] font-semibold ml-1">(Principal)</span>
+                    </a>
+                  </div>
+                  <div>
+                    <a
+                      href="mailto:atlantictransport.int@ik.me"
+                      className="text-gray-400 hover:text-white transition-colors block text-xs"
+                      title="Email secondaire"
+                    >
+                      atlantictransport.int@ik.me <span className="text-[10px] text-gray-500">(Secondaire)</span>
+                    </a>
+                  </div>
+                </div>
               </li>
             </ul>
           </div>

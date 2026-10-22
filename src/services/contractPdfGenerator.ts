@@ -7,6 +7,7 @@ import {
   getSavedCustomLogo,
   getSavedCustomSignature
 } from './departmentsAndEmailService';
+import { getCompanyContactConfig } from './companyConfigService';
 
 // Strict A4 dimensions & 20mm margins as required
 const PAGE_WIDTH_MM = 210;
@@ -496,8 +497,15 @@ export async function generateEmployeeContractPdfDataUri(emp: Employee): Promise
   doc.text('Atlantic Transport ltd.', MARGIN_LEFT_MM, 36);
   doc.text('King George Blvd, Surrey', MARGIN_LEFT_MM, 41.2);
   doc.text('BC V3T 2W1, Canada', MARGIN_LEFT_MM, 46.4);
-  doc.text('Téléphone: +1 (506) 802-2226', MARGIN_LEFT_MM, 51.6);
-  doc.text('Email : atlantictransport.int@ik.me', MARGIN_LEFT_MM, 56.8);
+  const compConfig = getCompanyContactConfig();
+  const phoneLine = compConfig.secondaryPhone
+    ? `Téléphone: ${compConfig.primaryPhone} · ${compConfig.secondaryPhone}`
+    : `Téléphone: ${compConfig.primaryPhone}`;
+  const emailLine = compConfig.secondaryEmail
+    ? `Email : ${compConfig.primaryEmail} · ${compConfig.secondaryEmail}`
+    : `Email : ${compConfig.primaryEmail}`;
+  doc.text(phoneLine, MARGIN_LEFT_MM, 51.6);
+  doc.text(emailLine, MARGIN_LEFT_MM, 56.8);
 
   // Center header -> Green Bold "A Surrey, le [DATE]" + "Numéro d'entreprise (NE): 799094917"
   doc.setFont('helvetica', 'bold');
