@@ -1280,10 +1280,10 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                 </span>
               </div>
               <h3 className="font-bold text-xl text-[#0B2545] mt-1">
-                Générateur de Carte Professionnelle Haute Définition
+                Générateur de Carte Professionnelle Verticale (Format Officiel CR-80)
               </h3>
               <p className="text-xs sm:text-sm text-slate-600 mt-1">
-                Générez, prévisualisez et imprimez les cartes professionnelles au format standard ISO avec QR Code dynamique scannable vers le portail personnel.
+                Générez, prévisualisez et imprimez les cartes professionnelles au format standard vertical avec bande latérale de poste, photo encadrée et QR Code dynamique vers le portail salarié.
               </p>
             </div>
 
@@ -1307,12 +1307,13 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                 className="bg-white rounded-2xl border border-slate-200 p-4 hover:border-amber-400 transition-colors shadow-2xs space-y-3"
               >
                 <div className="flex items-center gap-3">
-                  <div className="w-12 h-14 rounded-lg bg-slate-100 overflow-hidden shrink-0 border border-slate-200">
+                  <div className="w-12 h-16 rounded-md bg-slate-900 overflow-hidden shrink-0 border-2 border-slate-800 flex items-center justify-center relative">
                     <img
                       src={emp.photo || emp.photo_url || ''}
                       alt={emp.nom_complet}
                       className="w-full h-full object-cover"
                     />
+                    <div className="absolute top-0.5 left-1/2 -translate-x-1/2 w-3 h-0.5 bg-slate-400 rounded-full" />
                   </div>
                   <div className="min-w-0 flex-1">
                     <span className="font-mono text-xs font-bold text-amber-600 block">
@@ -1327,7 +1328,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
                 <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
                   <span className="text-[11px] text-slate-400">
-                    {emp.type_contrat} · {emp.departement?.slice(0, 22)}...
+                    {emp.type_contrat} · {emp.departement?.slice(0, 20)}...
                   </span>
                   <button
                     type="button"
@@ -1337,7 +1338,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                     }}
                     className="px-3 py-1 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100 text-xs font-bold transition-colors cursor-pointer"
                   >
-                    Voir la Carte Pro
+                    Générer Carte Verticale
                   </button>
                 </div>
               </div>
