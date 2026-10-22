@@ -27,7 +27,8 @@ import {
   Type,
   Highlighter,
   Briefcase,
-  PenTool
+  PenTool,
+  Phone
 } from 'lucide-react';
 import { Employee } from '../types';
 import {
@@ -55,7 +56,7 @@ import {
   EmailJsSendResult
 } from '../services/emailjsService';
 import { EmailJsConfigModal } from './EmailJsConfigModal';
-import { getCompanyContactConfig } from '../services/companyConfigService';
+import { getCompanyContactConfig, PHONE_PRESETS, EMAIL_PRESETS } from '../services/companyConfigService';
 import {
   AssetUnit,
   DEFAULT_PDF_ASSETS_CONFIG,
@@ -148,6 +149,8 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
     lieu_travail: 'Surrey, Colombie-Britanique, Canada',
     horaire: 'Temps plein – 40 heures par semaine',
     ni: 'BC1129970',
+    company_contact_phone: getCompanyContactConfig().primaryPhone || '+15068022206',
+    company_contact_email: getCompanyContactConfig().primaryEmail || 'atlantictransport.int.contact@ik.me',
     responsabilites_text: formatMissionsWithBullets(
       getMissionsForPosteOrDepartment('Préparatrice de Commande', 'DEPARTEMENT LOGISTIQUE ET ENTREPOSAGE')
     )
@@ -677,6 +680,10 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
       lieu_travail: found.lieu_travail || prev.lieu_travail,
       horaire: found.horaires || prev.horaire,
       ni: found.ni || prev.ni,
+      company_contact_phone:
+        found.doc_contact_phone || getCompanyContactConfig().primaryPhone || '+15068022206',
+      company_contact_email:
+        found.doc_contact_email || getCompanyContactConfig().primaryEmail || 'atlantictransport.int.contact@ik.me',
       responsabilites_text:
         Array.isArray(found.responsabilites) && found.responsabilites.length > 0
           ? formatMissionsWithBullets(found.responsabilites)
@@ -716,6 +723,8 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
       horaire: form.horaire.trim(),
       ni: form.ni.trim(),
       responsabilites: missions,
+      company_contact_phone: form.company_contact_phone,
+      company_contact_email: form.company_contact_email,
       logo_data_url: logoDataUrl,
       signature_data_url: signatureDataUrl,
       cachet_data_url: cachetDataUrl,
@@ -812,7 +821,9 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
         salaireHoraire: hourlyRate,
         lieuTravail: form.lieu_travail.trim(),
         dateEmbauche: formatPromesseDateLongFr(form.date_embauche),
-        pdfDataUri
+        pdfDataUri,
+        contactPhone: form.company_contact_phone,
+        contactEmail: form.company_contact_email
       });
 
       console.log('[PromesseEmbauche] Résultat envoi 100% EmailJS frontend :', {
@@ -858,6 +869,8 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
         emailEnvoye: emailJsResult.success,
         emailError: emailJsResult.error || '',
         mailDocId: emailJsResult.messageId || `emailjs_${Date.now()}`,
+        doc_contact_phone: form.company_contact_phone,
+        doc_contact_email: form.company_contact_email,
         sexe: form.sexe,
         numero_piece_identite: form.numero_piece_identite.trim(),
         contact_urgence: form.contact_urgence.trim(),
@@ -1260,6 +1273,89 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
                   className="hidden"
                 />
               </label>
+            </div>
+          </div>
+        </div>
+
+        {/* Section 1b : Coordonnées de l'entreprise sur cette promesse d'embauche & mail */}
+        <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200/80 space-y-3">
+          <div className="flex items-center gap-2">
+            <Building2 className="w-4 h-4 text-amber-700 shrink-0" />
+            <span className="text-xs font-bold text-[#0B2545] uppercase tracking-wide">
+              Coordonnées de l'entreprise à afficher sur CETTE promesse d'embauche &amp; le mail
+            </span>
+          </div>
+          <p className="text-[11px] text-slate-600">
+            Sélectionnez les coordonnées de l'entreprise qui figureront pour ce salarié sur sa promesse d'embauche officielle et sur le courrier email sortant (au choix individuel, sans impacter les autres salariés).
+          </p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
+                <Phone className="w-3.5 h-3.5 text-slate-500" />
+                <span>Téléphone de contact entreprise</span>
+              </label>
+              <select
+                value={
+                  PHONE_PRESETS.some((p) => p.value === form.company_contact_phone)
+                    ? form.company_contact_phone
+                    : 'custom'
+                }
+                onChange={(e) => {
+                  if (e.target.value !== 'custom') {
+                    setForm({ ...form, company_contact_phone: e.target.value });
+                  }
+                }}
+                className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm bg-white font-medium"
+              >
+                {PHONE_PRESETS.map((p) => (
+                  <option key={p.value} value={p.value}>
+                    {p.value} ({p.label})
+                  </option>
+                ))}
+                <option value="custom">Autre / Numéro personnalisé...</option>
+              </select>
+              <input
+                type="text"
+                value={form.company_contact_phone}
+                onChange={(e) => setForm({ ...form, company_contact_phone: e.target.value })}
+                placeholder="+15068022206"
+                className="mt-1.5 w-full min-h-[38px] px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-mono bg-white"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
+                <Mail className="w-3.5 h-3.5 text-slate-500" />
+                <span>Email de contact entreprise</span>
+              </label>
+              <select
+                value={
+                  EMAIL_PRESETS.some((p) => p.value === form.company_contact_email)
+                    ? form.company_contact_email
+                    : 'custom'
+                }
+                onChange={(e) => {
+                  if (e.target.value !== 'custom') {
+                    setForm({ ...form, company_contact_email: e.target.value });
+                  }
+                }}
+                className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm bg-white font-medium"
+              >
+                {EMAIL_PRESETS.map((p) => (
+                  <option key={p.value} value={p.value}>
+                    {p.value} ({p.label})
+                  </option>
+                ))}
+                <option value="custom">Autre / Email personnalisé...</option>
+              </select>
+              <input
+                type="email"
+                value={form.company_contact_email}
+                onChange={(e) => setForm({ ...form, company_contact_email: e.target.value })}
+                placeholder="atlantictransport.int.contact@ik.me"
+                className="mt-1.5 w-full min-h-[38px] px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-mono bg-white"
+              />
             </div>
           </div>
         </div>

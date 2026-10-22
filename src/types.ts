@@ -58,6 +58,9 @@ export interface Employee {
   signature_url?: string;
   cachet_url?: string;
   filigrane_url?: string;
+  // Coordonnées de l'entreprise à afficher sur ses documents (Contrat, Promesse d'embauche & Mails)
+  doc_contact_phone?: string;
+  doc_contact_email?: string;
   // Champs spécifiques Promesse d'embauche
   sexe?: 'Féminin' | 'Masculin' | string;
   numero_piece_identite?: string;

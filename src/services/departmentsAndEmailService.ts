@@ -946,6 +946,94 @@ export const OFFICIAL_DEPARTMENTS: DepartmentDefinition[] = [
         ]
       }
     ]
+  },
+  {
+    code: 'MANUTENTION_ENGINS_LOURDS',
+    name: 'DEPARTEMENT MANUTENTION ET CONDUITE D\'ENGINS',
+    missions: [
+      'Conduite et manœuvre sécurisée des engins lourds de chantier et de terrassement (Shovel / Pelles mécaniques, Chargeuses, Bulldozers)',
+      'Opérations de chargement, déchargement et gerbage des marchandises lourdes, conteneurs et matériaux en vrac',
+      'Inspection préventive quotidienne, contrôles de sécurité avant poste et maintenance de premier niveau des engins',
+      'Respect strict des consignes de sécurité sur quai et chantier, du balisage des zones de manœuvre et du port des EPI',
+      'Coordination avec les chefs de quai, dispatcheurs et conducteurs routiers pour fluidifier les rotations logistiques',
+      'Tenue des rapports journaliers d’activité, relevé des heures machine et signalement immédiat des anomalies mécaniques'
+    ],
+    postesLies: [
+      "Conducteur d'Engins Lourds (Shovel / Pelle Mécanique)",
+      'Opérateur de Chargeuse & Chariot Télescopique',
+      'Conducteur de Bulldozer & Niveleuse',
+      'Cariste Manutention Lourde & Porte-Conteneurs',
+      "Grutier & Opérateur d'Appareils de Levage",
+      "Chef d'Équipe Manutention & Opérations d'Engins"
+    ],
+    postesDetail: [
+      {
+        titre: "Conducteur d'Engins Lourds (Shovel / Pelle Mécanique)",
+        missions: [
+          'Piloter les pelles mécaniques hydrauliques (shovel) et excavatrices sur chenilles ou pneus pour le chargement et terrassement.',
+          'Assurer le chargement rapide et sécurisé des bennes, semi-remorques et trémies sans détérioration du matériel.',
+          'Réaliser les contrôles préalables obligatoires : niveaux des fluides, pression hydraulique, tension des chenilles et graissage.',
+          'Respecter rigoureusement le périmètre de sécurité de la machine et communiquer par gestes ou radio avec le personnel au sol.',
+          'Adapter sa conduite aux conditions géologiques, climatiques et aux contraintes de nivellement du site.',
+          'Renseigner le carnet de bord de l’engin (heures moteur, carburant, anomalies constatées) et appliquer les normes HSE.'
+        ]
+      },
+      {
+        titre: 'Opérateur de Chargeuse & Chariot Télescopique',
+        missions: [
+          'Conduire les chargeuses sur pneus (wheel loaders) et chariots télescopiques pour le déplacement de charges pondéreuses.',
+          'Alimenter en continu les zones de tri, convoyeurs et zones de transit avec précision et célérité.',
+          'Vérifier la stabilité du sol, la répartition du poids dans le godet et éviter toute surcharge d’essieu.',
+          'Effectuer les manœuvres dans les espaces restreints des quais et parcs logistiques en respectant le plan de circulation.',
+          'Effectuer le nettoyage et l’entretien quotidien des équipements et accessoires (godets, fourches, grappins).',
+          'Alerter sans délai l’atelier de maintenance en cas de fuite hydraulique, perte de puissance ou anomalie de freinage.'
+        ]
+      },
+      {
+        titre: 'Conducteur de Bulldozer & Niveleuse',
+        missions: [
+          'Manœuvrer les bouteurs (bulldozers) et niveleuses pour le régalage, le compactage et l’aménagement des plateformes logistiques.',
+          'Déplacer de gros volumes de matériaux et niveler les pistes de circulation des convois lourds.',
+          'Maîtriser les instruments de guidage laser et GPS embarqués pour garantir l’exactitude des cotes et profils demandés.',
+          'Contrôler la motricité des chenilles et adapter la vitesse pour préserver la mécanique et optimiser la consommation de carburant.',
+          'Sécuriser la zone de travail en fin de poste et stationner l’engin selon les protocoles de sécurité de l’entreprise.',
+          'Collaborer avec les géomètres et chefs de chantier pour le phasage optimal des opérations de terrassement.'
+        ]
+      },
+      {
+        titre: 'Cariste Manutention Lourde & Porte-Conteneurs',
+        missions: [
+          'Opérer les reachstackers, cavaliers gerbeurs et chariots gros tonnage pour la manipulation des conteneurs 20/40 pieds.',
+          'Positionner avec une extrême précision les conteneurs maritimes sur les châssis remorques et en zones de stockage.',
+          'Vérifier l’état des verrous tournants (twist-locks), des câbles de levage et la répartition des masses avant levage.',
+          'Enregistrer en temps réel les mouvements de conteneurs dans le logiciel de gestion de terminal (TOS/WMS).',
+          'Appliquer scrupuleusement les règles de vitesse et de priorité sur les terre-pleins et zones intermodales.',
+          'Réaliser les vérifications de début de quart (système de freinage, direction assistée, avertisseurs sonores et lumineux).'
+        ]
+      },
+      {
+        titre: "Grutier & Opérateur d'Appareils de Levage",
+        missions: [
+          'Conduire les grues mobiles, ponts roulants et portiques de manutention pour le levage de colis lourds et hors gabarit.',
+          'Vérifier la conformité de l’élingage, des manilles, palonniers et l’adéquation de la capacité de levage avant toute manœuvre.',
+          'Prendre en compte les conditions météorologiques (force du vent, visibilité) et suspendre les opérations en cas de danger.',
+          'Coordonner les trajectoires de levage en binôme avec les signaleurs/élingueurs certifiés au sol.',
+          'Respecter les abaques de charge du constructeur et ne jamais dépasser la charge maximale d’utilisation (CMU).',
+          'Consigner les opérations de levage spécifiques et tenir à jour le registre de sécurité des appareils.'
+        ]
+      },
+      {
+        titre: "Chef d'Équipe Manutention & Opérations d'Engins",
+        missions: [
+          'Organiser, répartir et superviser le travail quotidien des conducteurs d’engins lourds et équipes de manutention.',
+          'Veiller à la disponibilité opérationnelle du parc de machines et coordonner les plannings d’entretien avec l’atelier.',
+          'Faire respecter rigoureusement les consignes de sécurité, les autorisations de conduite (CACES/certificats) et le port des EPI.',
+          'Optimiser les cadences de chargement/déchargement pour minimiser le temps d’attente des camions et convois.',
+          'Accueillir et intégrer les nouveaux conducteurs d’engins, vérifier leurs compétences pratiques et évaluer leurs gestes métier.',
+          'Établir les comptes-rendus journaliers de manutention, analyser les incidents et proposer des actions d’amélioration continue.'
+        ]
+      }
+    ]
   }
 ];
 
@@ -1059,6 +1147,10 @@ export function findDepartmentByPoste(posteName?: string): DepartmentDefinition 
     {
       keywords: ['CHAUFFEUR', 'CONDUCTEUR', 'EXPLOITANT', 'DISPATCH', 'REPARTITEUR', 'QUAI', 'ROUTIER'],
       code: 'EXPLOITATION_TRANSPORT'
+    },
+    {
+      keywords: ['SHOVEL', 'PELLE', 'EXCAVAT', 'BULLDOZER', 'CHARGEUSE', 'NIVELEUSE', 'ENGIN', 'MANUTENTION LOURDE', 'GRUTIER', 'LEVAGE'],
+      code: 'MANUTENTION_ENGINS_LOURDS'
     },
     {
       keywords: ['PREPARAT', 'COMMANDE', 'CARISTE', 'MAGASINIER', 'ENTREPOT', 'STOCK', 'PICKING', 'MANUTENTION'],

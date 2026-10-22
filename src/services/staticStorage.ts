@@ -464,6 +464,8 @@ export function normalizeEmployee(
     emailEnvoye: Boolean(emp.emailEnvoye),
     emailError: emp.emailError || '',
     mailDocId: emp.mailDocId || '',
+    doc_contact_phone: emp.doc_contact_phone || '',
+    doc_contact_email: emp.doc_contact_email || '',
     sexe: emp.sexe || (emp.civilite === 'Madame' ? 'Féminin' : 'Masculin'),
     numero_piece_identite: emp.numero_piece_identite || '',
     contact_urgence: emp.contact_urgence || '',

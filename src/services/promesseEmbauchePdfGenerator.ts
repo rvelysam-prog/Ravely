@@ -15,8 +15,11 @@ import {
   renderAssetWithSettingsForPdf,
   resolveSignatureSalarieHtmlVariables
 } from './departmentsAndEmailService';
+import { getCompanyContactConfig } from './companyConfigService';
 
 export interface PromesseEmbaucheData {
+  company_contact_phone?: string;
+  company_contact_email?: string;
   nom_complet: string;
   date_naissance: string;
   sexe: 'Féminin' | 'Masculin' | string;
@@ -485,14 +488,23 @@ export async function generatePromesseEmbauchePdfDoc(
   doc.setTextColor(58, 110, 72);
   doc.text('Atlantic Transport ltd.', 12.5, 33);
   doc.text('King George Blvd, Surrey', 12.5, 38);
-  doc.text('BC V3T 2W1, Canada', 12.5, 43);
-  doc.text('Téléphone : +15068022206 · +1 (506) 802-2226', 12.5, 48);
+  const compConfig = getCompanyContactConfig();
+  const activePhone =
+    (data.company_contact_phone && data.company_contact_phone.trim()) ||
+    compConfig.primaryPhone ||
+    '+15068022206';
+  const activeEmail =
+    (data.company_contact_email && data.company_contact_email.trim()) ||
+    compConfig.primaryEmail ||
+    'atlantictransport.int.contact@ik.me';
+
+  doc.text(`Téléphone : ${activePhone}`, 12.5, 48);
   doc.text('Email : ', 12.5, 53);
 
   const emailPrefixW = doc.getTextWidth('Email : ');
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(27, 108, 168);
-  doc.text('atlantictransport.int.contact@ik.me · atlantictransport.int@ik.me', 12.5 + emailPrefixW, 53);
+  doc.text(activeEmail, 12.5 + emailPrefixW, 53);
 
   // Date d'établissement ("A Surrey, le [DATE]") & NE au centre
   doc.setFont('helvetica', 'bold');

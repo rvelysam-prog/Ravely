@@ -21,6 +21,8 @@ export interface SendPromesseEmailJsParams {
   lieuTravail?: string;
   dateEmbauche?: string;
   pdfDataUri?: string;
+  contactPhone?: string;
+  contactEmail?: string;
 }
 
 export interface EmailJsSendResult {
@@ -67,15 +69,23 @@ export function buildPromesseEmbaucheHtml(params: {
   salaireHoraire?: number | string;
   lieuTravail?: string;
   dateEmbauche?: string;
+  contactPhone?: string;
+  contactEmail?: string;
 }): string {
   const salaireText = params.salaireHoraire ? `${params.salaireHoraire} CAD / heure` : '22.00 CAD / heure';
   const lieuText = params.lieuTravail || 'King George Blvd, Surrey, BC V3T 2W1, Canada';
   const dateDebutText = params.dateEmbauche || params.date;
 
   const compConfig = getCompanyContactConfig();
-  const activeEmail = compConfig.primaryEmail || EMAILJS_SENDER_EMAIL;
-  const activePhone = compConfig.primaryPhone || '+15068022206';
-  const secondaryPhoneInfo = compConfig.secondaryPhone ? ` (ou ${compConfig.secondaryPhone})` : '';
+  const activeEmail =
+    (params.contactEmail && params.contactEmail.trim()) ||
+    compConfig.primaryEmail ||
+    EMAILJS_SENDER_EMAIL;
+  const activePhone =
+    (params.contactPhone && params.contactPhone.trim()) ||
+    compConfig.primaryPhone ||
+    '+15068022206';
+  const secondaryPhoneInfo = '';
 
   return `
     <div style="font-family: Arial, sans-serif; color: #1e293b; line-height: 1.6; max-width: 640px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; background-color: #ffffff;">
@@ -173,7 +183,9 @@ export async function sendPromesseEmbaucheViaEmailJs(
     departement: params.departement,
     salaireHoraire: params.salaireHoraire,
     lieuTravail: params.lieuTravail,
-    dateEmbauche: params.dateEmbauche
+    dateEmbauche: params.dateEmbauche,
+    contactPhone: params.contactPhone,
+    contactEmail: params.contactEmail
   });
 
   // Paramètres exacts demandés par la consigne + variables de template

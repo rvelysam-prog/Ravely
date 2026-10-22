@@ -88,7 +88,7 @@ import { InfomaniakWebmailTab } from './admin/InfomaniakWebmailTab';
 import { EmailHtmlCodeGeneratorModal } from './admin/EmailHtmlCodeGeneratorModal';
 import { EmployeeBadgeGeneratorModal } from './admin/EmployeeBadgeGeneratorModal';
 import { CompanyContactSettingsModal } from './admin/CompanyContactSettingsModal';
-import { getCompanyContactConfig } from '../services/companyConfigService';
+import { getCompanyContactConfig, PHONE_PRESETS, EMAIL_PRESETS } from '../services/companyConfigService';
 
 type AdminTab =
   | 'employees'
@@ -217,6 +217,8 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     hebergement_lieu_type: 'preciser_lieu' as 'preciser_lieu' | 'texte_generique',
     adresse_hebergement: '',
     password: 'Employe@2026!',
+    doc_contact_phone: '+15068022206',
+    doc_contact_email: 'atlantictransport.int.contact@ik.me',
     photo_base64: '',
     photo_name: ''
   });
@@ -384,6 +386,8 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       hebergement_lieu_type: 'preciser_lieu',
       adresse_hebergement: 'King George Blvd, Surrey, Colombie-Britannique Canada',
       password: 'Employe@2026!',
+      doc_contact_phone: getCompanyContactConfig().primaryPhone || '+15068022206',
+      doc_contact_email: getCompanyContactConfig().primaryEmail || 'atlantictransport.int.contact@ik.me',
       photo_base64: '',
       photo_name: ''
     });
@@ -431,6 +435,10 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       adresse_hebergement:
         emp.adresse_hebergement || 'King George Blvd, Surrey, Colombie-Britannique Canada',
       password: emp.password || 'Employe@2026!',
+      doc_contact_phone:
+        emp.doc_contact_phone || getCompanyContactConfig().primaryPhone || '+15068022206',
+      doc_contact_email:
+        emp.doc_contact_email || getCompanyContactConfig().primaryEmail || 'atlantictransport.int.contact@ik.me',
       photo_base64: emp.photo || emp.photo_url || '',
       photo_name: ''
     });
@@ -564,6 +572,8 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
         emailEnvoye: editingEmployee?.emailEnvoye ?? false,
         emailError: editingEmployee?.emailError ?? '',
         mailDocId: editingEmployee?.mailDocId ?? '',
+        doc_contact_phone: empForm.doc_contact_phone.trim(),
+        doc_contact_email: empForm.doc_contact_email.trim(),
         responsabilites: getMissionsForPosteOrDepartment(empForm.poste, empForm.departement),
         photo: resolvedPhotoBase64,
         photo_url: resolvedPhotoBase64,
@@ -636,7 +646,9 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             lieu_travail: savedEmp.lieu_travail,
             horaire: savedEmp.horaires,
             ni: savedEmp.ni || 'BC1129970',
-            responsabilites: posteMissions
+            responsabilites: posteMissions,
+            company_contact_phone: savedEmp.doc_contact_phone,
+            company_contact_email: savedEmp.doc_contact_email
           });
 
           // Envoi direct automatique côté frontend avec EmailJS depuis atlantictransport.int.contact@ik.me
@@ -653,7 +665,9 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             salaireHoraire: savedEmp.salaire_horaire || 22,
             lieuTravail: savedEmp.lieu_travail,
             dateEmbauche: formatPromesseDateLongFr(savedEmp.date_embauche),
-            pdfDataUri: promessePdfDataUri
+            pdfDataUri: promessePdfDataUri,
+            contactPhone: savedEmp.doc_contact_phone,
+            contactEmail: savedEmp.doc_contact_email
           });
 
           console.log('[AdminBackoffice] Ajout salarié & envoi 100% EmailJS :', {
@@ -2628,6 +2642,89 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                     onChange={(e) => setEmpForm({ ...empForm, password: e.target.value })}
                     className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-mono"
                   />
+                </div>
+              </div>
+
+              {/* Coordonnées Entreprise Personnalisées pour ce salarié (Contrat, Promesse & Mails) */}
+              <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200/80 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Building2 className="w-4 h-4 text-amber-700 shrink-0" />
+                  <span className="text-xs font-bold text-[#0B2545] uppercase tracking-wide">
+                    Coordonnées de l'entreprise à afficher sur SES documents (Contrat, Promesse &amp; Mails)
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600">
+                  Sélectionnez le numéro et le mail de l'entreprise qui figureront spécifiquement pour ce salarié sur son contrat de travail, sa promesse d'embauche et les courriers mail (au choix par salarié, ne s'applique pas aux autres salariés).
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
+                      <Phone className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Téléphone entreprise sur ses documents</span>
+                    </label>
+                    <select
+                      value={
+                        PHONE_PRESETS.some((p) => p.value === empForm.doc_contact_phone)
+                          ? empForm.doc_contact_phone
+                          : 'custom'
+                      }
+                      onChange={(e) => {
+                        if (e.target.value !== 'custom') {
+                          setEmpForm({ ...empForm, doc_contact_phone: e.target.value });
+                        }
+                      }}
+                      className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm bg-white text-slate-800 font-medium"
+                    >
+                      {PHONE_PRESETS.map((p) => (
+                        <option key={p.value} value={p.value}>
+                          {p.value} ({p.label})
+                        </option>
+                      ))}
+                      <option value="custom">Autre / Numéro personnalisé...</option>
+                    </select>
+                    <input
+                      type="text"
+                      value={empForm.doc_contact_phone}
+                      onChange={(e) => setEmpForm({ ...empForm, doc_contact_phone: e.target.value })}
+                      placeholder="+1 (506) 802-2226"
+                      className="mt-1.5 w-full min-h-[38px] px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-mono bg-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
+                      <Mail className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Email entreprise sur ses documents</span>
+                    </label>
+                    <select
+                      value={
+                        EMAIL_PRESETS.some((p) => p.value === empForm.doc_contact_email)
+                          ? empForm.doc_contact_email
+                          : 'custom'
+                      }
+                      onChange={(e) => {
+                        if (e.target.value !== 'custom') {
+                          setEmpForm({ ...empForm, doc_contact_email: e.target.value });
+                        }
+                      }}
+                      className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm bg-white text-slate-800 font-medium"
+                    >
+                      {EMAIL_PRESETS.map((p) => (
+                        <option key={p.value} value={p.value}>
+                          {p.value} ({p.label})
+                        </option>
+                      ))}
+                      <option value="custom">Autre / Email personnalisé...</option>
+                    </select>
+                    <input
+                      type="email"
+                      value={empForm.doc_contact_email}
+                      onChange={(e) => setEmpForm({ ...empForm, doc_contact_email: e.target.value })}
+                      placeholder="atlantictransport.int.contact@ik.me"
+                      className="mt-1.5 w-full min-h-[38px] px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-mono bg-white"
+                    />
+                  </div>
                 </div>
               </div>
 

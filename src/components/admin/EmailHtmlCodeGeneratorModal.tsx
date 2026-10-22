@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { Employee } from '../../types';
 import { buildPromesseEmbaucheHtml } from '../../services/emailjsService';
-import { getCompanyContactConfig } from '../../services/companyConfigService';
+import { getCompanyContactConfig, PHONE_PRESETS, EMAIL_PRESETS } from '../../services/companyConfigService';
 
 interface EmailHtmlCodeGeneratorModalProps {
   employees: Employee[];
@@ -73,6 +73,12 @@ export const EmailHtmlCodeGeneratorModal: React.FC<EmailHtmlCodeGeneratorModalPr
   const [lieuTravail, setLieuTravail] = useState(
     selectedEmployee?.lieu_travail || 'Surrey, Colombie-Britannique, Canada'
   );
+  const [contactPhone, setContactPhone] = useState(
+    selectedEmployee?.doc_contact_phone || companyConfig.primaryPhone || '+15068022206'
+  );
+  const [contactEmail, setContactEmail] = useState(
+    selectedEmployee?.doc_contact_email || companyConfig.primaryEmail || 'atlantictransport.int.contact@ik.me'
+  );
 
   // Update when selectedEmployee changes or when employee selector changes
   useEffect(() => {
@@ -86,6 +92,8 @@ export const EmailHtmlCodeGeneratorModal: React.FC<EmailHtmlCodeGeneratorModalPr
       setSalaireHoraire(selectedEmployee.salaire_horaire ? String(selectedEmployee.salaire_horaire) : '24.50');
       setDatePriseFonction(selectedEmployee.date_embauche || new Date().toISOString().slice(0, 10));
       setLieuTravail(selectedEmployee.lieu_travail || 'Surrey, Colombie-Britannique, Canada');
+      setContactPhone(selectedEmployee.doc_contact_phone || companyConfig.primaryPhone || '+15068022206');
+      setContactEmail(selectedEmployee.doc_contact_email || companyConfig.primaryEmail || 'atlantictransport.int.contact@ik.me');
     }
   }, [selectedEmployee]);
 
@@ -106,6 +114,8 @@ export const EmailHtmlCodeGeneratorModal: React.FC<EmailHtmlCodeGeneratorModalPr
       setSalaireHoraire(emp.salaire_horaire ? String(emp.salaire_horaire) : '24.50');
       setDatePriseFonction(emp.date_embauche || new Date().toISOString().slice(0, 10));
       setLieuTravail(emp.lieu_travail || 'Surrey, Colombie-Britannique, Canada');
+      setContactPhone(emp.doc_contact_phone || companyConfig.primaryPhone || '+15068022206');
+      setContactEmail(emp.doc_contact_email || companyConfig.primaryEmail || 'atlantictransport.int.contact@ik.me');
     }
   };
 
@@ -118,7 +128,9 @@ export const EmailHtmlCodeGeneratorModal: React.FC<EmailHtmlCodeGeneratorModalPr
     salaireHoraire,
     lieuTravail,
     dateEmbauche: datePriseFonction,
-    date: new Date().toLocaleDateString('fr-CA')
+    date: new Date().toLocaleDateString('fr-CA'),
+    contactPhone,
+    contactEmail
   });
 
   const handleCopyCode = async () => {
@@ -246,6 +258,72 @@ export const EmailHtmlCodeGeneratorModal: React.FC<EmailHtmlCodeGeneratorModalPr
                   value={salaireHoraire}
                   onChange={(e) => setSalaireHoraire(e.target.value)}
                   className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs sm:text-sm bg-white focus:border-[#0B2545] focus:outline-none font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1">
+                  <Phone className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Téléphone entreprise (signature du mail)</span>
+                </label>
+                <select
+                  value={
+                    PHONE_PRESETS.some((p) => p.value === contactPhone)
+                      ? contactPhone
+                      : 'custom'
+                  }
+                  onChange={(e) => {
+                    if (e.target.value !== 'custom') {
+                      setContactPhone(e.target.value);
+                    }
+                  }}
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs sm:text-sm bg-white focus:border-[#0B2545] focus:outline-none"
+                >
+                  {PHONE_PRESETS.map((p) => (
+                    <option key={p.value} value={p.value}>
+                      {p.value} ({p.label})
+                    </option>
+                  ))}
+                  <option value="custom">Numéro personnalisé...</option>
+                </select>
+                <input
+                  type="text"
+                  value={contactPhone}
+                  onChange={(e) => setContactPhone(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-mono bg-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1">
+                  <Mail className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Email entreprise (signature du mail)</span>
+                </label>
+                <select
+                  value={
+                    EMAIL_PRESETS.some((p) => p.value === contactEmail)
+                      ? contactEmail
+                      : 'custom'
+                  }
+                  onChange={(e) => {
+                    if (e.target.value !== 'custom') {
+                      setContactEmail(e.target.value);
+                    }
+                  }}
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs sm:text-sm bg-white focus:border-[#0B2545] focus:outline-none"
+                >
+                  {EMAIL_PRESETS.map((p) => (
+                    <option key={p.value} value={p.value}>
+                      {p.value} ({p.label})
+                    </option>
+                  ))}
+                  <option value="custom">Email personnalisé...</option>
+                </select>
+                <input
+                  type="email"
+                  value={contactEmail}
+                  onChange={(e) => setContactEmail(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-mono bg-white"
                 />
               </div>
             </div>

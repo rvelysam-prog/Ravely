@@ -431,14 +431,8 @@ export async function generateEmployeeContractPdfDataUri(emp: Employee): Promise
     generateEmployeeQrDataUrl(emp.matricule)
   ]);
 
-  const rawLogo = getSavedCustomLogo() || defaultLogoAtlanticDataUrl;
-  const logoAtlanticDataUrl = rawLogo
-    ? await convertUploadedImageForPdf(rawLogo, {
-        maxWidth: 700,
-        maxHeight: 350,
-        removeWhiteBackground: false
-      })
-    : defaultLogoAtlanticDataUrl;
+  // Rule 2 & Default: Logo officiel de l'entreprise (/logo-atlantic.png) par défaut
+  const logoAtlanticDataUrl = defaultLogoAtlanticDataUrl || (await loadStaticImageAsPngDataUrl(CONTRACT_STATIC_ASSETS.logoAtlantic));
 
   const rawSig = emp.signature_url || getSavedCustomSignature() || defaultSignatureDataUrl;
   const signatureDataUrl = rawSig
@@ -498,12 +492,16 @@ export async function generateEmployeeContractPdfDataUri(emp: Employee): Promise
   doc.text('King George Blvd, Surrey', MARGIN_LEFT_MM, 41.2);
   doc.text('BC V3T 2W1, Canada', MARGIN_LEFT_MM, 46.4);
   const compConfig = getCompanyContactConfig();
-  const phoneLine = compConfig.secondaryPhone
-    ? `Téléphone: ${compConfig.primaryPhone} · ${compConfig.secondaryPhone}`
-    : `Téléphone: ${compConfig.primaryPhone}`;
-  const emailLine = compConfig.secondaryEmail
-    ? `Email : ${compConfig.primaryEmail} · ${compConfig.secondaryEmail}`
-    : `Email : ${compConfig.primaryEmail}`;
+  const selectedPhone =
+    (emp.doc_contact_phone && emp.doc_contact_phone.trim()) ||
+    compConfig.primaryPhone ||
+    '+15068022206';
+  const selectedEmail =
+    (emp.doc_contact_email && emp.doc_contact_email.trim()) ||
+    compConfig.primaryEmail ||
+    'atlantictransport.int.contact@ik.me';
+  const phoneLine = `Téléphone: ${selectedPhone}`;
+  const emailLine = `Email : ${selectedEmail}`;
   doc.text(phoneLine, MARGIN_LEFT_MM, 51.6);
   doc.text(emailLine, MARGIN_LEFT_MM, 56.8);
 
