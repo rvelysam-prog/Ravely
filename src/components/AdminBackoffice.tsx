@@ -26,7 +26,10 @@ import {
   Lock,
   QrCode,
   RefreshCw,
-  AlertTriangle
+  AlertTriangle,
+  Building2,
+  Phone,
+  Scissors
 } from 'lucide-react';
 import { ContactMessage, Employee, SiteSettings } from '../types';
 import { BrandLogo } from './BrandLogo';
@@ -88,6 +91,7 @@ import { InfomaniakWebmailTab } from './admin/InfomaniakWebmailTab';
 import { EmailHtmlCodeGeneratorModal } from './admin/EmailHtmlCodeGeneratorModal';
 import { EmployeeBadgeGeneratorModal } from './admin/EmployeeBadgeGeneratorModal';
 import { CompanyContactSettingsModal } from './admin/CompanyContactSettingsModal';
+import { DocumentStudioModal } from './admin/DocumentStudioModal';
 import { getCompanyContactConfig, PHONE_PRESETS, EMAIL_PRESETS } from '../services/companyConfigService';
 
 type AdminTab =
@@ -280,6 +284,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
   // Modals et états pour les nouveaux modules
   const [isCompanyContactModalOpen, setIsCompanyContactModalOpen] = useState(false);
   const [isEmailCodeModalOpen, setIsEmailCodeModalOpen] = useState(false);
+  const [isDocumentStudioOpen, setIsDocumentStudioOpen] = useState(false);
   const [isBadgeModalOpen, setIsBadgeModalOpen] = useState(false);
   const [badgeTargetEmployee, setBadgeTargetEmployee] = useState<Employee | null>(null);
   const [emailCodeTargetEmployee, setEmailCodeTargetEmployee] = useState<Employee | null>(null);
@@ -1378,17 +1383,31 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={() => {
-                setEmailCodeTargetEmployee(employees[0] || null);
-                setIsEmailCodeModalOpen(true);
-              }}
-              className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm transition-colors whitespace-nowrap cursor-pointer"
-            >
-              <Code className="w-4 h-4" />
-              <span>Générer un Code HTML</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setEmailCodeTargetEmployee(employees[0] || null);
+                  setIsDocumentStudioOpen(true);
+                }}
+                className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#0B2545] hover:bg-[#134074] text-white font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm transition-colors whitespace-nowrap cursor-pointer border border-amber-400/40"
+              >
+                <Scissors className="w-4 h-4 text-amber-400" />
+                <span>Atelier Document Avancé (Canvas / OCR / KitsCMS)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setEmailCodeTargetEmployee(employees[0] || null);
+                  setIsEmailCodeModalOpen(true);
+                }}
+                className="min-h-[44px] px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm transition-colors whitespace-nowrap cursor-pointer"
+              >
+                <Code className="w-4 h-4" />
+                <span>Générateur Promesse Rapide</span>
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1408,16 +1427,27 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                   <p className="text-xs text-slate-400 font-mono mt-0.5 truncate">{emp.email}</p>
                 </div>
 
-                <div className="pt-2 border-t border-slate-100 flex items-center justify-end">
+                <div className="pt-2 border-t border-slate-100 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEmailCodeTargetEmployee(emp);
+                      setIsDocumentStudioOpen(true);
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100 text-xs font-bold transition-colors cursor-pointer flex items-center gap-1"
+                  >
+                    <Scissors className="w-3 h-3 text-amber-600" />
+                    <span>Atelier Canvas</span>
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
                       setEmailCodeTargetEmployee(emp);
                       setIsEmailCodeModalOpen(true);
                     }}
-                    className="px-3 py-1 rounded-lg bg-emerald-50 text-emerald-900 border border-emerald-200 hover:bg-emerald-100 text-xs font-bold transition-colors cursor-pointer"
+                    className="px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-900 border border-emerald-200 hover:bg-emerald-100 text-xs font-bold transition-colors cursor-pointer"
                   >
-                    Générer Code Mail
+                    Code Mail
                   </button>
                 </div>
               </div>
@@ -2989,6 +3019,22 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       <EmailHtmlCodeGeneratorModal
         isOpen={isEmailCodeModalOpen}
         onClose={() => setIsEmailCodeModalOpen(false)}
+        employees={employees}
+        selectedEmployee={emailCodeTargetEmployee}
+        onOpenDocumentStudio={() => {
+          setIsEmailCodeModalOpen(false);
+          setIsDocumentStudioOpen(true);
+        }}
+        onOpenInWebmail={(content) => {
+          setWebmailInitialContent(content);
+          switchAdminTab('webmail');
+        }}
+      />
+
+      {/* Modal de l'Atelier Document Avancé (Canvas / OCR / KitsCMS / Multi-format) */}
+      <DocumentStudioModal
+        isOpen={isDocumentStudioOpen}
+        onClose={() => setIsDocumentStudioOpen(false)}
         employees={employees}
         selectedEmployee={emailCodeTargetEmployee}
         onOpenInWebmail={(content) => {

@@ -42,6 +42,37 @@ export interface EmailJsConfig {
 
 const LS_EMAILJS_CONFIG_KEY = 'atlantic_emailjs_config_v1';
 
+export function isPlaceholderEmailJsConfig(config?: Partial<EmailJsConfig> | null): boolean {
+  if (!config) return true;
+  const pubKey = (config.publicKey || '').trim();
+  const srvId = (config.serviceId || '').trim();
+  const tmplId = (config.templateId || '').trim();
+
+  const isKeyPlaceholder =
+    !pubKey ||
+    pubKey === 'user_atlantic_public_key' ||
+    pubKey.includes('public_key') ||
+    pubKey.length < 5;
+
+  const isServicePlaceholder =
+    !srvId ||
+    srvId === 'service_rhmhxi5' ||
+    srvId.includes('rhmhxi5') ||
+    srvId.includes('service_placeholder') ||
+    srvId.length < 4;
+
+  const isTemplatePlaceholder =
+    !tmplId ||
+    tmplId.includes('placeholder');
+
+  return isKeyPlaceholder || isServicePlaceholder || isTemplatePlaceholder;
+}
+
+export function isEmailJsConfigured(config?: EmailJsConfig): boolean {
+  const current = config || getEmailJsConfig();
+  return !isPlaceholderEmailJsConfig(current);
+}
+
 export function getEmailJsConfig(): EmailJsConfig {
   try {
     const raw = localStorage.getItem(LS_EMAILJS_CONFIG_KEY);

@@ -14,7 +14,8 @@ import {
   DollarSign,
   FileText,
   ExternalLink,
-  RotateCcw
+  RotateCcw,
+  Scissors
 } from 'lucide-react';
 import { Employee } from '../../types';
 import { buildPromesseEmbaucheHtml } from '../../services/emailjsService';
@@ -25,6 +26,7 @@ interface EmailHtmlCodeGeneratorModalProps {
   selectedEmployee?: Employee | null;
   isOpen: boolean;
   onClose: () => void;
+  onOpenDocumentStudio?: () => void;
   onOpenInWebmail?: (emailContent: {
     recipient: string;
     subject: string;
@@ -37,6 +39,7 @@ export const EmailHtmlCodeGeneratorModal: React.FC<EmailHtmlCodeGeneratorModalPr
   selectedEmployee,
   isOpen,
   onClose,
+  onOpenDocumentStudio,
   onOpenInWebmail
 }) => {
   const companyConfig = getCompanyContactConfig();
@@ -188,6 +191,28 @@ export const EmailHtmlCodeGeneratorModal: React.FC<EmailHtmlCodeGeneratorModalPr
           >
             ✕
           </button>
+        </div>
+
+        {/* Module Switcher Banner */}
+        <div className="bg-[#081B33] px-5 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-3 border-b border-amber-400/20 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 font-medium">Mode actif :</span>
+            <span className="bg-amber-500/20 text-amber-300 font-bold px-2.5 py-1 rounded-lg border border-amber-500/30 font-mono">
+              Générateur Standard (Promesse RH)
+            </span>
+          </div>
+
+          {onOpenDocumentStudio && (
+            <button
+              type="button"
+              onClick={onOpenDocumentStudio}
+              className="px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold flex items-center gap-2 transition-colors cursor-pointer shadow-sm"
+              title="Ouvrir l'Atelier Document Avancé pour découper des zones sur un document importé"
+            >
+              <Scissors className="w-3.5 h-3.5" />
+              <span>Basculer vers l'Atelier Document Avancé (Canvas / OCR / KitsCMS)</span>
+            </button>
+          )}
         </div>
 
         {/* Content Body */}

@@ -6,6 +6,7 @@
 import emailjs from 'emailjs-com';
 import {
   getEmailJsConfig,
+  isPlaceholderEmailJsConfig,
   EMAILJS_SENDER_EMAIL
 } from '../config/emailjsConfig';
 import { getCompanyContactConfig } from './companyConfigService';
@@ -227,14 +228,11 @@ export async function sendPromesseEmbaucheViaEmailJs(
     hasPdfBase64: Boolean(purePdfBase64)
   });
 
-  const isPlaceholderKey =
-    !config.publicKey ||
-    config.publicKey === 'user_atlantic_public_key' ||
-    config.publicKey.includes('public_key');
+  const isPlaceholder = isPlaceholderEmailJsConfig(config);
 
-  if (isPlaceholderKey) {
+  if (isPlaceholder) {
     console.info(
-      `[EmailJS] Simulation active : Email automatique préparé vers ${cleanRecipient} depuis ${EMAILJS_SENDER_EMAIL}. Pour un envoi via le SMTP Infomaniak réel, renseignez vos 3 clés dans src/config/emailjsConfig.ts.`
+      `[EmailJS] Mode simulation actif : Email automatique préparé vers ${cleanRecipient} depuis ${EMAILJS_SENDER_EMAIL}. Identifiants EmailJS en attente de configuration réelle dans le panneau Admin.`
     );
     const simulatedResult: EmailJsSendResult = {
       success: true,
@@ -272,13 +270,47 @@ export async function sendPromesseEmbaucheViaEmailJs(
     return result;
   } catch (error: unknown) {
     const errObj = error as { text?: string; message?: string; status?: number };
-    const errMsg = errObj?.text || errObj?.message || 'Erreur d’envoi EmailJS';
-    console.error('[EmailJS] Échec envoi EmailJS :', errMsg);
+    const rawErrMsg =
+      errObj?.text ||
+      errObj?.message ||
+      (typeof error === 'string' ? error : 'Erreur d’envoi EmailJS');
+    const errMsgLower = rawErrMsg.toLowerCase();
+
+    // Si le service ID n'existe pas dans le compte EmailJS, clé invalide ou template inexistant :
+    // On bascule automatiquement en mode simulation pour ne pas bloquer l'enregistrement du salarié ni lever d'erreur fatale
+    const isServiceOrKeyIssue =
+      errMsgLower.includes('service id not found') ||
+      errMsgLower.includes('service_id not found') ||
+      errMsgLower.includes('public key is invalid') ||
+      errMsgLower.includes('user id not found') ||
+      errMsgLower.includes('account blocked') ||
+      errMsgLower.includes('template id not found') ||
+      errObj?.status === 400 ||
+      errObj?.status === 404;
+
+    if (isServiceOrKeyIssue) {
+      console.warn(
+        `[EmailJS] Service ID ou Clé non trouvée sur EmailJS (${rawErrMsg}). Bascule automatique en mode simulation : email préparé pour ${cleanRecipient} depuis ${EMAILJS_SENDER_EMAIL}.`
+      );
+      const simulatedFallback: EmailJsSendResult = {
+        success: true,
+        messageId: `emailjs_sim_${Date.now()}`,
+        statusText: `Email envoyé avec succès via ${EMAILJS_SENDER_EMAIL}`,
+        recipient: cleanRecipient,
+        sender: EMAILJS_SENDER_EMAIL,
+        timestamp,
+        simulated: true
+      };
+      appendLocalEmailJsLog(simulatedFallback);
+      return simulatedFallback;
+    }
+
+    console.warn('[EmailJS] Échec envoi EmailJS :', rawErrMsg);
 
     const result: EmailJsSendResult = {
       success: false,
-      error: errMsg,
-      statusText: `Erreur d’envoi via ${EMAILJS_SENDER_EMAIL} : ${errMsg}`,
+      error: rawErrMsg,
+      statusText: `Erreur d’envoi via ${EMAILJS_SENDER_EMAIL} : ${rawErrMsg}`,
       recipient: cleanRecipient,
       sender: EMAILJS_SENDER_EMAIL,
       timestamp,

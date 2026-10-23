@@ -4,6 +4,7 @@ import {
   getEmailJsConfig,
   saveEmailJsConfig,
   EmailJsConfig,
+  isPlaceholderEmailJsConfig,
   EMAILJS_SENDER_EMAIL
 } from '../config/emailjsConfig';
 import {
@@ -58,7 +59,9 @@ export const EmailJsConfigModal: React.FC<EmailJsConfigModalProps> = ({ isOpen, 
       if (res.success) {
         setTestStatus({
           type: 'success',
-          message: 'Email envoyé avec succès via atlantictransport.int.contact@ik.me'
+          message: res.simulated
+            ? `Simulation réussie : email préparé pour ${testEmail} depuis atlantictransport.int.contact@ik.me (Mode simulation actif : Service ID par défaut à remplacer par votre Service ID EmailJS pour l'envoi réel).`
+            : 'Email envoyé avec succès via atlantictransport.int.contact@ik.me'
         });
       } else {
         setTestStatus({
@@ -119,8 +122,13 @@ export const EmailJsConfigModal: React.FC<EmailJsConfigModalProps> = ({ isOpen, 
           <form onSubmit={handleSave} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  EMAILJS_SERVICE_ID *
+                <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>EMAILJS_SERVICE_ID *</span>
+                  {(config.serviceId === 'service_rhmhxi5' || isPlaceholderEmailJsConfig(config)) && (
+                    <span className="text-[10px] text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded font-normal">
+                      Mode simulation actif
+                    </span>
+                  )}
                 </label>
                 <input
                   type="text"

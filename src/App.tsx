@@ -4,11 +4,32 @@ import { Header, Footer } from './components/LayoutChrome';
 import { PublicPages } from './components/PublicPages';
 import { EmployeePortal } from './components/EmployeePortal';
 import { AdminBackoffice } from './components/AdminBackoffice';
+import { PublicDocumentViewer } from './components/PublicDocumentViewer';
 import {
   getEmployees,
   getSiteSettings,
   syncFromStaticEmployesJson
 } from './services/staticStorage';
+
+function extractPublicDocIdFromUrl(): string | null {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const queryDoc = params.get('doc') || params.get('document');
+    if (queryDoc && queryDoc.trim().length > 0) {
+      return queryDoc.trim();
+    }
+  } catch {
+    // Ignore URLSearchParams errors
+  }
+
+  const hash = window.location.hash;
+  const matchHash = hash.match(/[#&?]doc\/([a-zA-Z0-9_-]+)/i) || hash.match(/[?&]doc=([a-zA-Z0-9_-]+)/i);
+  if (matchHash && matchHash[1]) {
+    return matchHash[1];
+  }
+
+  return null;
+}
 
 function extractDirectTokenFromUrl(): string | null {
   try {
@@ -92,6 +113,7 @@ export default function App() {
   const [settings, setSettings] = useState<SiteSettings>(() => getSiteSettings());
   const [currentPage, setCurrentPage] = useState<PublicPage>(resolveInitialPage);
   const [selectedServiceForQuote, setSelectedServiceForQuote] = useState<string | undefined>(undefined);
+  const [publicDocId, setPublicDocId] = useState<string | null>(extractPublicDocIdFromUrl);
   const [directAccessToken, setDirectAccessToken] = useState<string | null>(extractDirectTokenFromUrl);
   const [isEmployeeModalOpen, setIsEmployeeModalOpen] = useState<boolean>(false);
 
@@ -130,6 +152,7 @@ export default function App() {
   // Listen to browser popstate & owner keyboard shortcut (Ctrl+Shift+A)
   useEffect(() => {
     const handlePopState = () => {
+      setPublicDocId(extractPublicDocIdFromUrl());
       setDirectAccessToken(extractDirectTokenFromUrl());
       setCurrentPage(resolveInitialPage());
     };
@@ -216,6 +239,23 @@ export default function App() {
     setAdminToken(null);
     navigateTo('accueil');
   };
+
+  if (publicDocId) {
+    return (
+      <PublicDocumentViewer
+        documentId={publicDocId}
+        onBackToHome={() => {
+          setPublicDocId(null);
+          try {
+            window.history.pushState({}, '', '/');
+          } catch {
+            // Ignore pushState errors
+          }
+          navigateTo('accueil');
+        }}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F8F9FA] text-gray-900">
