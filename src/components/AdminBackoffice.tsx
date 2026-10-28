@@ -29,7 +29,8 @@ import {
   AlertTriangle,
   Building2,
   Phone,
-  Scissors
+  Scissors,
+  Sparkles
 } from 'lucide-react';
 import { ContactMessage, Employee, SiteSettings } from '../types';
 import { BrandLogo } from './BrandLogo';
@@ -1390,6 +1391,18 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                   setEmailCodeTargetEmployee(employees[0] || null);
                   setIsDocumentStudioOpen(true);
                 }}
+                className="min-h-[44px] px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-xs sm:text-sm flex items-center gap-2 shadow-sm transition-all whitespace-nowrap cursor-pointer border border-amber-300"
+              >
+                <Sparkles className="w-4 h-4 text-slate-950" />
+                <span>Mode HTML RAST (Reproduction Fidèle)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setEmailCodeTargetEmployee(employees[0] || null);
+                  setIsDocumentStudioOpen(true);
+                }}
                 className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#0B2545] hover:bg-[#134074] text-white font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm transition-colors whitespace-nowrap cursor-pointer border border-amber-400/40"
               >
                 <Scissors className="w-4 h-4 text-amber-400" />
@@ -2247,7 +2260,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
                   <div className="sm:col-span-12">
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Département (Affiche la liste des postes possibles et les 6 principales responsabilités du poste) *
+                      Département (Affiche la liste des postes possibles et les responsabilités du poste) *
                     </label>
                     <select
                       value={empForm.departement}
@@ -2277,7 +2290,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                 {/* Liste des postes possibles pour ce département */}
                 <div className="space-y-1.5">
                   <span className="text-[11px] font-bold text-[#0B2545] block">
-                    Postes possibles du département (cliquer pour sélectionner le poste et ses 6 responsabilités) :
+                    Postes possibles du département (cliquer pour sélectionner le poste et ses responsabilités) :
                   </span>
                   <div className="flex flex-wrap gap-1.5">
                     {(
@@ -2303,10 +2316,10 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                   </div>
                 </div>
 
-                {/* 6 principales responsabilités/missions du poste sélectionné */}
+                {/* Principales responsabilités/missions du poste sélectionné */}
                 <div className="space-y-1.5 pt-1">
                   <span className="text-[11px] font-bold text-amber-800 block">
-                    6 Principales responsabilités / missions du poste «{' '}
+                    Principales responsabilités / missions du poste «{' '}
                     {findPosteDefinition(empForm.poste, empForm.departement)?.poste.titre ||
                       empForm.poste ||
                       'Poste sélectionné'}{' '}

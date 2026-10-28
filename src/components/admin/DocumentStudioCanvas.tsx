@@ -12,7 +12,8 @@ import {
   Check,
   MousePointer,
   Crosshair,
-  Move
+  Move,
+  Upload
 } from 'lucide-react';
 import {
   DocumentZone,
@@ -32,6 +33,7 @@ interface DocumentStudioCanvasProps {
   onToggleSelectionMode: () => void;
   currentLabel: ZoneLabelType;
   viewMode: 'original' | 'cleaned' | 'reconstructed';
+  onFileUpload?: (file: File) => void;
 }
 
 export const DocumentStudioCanvas: React.FC<DocumentStudioCanvasProps> = ({
@@ -44,11 +46,13 @@ export const DocumentStudioCanvas: React.FC<DocumentStudioCanvasProps> = ({
   isSelectionModeActive,
   onToggleSelectionMode,
   currentLabel,
-  viewMode
+  viewMode,
+  onFileUpload
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const baseImageRef = useRef<HTMLImageElement | null>(null);
+  const dropInputRef = useRef<HTMLInputElement>(null);
 
   const [zoom, setZoom] = useState<number>(1);
   const [isDrawing, setIsDrawing] = useState<boolean>(false);
@@ -428,28 +432,64 @@ export const DocumentStudioCanvas: React.FC<DocumentStudioCanvasProps> = ({
       {/* Surface de travail Canvas interactif avec défilement */}
       <div
         ref={containerRef}
-        className="overflow-auto max-h-[580px] p-6 flex items-center justify-center bg-radial from-slate-800 to-slate-950"
+        className="overflow-auto min-h-[420px] max-h-[600px] p-4 sm:p-6 flex items-center justify-center bg-slate-950"
       >
-        <div
-          style={{
-            transform: `scale(${zoom})`,
-            transformOrigin: 'top center',
-            transition: 'transform 0.1s ease-out'
+        <input
+          ref={dropInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,application/pdf,.doc,.docx"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f && onFileUpload) onFileUpload(f);
           }}
-          className="relative inline-block shadow-2xl rounded-lg overflow-hidden border-2 border-slate-700 bg-white"
-        >
-          <canvas
-            ref={canvasRef}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            style={{
-              cursor: isSelectionModeActive ? 'crosshair' : isDraggingZone ? 'grabbing' : 'default',
-              display: 'block',
-              maxWidth: 'none'
+          className="hidden"
+        />
+
+        {!imageSrc ? (
+          <div
+            onClick={() => dropInputRef.current?.click()}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              const f = e.dataTransfer.files?.[0];
+              if (f && onFileUpload) onFileUpload(f);
             }}
-          />
-        </div>
+            className="w-full max-w-lg border-2 border-dashed border-slate-700 hover:border-amber-400 bg-slate-900/60 hover:bg-slate-900/90 rounded-2xl p-8 sm:p-12 text-center cursor-pointer transition-all space-y-4 my-auto shadow-xl"
+          >
+            <div className="w-16 h-16 rounded-2xl bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center justify-center mx-auto shadow-inner">
+              <Upload className="w-8 h-8" />
+            </div>
+            <div className="space-y-1.5">
+              <h4 className="text-base font-bold text-white">
+                Importer votre document de référence
+              </h4>
+              <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
+                Glissez-déposez ou cliquez ici pour charger votre fichier (PDF, image JPG/PNG ou Word).
+              </p>
+            </div>
+            <div className="pt-2">
+              <span className="text-[11px] font-mono text-amber-300 bg-amber-500/10 px-3.5 py-1.5 rounded-xl border border-amber-500/30 font-semibold inline-block">
+                ⚡ Fidélité 1:1 · Reproduction exacte de votre mise en page
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="relative inline-block shadow-2xl rounded-lg overflow-hidden border-2 border-slate-700 bg-white">
+            <canvas
+              ref={canvasRef}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              style={{
+                width: `${Math.round(naturalDim.width * zoom)}px`,
+                height: `${Math.round(naturalDim.height * zoom)}px`,
+                cursor: isSelectionModeActive ? 'crosshair' : isDraggingZone ? 'grabbing' : 'default',
+                display: 'block',
+                maxWidth: 'none'
+              }}
+            />
+          </div>
+        )}
       </div>
 
       {/* Pied de Canvas : Guide rapide */}

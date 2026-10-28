@@ -1428,7 +1428,7 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
                   <div className="flex items-center gap-2 text-xs font-bold text-[#0B2545]">
                     <Briefcase className="w-4 h-4 text-amber-600" />
                     <span>
-                      Postes possibles — {currentDeptDef.name} ({currentDeptDef.postesDetail.length} postes avec 6 responsabilités/missions chacun) :
+                      Postes possibles — {currentDeptDef.name} ({currentDeptDef.postesDetail.length} postes avec leurs responsabilités/missions) :
                     </span>
                   </div>
                   <button
@@ -1438,7 +1438,7 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
                   >
                     {showAllDeptPostesCatalog
                       ? 'Masquer le détail de tous les postes'
-                      : `Voir les ${currentDeptDef.postesDetail.length} postes & leurs 6 responsabilités`}
+                      : `Voir les ${currentDeptDef.postesDetail.length} postes & leurs responsabilités`}
                   </button>
                 </div>
 
@@ -1465,7 +1465,7 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
                               : 'bg-slate-100 text-slate-500'
                           }`}
                         >
-                          6 missions
+                          {posteItem.missions.length} missions
                         </span>
                       </button>
                     );
@@ -1473,7 +1473,7 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
                 </div>
               </div>
 
-              {/* Catalogue complet dépliable : Tous les postes du département avec leurs 6 missions */}
+              {/* Catalogue complet dépliable : Tous les postes du département avec leurs missions */}
               {showAllDeptPostesCatalog && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-slate-200">
                   {currentDeptDef.postesDetail.map((pItem) => {
@@ -1511,13 +1511,13 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
                 </div>
               )}
 
-              {/* Les 6 principales responsabilités/missions du poste sélectionné */}
+              {/* Principales responsabilités/missions du poste sélectionné */}
               <div className="pt-2 border-t border-slate-200 space-y-2.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-xs font-bold text-[#0B2545]">
                     <Building2 className="w-4 h-4 text-amber-600" />
                     <span>
-                      6 Principales responsabilités / missions du poste «{' '}
+                      Principales responsabilités / missions du poste «{' '}
                       <span className="text-amber-700">{currentPosteDef.titre}</span> » :
                     </span>
                   </div>
@@ -1532,7 +1532,7 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
                       }
                       className="text-xs font-semibold text-amber-700 hover:text-amber-900 underline"
                     >
-                      Ré-appliquer les 6 missions de ce poste
+                      Ré-appliquer les missions de ce poste
                     </button>
                     <button
                       type="button"
@@ -1544,7 +1544,7 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
                       }
                       className="text-xs font-semibold text-slate-600 hover:text-[#0B2545] underline"
                     >
-                      Appliquer les 6 sous-rubriques générales du département
+                      Appliquer les rubriques générales du département
                     </button>
                   </div>
                 </div>

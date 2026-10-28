@@ -27,14 +27,16 @@ import {
   FileCode,
   CheckCircle2,
   AlertCircle,
-  HelpCircle,
-  Settings,
   ShieldCheck,
-  FolderOpen
+  ChevronLeft,
+  ChevronRight,
+  Edit3,
+  Type
 } from 'lucide-react';
 import { Employee } from '../../types';
 import {
   DocumentZone,
+  EditableTextBlock,
   OcrTextBlock,
   StudioDocument,
   ZoneLabelType,
@@ -42,6 +44,7 @@ import {
   ZONE_LABELS_CONFIG,
   analyzeDocumentAndMaskText,
   buildKitsCmsHtml,
+  composeDocumentExactImage,
   cropExactPixelZone,
   exportStudioDocx,
   exportStudioHtml,
@@ -52,7 +55,8 @@ import {
   saveStudioDocument
 } from '../../services/documentStudioService';
 import { DocumentStudioCanvas } from './DocumentStudioCanvas';
-import sampleDocUrl from '../../assets/images/hero_multimodal_port_1790568794371.jpg';
+import { convertPdfFileToImages } from '../../services/pdfRendererService';
+import { HtmlRastModal } from './HtmlRastModal';
 
 interface DocumentStudioModalProps {
   isOpen: boolean;
@@ -73,25 +77,29 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
   selectedEmployee,
   onOpenInWebmail
 }) => {
-  // Document actif
-  const [docId, setDocId] = useState<string>(() => `doc_at_${Date.now()}`);
-  const [docTitle, setDocTitle] = useState<string>(
-    "Promesse d'Embauche Officielle - Atlantic Transport Ltd."
-  );
-  const [recipientName, setRecipientName] = useState<string>(
-    selectedEmployee?.nom_complet || 'SALIMATA TRAORER'
-  );
-  const [recipientEmail, setRecipientEmail] = useState<string>(
-    selectedEmployee?.email || 'salimata.traorer@atlantictransport.ca'
-  );
-  const [matricule, setMatricule] = useState<string>(
-    selectedEmployee?.matricule || 'AT-2026-001'
-  );
+  // Identifiant unique du document
+  const [docId, setDocId] = useState<string>(() => `doc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
+
+  // Métadonnées du document (100% dynamiques et agnostiques)
+  const [docTitle, setDocTitle] = useState<string>('');
+  const [recipientName, setRecipientName] = useState<string>('');
+  const [recipientEmail, setRecipientEmail] = useState<string>('');
+  const [matricule, setMatricule] = useState<string>(() => `REF-${Math.floor(100000 + Math.random() * 900000)}`);
 
   // Images du document
   const [originalImageSrc, setOriginalImageSrc] = useState<string>('');
-  const [originalFileName, setOriginalFileName] = useState<string>('promesse_embauche_modele.jpg');
+  const [originalFileName, setOriginalFileName] = useState<string>('');
   const [cleanedBackgroundSrc, setCleanedBackgroundSrc] = useState<string>('');
+  const [compositeDocSrc, setCompositeDocSrc] = useState<string>('');
+  const [pdfPages, setPdfPages] = useState<string[]>([]);
+  const [currentPdfPageIndex, setCurrentPdfPageIndex] = useState<number>(0);
+  const [isLoadingPdf, setIsLoadingPdf] = useState<boolean>(false);
+
+  // Dimensions naturelles du document
+  const [docDimensions, setDocDimensions] = useState<{ width: number; height: number }>({
+    width: 800,
+    height: 1130
+  });
 
   // Workflow states
   const [zones, setZones] = useState<DocumentZone[]>([]);
@@ -99,6 +107,12 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
   const [currentLabelForNewZone, setCurrentLabelForNewZone] = useState<ZoneLabelType>('logo');
   const [isSelectionModeActive, setIsSelectionModeActive] = useState<boolean>(true); // Étape 1 : actif d'office
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4>(1);
+
+  // Blocs de texte réels et éditables (extraits du document, zéro texte fictif)
+  const [textBlocks, setTextBlocks] = useState<EditableTextBlock[]>([]);
+
+  // Onglet actif dans le panneau inférieur
+  const [activeBottomTab, setActiveBottomTab] = useState<'zones' | 'texts'>('zones');
 
   // OCR
   const [ocrBlocks, setOcrBlocks] = useState<OcrTextBlock[]>([]);
@@ -116,126 +130,12 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
   // Modals annexes
   const [isHostingModalOpen, setIsHostingModalOpen] = useState<boolean>(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
+  const [isHtmlRastModalOpen, setIsHtmlRastModalOpen] = useState<boolean>(false);
 
   // Notifications
   const [toastMsg, setToastMsg] = useState<{ type: 'success' | 'info' | 'error'; text: string } | null>(null);
 
-  // Initialisation par défaut avec un template officiel si aucune image n'est importée
-  useEffect(() => {
-    if (!originalImageSrc) {
-      // Création d'une image vierge de base pour le modèle
-      const initCanvas = document.createElement('canvas');
-      initCanvas.width = 800;
-      initCanvas.height = 1130;
-      const ctx = initCanvas.getContext('2d');
-      if (ctx) {
-        // Fond blanc papier
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, 800, 1130);
-
-        // Bandeau en-tête bleu marine Atlantic
-        ctx.fillStyle = '#0B2545';
-        ctx.fillRect(0, 0, 800, 120);
-
-        // Ligne d'or CBSA
-        ctx.fillStyle = '#D4A017';
-        ctx.fillRect(0, 116, 800, 4);
-
-        // Titre
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 24px Arial, sans-serif';
-        ctx.fillText('ATLANTIC TRANSPORT LTD', 60, 60);
-
-        ctx.fillStyle = '#D4A017';
-        ctx.font = 'bold 12px Arial, sans-serif';
-        ctx.fillText('TRANSITAIRE INTERNATIONAL & DOUANES CBSA / OEA', 60, 88);
-
-        // Filigrane blason léger
-        ctx.fillStyle = 'rgba(11, 37, 69, 0.04)';
-        ctx.font = 'bold 140px Arial, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('ATLANTIC', 400, 650);
-        ctx.textAlign = 'left';
-
-        // Lignes de document standard
-        ctx.fillStyle = '#f8fafc';
-        ctx.fillRect(60, 150, 680, 50);
-
-        ctx.fillStyle = '#0B2545';
-        ctx.font = 'bold 16px Arial, sans-serif';
-        ctx.fillText("PROMESSE D'EMBAUCHE OFFICIELLE", 80, 182);
-
-        ctx.fillStyle = '#334155';
-        ctx.font = '14px Arial, sans-serif';
-        ctx.fillText('Madame, Monsieur, nous confirmons votre engagement au sein de nos équipes.', 60, 250);
-        ctx.fillText("Poste retenu : Exploitant Transport & Logistique Internationale", 60, 285);
-        ctx.fillText("Date de prise d'effet : 04 Janvier 2027 · Lieu : Surrey, Colombie-Britannique Canada", 60, 320);
-        ctx.fillText("Rémunération horaire : 24.50 CAD / heure avec avantages conventionnels", 60, 355);
-
-        // Lignes de signature
-        ctx.fillStyle = '#0B2545';
-        ctx.font = 'bold 13px Arial, sans-serif';
-        ctx.fillText('Pour Atlantic Transport Ltd :', 60, 950);
-        ctx.font = '11px Arial, sans-serif';
-        ctx.fillStyle = '#64748b';
-        ctx.fillText('La Direction des Ressources Humaines', 60, 970);
-
-        // Pied de page
-        ctx.fillStyle = '#f1f5f9';
-        ctx.fillRect(0, 1070, 800, 60);
-        ctx.fillStyle = '#64748b';
-        ctx.font = '11px Arial, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('Atlantic Transport Ltd · King George Blvd, Surrey BC · atlantictransport.int.contact@ik.me', 400, 1105);
-
-        const dataUrl = initCanvas.toDataURL('image/png');
-        setOriginalImageSrc(dataUrl);
-
-        // Pré-création de 2 zones standards prêtes à l'emploi (Logo et Signature)
-        const defaultLogo = cropExactPixelZone(initCanvas, 50, 30, 280, 70);
-        const defaultSig = cropExactPixelZone(initCanvas, 60, 940, 220, 80);
-
-        const initialZones: DocumentZone[] = [
-          {
-            id: 'zone_logo_init',
-            name: 'Logo Entreprise',
-            x: 50,
-            y: 30,
-            width: 280,
-            height: 70,
-            label: 'logo',
-            action: 'keep',
-            croppedImageDataUrl: defaultLogo,
-            kitsCmsImageUrl: ''
-          },
-          {
-            id: 'zone_sig_init',
-            name: 'Signature Employeur',
-            x: 60,
-            y: 940,
-            width: 220,
-            height: 80,
-            label: 'signature',
-            action: 'keep',
-            croppedImageDataUrl: defaultSig,
-            kitsCmsImageUrl: ''
-          }
-        ];
-        setZones(initialZones);
-      }
-    }
-  }, [originalImageSrc]);
-
-  // Synchronisation avec l'employé sélectionné
-  useEffect(() => {
-    if (selectedEmployee) {
-      setRecipientName(selectedEmployee.nom_complet);
-      setRecipientEmail(selectedEmployee.email);
-      setMatricule(selectedEmployee.matricule);
-    }
-  }, [selectedEmployee]);
-
-  // Notification helper
+  // Helper pour afficher les messages
   const showToast = (text: string, type: 'success' | 'info' | 'error' = 'success') => {
     setToastMsg({ type, text });
     setTimeout(() => setToastMsg(null), 3500);
@@ -244,91 +144,205 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
   // URL publique générée
   const publicUrl = generatePublicDownloadUrl(docId);
 
-  // ACTION 1 : Import de document (PDF, Word ou Image JPG/PNG)
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  // Traitement universel des fichiers importés (PDF, JPG, PNG, Word)
+  const processUploadedFile = async (file: File) => {
     setOriginalFileName(file.name);
-    const reader = new FileReader();
 
-    if (file.type.startsWith('image/')) {
-      reader.onload = () => {
-        if (typeof reader.result === 'string') {
-          setOriginalImageSrc(reader.result);
+    const cleanName = file.name
+      .replace(/\.[^/.]+$/, '')
+      .replace(/[_-]/g, ' ')
+      .trim();
+    if (!docTitle || docTitle.trim().length === 0) {
+      setDocTitle(cleanName.charAt(0).toUpperCase() + cleanName.slice(1));
+    }
+
+    const isPdf =
+      file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+
+    // 1. FICHIERS PDF : Rendu haute définition ET extraction du vrai texte natif
+    if (isPdf) {
+      setIsLoadingPdf(true);
+      showToast(`Extraction vectorielle et lecture du texte du PDF "${file.name}"...`, 'info');
+      try {
+        const info = await convertPdfFileToImages(file, { scale: 1.8 });
+        if (info.pagesDataUrls.length > 0) {
+          setPdfPages(info.pagesDataUrls);
+          setCurrentPdfPageIndex(0);
+          setOriginalImageSrc(info.pagesDataUrls[0]);
           setCleanedBackgroundSrc('');
+          setCompositeDocSrc('');
           setZones([]);
           setSelectedZoneId(null);
           setOcrAnalyzed(false);
-          setIsSelectionModeActive(true); // Obligatoire Étape 1
-          setCurrentStep(1);
-          setCanvasViewMode('original');
-          showToast(`Document "${file.name}" importé. Commencez par l'Étape 1 : Sélection manuelle des zones.`);
-        }
-      };
-      reader.readAsDataURL(file);
-    } else {
-      // Pour PDF ou DOCX : conversion directe en image de rendu Canvas
-      reader.onload = () => {
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = 800;
-        tempCanvas.height = 1130;
-        const ctx = tempCanvas.getContext('2d');
-        if (ctx) {
-          ctx.fillStyle = '#ffffff';
-          ctx.fillRect(0, 0, 800, 1130);
-          ctx.fillStyle = '#0B2545';
-          ctx.fillRect(0, 0, 800, 120);
-          ctx.fillStyle = '#D4A017';
-          ctx.fillRect(0, 116, 800, 4);
-
-          ctx.fillStyle = '#ffffff';
-          ctx.font = 'bold 22px Arial';
-          ctx.fillText('ATLANTIC TRANSPORT LTD', 60, 65);
-
-          ctx.fillStyle = '#1e293b';
-          ctx.font = 'bold 18px Arial';
-          ctx.fillText(`DOCUMENT IMPORTÉ : ${file.name.toUpperCase()}`, 60, 200);
-
-          ctx.font = '14px Arial';
-          ctx.fillStyle = '#64748b';
-          ctx.fillText(`Format détecté : ${file.type || 'Fichier bureautique'} · Prêt pour découpage Canvas`, 60, 240);
-
-          ctx.strokeStyle = '#e2e8f0';
-          ctx.strokeRect(60, 280, 680, 700);
-
-          const converted = tempCanvas.toDataURL('image/png');
-          setOriginalImageSrc(converted);
-          setCleanedBackgroundSrc('');
-          setZones([]);
           setIsSelectionModeActive(true);
           setCurrentStep(1);
           setCanvasViewMode('original');
-          showToast(`Document bureautique "${file.name}" converti en haute résolution.`);
+
+          // Si du texte a été extrait du PDF, on peuple les blocs de texte éditables
+          if (info.extractedTextBlocks && info.extractedTextBlocks.length > 0) {
+            setTextBlocks(info.extractedTextBlocks);
+            showToast(
+              `PDF chargé : ${info.extractedTextBlocks.length} paragraphe(s) de texte natif extrait(s) et modifiable(s) !`
+            );
+          } else {
+            setTextBlocks([]);
+            showToast(
+              `PDF "${file.name}" affiché (${info.numPages} page(s)). Étape 1 : Tracez vos rectangles sur le document.`
+            );
+          }
+
+          const testImg = new Image();
+          testImg.onload = () => {
+            setDocDimensions({
+              width: testImg.naturalWidth || 800,
+              height: testImg.naturalHeight || 1130
+            });
+          };
+          testImg.src = info.pagesDataUrls[0];
+        } else {
+          showToast("Aucune page n'a pu être extraite du fichier PDF.", 'error');
+        }
+      } catch (pdfErr) {
+        console.error('Erreur lecture PDF:', pdfErr);
+        showToast('Erreur lors de la lecture du fichier PDF.', 'error');
+      } finally {
+        setIsLoadingPdf(false);
+      }
+      return;
+    }
+
+    // 2. FICHIERS IMAGES (PNG, JPG, WEBP, SVG)
+    if (file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === 'string') {
+          const res = reader.result;
+          setPdfPages([res]);
+          setCurrentPdfPageIndex(0);
+          setOriginalImageSrc(res);
+          setCleanedBackgroundSrc('');
+          setCompositeDocSrc('');
+          setZones([]);
+          setSelectedZoneId(null);
+          setTextBlocks([]);
+          setOcrAnalyzed(false);
+          setIsSelectionModeActive(true);
+          setCurrentStep(1);
+          setCanvasViewMode('original');
+
+          const testImg = new Image();
+          testImg.onload = () => {
+            setDocDimensions({
+              width: testImg.naturalWidth || 800,
+              height: testImg.naturalHeight || 1130
+            });
+          };
+          testImg.src = res;
+
+          showToast(`Document "${file.name}" chargé. Étape 1 : Tracez vos rectangles sur le document.`);
         }
       };
       reader.readAsDataURL(file);
+      return;
     }
+
+    // 3. FICHIERS BUREAUTIQUES (DOCX, TXT...)
+    const reader = new FileReader();
+    reader.onload = () => {
+      const content = typeof reader.result === 'string' ? reader.result : '';
+      const lines = content.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+      
+      if (lines.length > 0) {
+        setTextBlocks(
+          lines.slice(0, 8).map((l, i) => ({
+            id: `docx_line_${i}`,
+            text: l,
+            isHeading: i === 0 || l.length < 50
+          }))
+        );
+      }
+
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = 800;
+      tempCanvas.height = 1130;
+      const ctx = tempCanvas.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, 800, 1130);
+        ctx.fillStyle = '#0f172a';
+        ctx.font = 'bold 20px Arial';
+        ctx.fillText(cleanName.toUpperCase(), 60, 80);
+
+        ctx.font = '13px Arial';
+        ctx.fillStyle = '#334155';
+        let yPos = 140;
+        for (const line of lines.slice(0, 30)) {
+          ctx.fillText(line.slice(0, 85), 60, yPos);
+          yPos += 24;
+        }
+
+        const converted = tempCanvas.toDataURL('image/png');
+        setPdfPages([converted]);
+        setCurrentPdfPageIndex(0);
+        setOriginalImageSrc(converted);
+        setCleanedBackgroundSrc('');
+        setCompositeDocSrc('');
+        setZones([]);
+        setIsSelectionModeActive(true);
+        setCurrentStep(1);
+        setCanvasViewMode('original');
+        showToast(`Document "${file.name}" importé avec ${lines.length} ligne(s) de texte éditable.`);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processUploadedFile(file);
+    }
+  };
+
+  // Helper pour générer le code source HTML 100% éditable
+  const generateEmailHtml = async (
+    currentZones: DocumentZone[] = zones,
+    currentTexts: EditableTextBlock[] = textBlocks
+  ) => {
+    return buildKitsCmsHtml({
+      title: docTitle || 'Document Officiel',
+      recipientName,
+      recipientEmail,
+      matricule,
+      zones: currentZones,
+      cleanedBackgroundDataUrl: cleanedBackgroundSrc || originalImageSrc,
+      originalImageDataUrl: originalImageSrc,
+      publicDownloadUrl: publicUrl,
+      textBlocks: currentTexts
+    });
   };
 
   // ACTION 2 : ÉTAPE 2 - ANALYSER LE DOCUMENT (OCR & Masquage Visuel des textes)
   const handleAnalyzeDocument = async () => {
-    if (!originalImageSrc) return;
+    if (!originalImageSrc) {
+      showToast("Veuillez d'abord importer un document de référence.", "error");
+      return;
+    }
     setIsAnalyzingOcr(true);
-    showToast("Analyse OCR en cours... Détection et masquage visuel des textes.", "info");
+    showToast("Analyse OCR du document... Détection et masquage visuel des textes.", "info");
 
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = async () => {
       try {
         const { cleanedBackgroundDataUrl, ocrBlocks: detectedBlocks } =
-          await analyzeDocumentAndMaskText(img);
+          await analyzeDocumentAndMaskText(img, zones);
 
         setCleanedBackgroundSrc(cleanedBackgroundDataUrl);
         setOcrBlocks(detectedBlocks);
         setOcrAnalyzed(true);
         setCurrentStep(2);
-        setCanvasViewMode('cleaned'); // Affiche le fond nettoyé sans texte
+        setCanvasViewMode('cleaned');
         showToast("Étape 2 terminée : Textes masqués avec succès. L'arrière-plan graphique est propre.");
       } catch (err) {
         console.error("Erreur analyse OCR:", err);
@@ -341,31 +355,23 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
   };
 
   // ACTION 3 : ÉTAPE 2 / 3 - RECONSTRUIRE LA MISE EN PAGE
-  const handleReconstructLayout = () => {
-    if (zones.length === 0) {
-      showToast("Veuillez sélectionner au moins une zone sur le document avant de reconstruire.", "error");
+  const handleReconstructLayout = async () => {
+    if (!originalImageSrc) {
+      showToast("Veuillez d'abord importer votre document de référence.", "error");
       return;
     }
 
-    const html = buildKitsCmsHtml({
-      title: docTitle,
-      recipientName,
-      recipientEmail,
-      matricule,
-      zones,
-      cleanedBackgroundDataUrl: cleanedBackgroundSrc || originalImageSrc,
-      publicDownloadUrl: publicUrl
-    });
-
+    const html = await generateEmailHtml(zones, textBlocks);
     setReconstructedHtml(html);
     setCanvasViewMode('reconstructed');
     setCurrentStep(3);
-    showToast("Mise en page reconstruite avec succès avec vos zones actives.");
+    showToast("Mise en page reconstruite : le template contient du texte 100% éditable pour votre webmail.");
   };
 
   // ACTION 4 : RESTAURER INITIAL
   const handleRestoreInitial = () => {
     setCleanedBackgroundSrc('');
+    setCompositeDocSrc('');
     setZones([]);
     setSelectedZoneId(null);
     setOcrAnalyzed(false);
@@ -377,73 +383,64 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
 
   // ACTION 5 : ENREGISTRER LE DOCUMENT
   const handleSaveDocument = async () => {
+    if (!originalImageSrc) {
+      showToast("Aucun document à enregistrer.", "error");
+      return;
+    }
+
+    const currentHtml = reconstructedHtml || (await generateEmailHtml(zones, textBlocks));
+
     const studioDoc: StudioDocument = {
       id: docId,
-      title: docTitle,
+      title: docTitle || 'Document Officiel',
       recipientName,
       recipientEmail,
       matricule,
-      originalFileName,
+      originalFileName: originalFileName || 'document.pdf',
       originalFileType: 'image/png',
-      originalWidth: 800,
-      originalHeight: 1130,
+      originalWidth: docDimensions.width,
+      originalHeight: docDimensions.height,
       originalImageDataUrl: originalImageSrc,
       cleanedBackgroundDataUrl: cleanedBackgroundSrc || originalImageSrc,
       zones,
       ocrBlocks,
-      reconstructedHtml: reconstructedHtml || buildKitsCmsHtml({
-        title: docTitle,
-        recipientName,
-        recipientEmail,
-        matricule,
-        zones,
-        cleanedBackgroundDataUrl: cleanedBackgroundSrc || originalImageSrc,
-        publicDownloadUrl: publicUrl
-      }),
+      textBlocks,
+      reconstructedHtml: currentHtml,
       publicDownloadUrl: publicUrl,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
 
     await saveStudioDocument(studioDoc);
-    showToast("Document enregistré dans l'Atelier et synchronisé pour le lien public de téléchargement !");
+    showToast("Document enregistré et synchronisé pour le lien public de téléchargement !");
   };
 
   // ACTION 6 : PRÉPARER POUR KITSCMS
-  const handlePrepareKitsCms = () => {
-    const html = buildKitsCmsHtml({
-      title: docTitle,
-      recipientName,
-      recipientEmail,
-      matricule,
-      zones,
-      cleanedBackgroundDataUrl: cleanedBackgroundSrc || originalImageSrc,
-      publicDownloadUrl: publicUrl
-    });
+  const handlePrepareKitsCms = async () => {
+    if (!originalImageSrc) {
+      showToast("Veuillez d'abord importer votre document de référence.", "error");
+      return;
+    }
 
+    const html = await generateEmailHtml(zones, textBlocks);
     setReconstructedHtml(html);
     setCurrentStep(4);
-    showToast("Document préparé pour KitsCMS. Vérifiez vos zones ou copiez directement le code HTML.");
+    showToast("Document préparé pour KitsCMS. Le code source avec texte éditable est prêt.");
   };
 
   // ACTION 7 : COPIER LE CODE HTML POUR KITSCMS (BOUTON PRINCIPAL D'ACTION)
   const handleCopyKitsCmsHtml = async () => {
-    const code =
-      reconstructedHtml ||
-      buildKitsCmsHtml({
-        title: docTitle,
-        recipientName,
-        recipientEmail,
-        matricule,
-        zones,
-        cleanedBackgroundDataUrl: cleanedBackgroundSrc || originalImageSrc,
-        publicDownloadUrl: publicUrl
-      });
+    if (!originalImageSrc) {
+      showToast("Veuillez d'abord importer un document de référence.", "error");
+      return;
+    }
+
+    const code = reconstructedHtml || (await generateEmailHtml(zones, textBlocks));
 
     try {
       await navigator.clipboard.writeText(code.trim());
       setCopiedKitsCmsCode(true);
-      showToast("Code HTML KitsCMS copié dans le presse-papier !");
+      showToast("Code HTML copié ! Chaque mot et paragraphe est modifiable dans votre messagerie.");
       setTimeout(() => setCopiedKitsCmsCode(false), 3000);
     } catch {
       showToast("Impossible d'accéder au presse-papier.", "error");
@@ -452,7 +449,10 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
 
   // ACTION 8 : COPIER LE LIEN WEB POUR TÉLÉCHARGEMENT PDF (POUR LE DESTINATAIRE)
   const handleCopyPublicUrl = async () => {
-    // Sauvegarde préalable pour s'assurer que le destinataire puisse l'ouvrir
+    if (!originalImageSrc) {
+      showToast("Veuillez importer un document avant de générer le lien.", "error");
+      return;
+    }
     await handleSaveDocument();
     try {
       await navigator.clipboard.writeText(publicUrl);
@@ -465,23 +465,18 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
   };
 
   // ACTION 9 : TRANSFÉRER VERS LE WEBMAIL INFOMANIAK
-  const handleTransferToWebmail = () => {
-    const code =
-      reconstructedHtml ||
-      buildKitsCmsHtml({
-        title: docTitle,
-        recipientName,
-        recipientEmail,
-        matricule,
-        zones,
-        cleanedBackgroundDataUrl: cleanedBackgroundSrc || originalImageSrc,
-        publicDownloadUrl: publicUrl
-      });
+  const handleTransferToWebmail = async () => {
+    if (!originalImageSrc) {
+      showToast("Veuillez d'abord importer votre document de référence.", "error");
+      return;
+    }
+
+    const code = reconstructedHtml || (await generateEmailHtml(zones, textBlocks));
 
     if (onOpenInWebmail) {
       onOpenInWebmail({
         recipient: recipientEmail,
-        subject: `Atlantic Transport Ltd - ${docTitle} (${matricule})`,
+        subject: `${docTitle || 'Document Officiel'}${matricule ? ` - ${matricule}` : ''}`,
         htmlBody: code
       });
       onClose();
@@ -534,8 +529,31 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
     reader.readAsDataURL(file);
   };
 
-  // Zone actuellement sélectionnée
-  const activeZone = zones.find((z) => z.id === selectedZoneId) || null;
+  // Gestion des blocs de texte éditables
+  const handleUpdateTextBlock = (id: string, newText: string) => {
+    setTextBlocks((prev) =>
+      prev.map((b) => (b.id === id ? { ...b, text: newText } : b))
+    );
+  };
+
+  const handleToggleHeading = (id: string) => {
+    setTextBlocks((prev) =>
+      prev.map((b) => (b.id === id ? { ...b, isHeading: !b.isHeading } : b))
+    );
+  };
+
+  const handleDeleteTextBlock = (id: string) => {
+    setTextBlocks((prev) => prev.filter((b) => b.id !== id));
+  };
+
+  const handleAddTextBlock = () => {
+    const newBlock: EditableTextBlock = {
+      id: `custom_para_${Date.now()}`,
+      text: "Nouveau paragraphe éditable à insérer dans le template e-mail...",
+      isHeading: false
+    };
+    setTextBlocks((prev) => [...prev, newBlock]);
+  };
 
   if (!isOpen) return null;
 
@@ -544,7 +562,7 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
       <div className="bg-white rounded-2xl max-w-7xl w-full border border-slate-200 shadow-2xl overflow-hidden my-auto max-h-[96vh] flex flex-col font-sans">
         
         {/* ================================================================= */}
-        {/* EN-TÊTE MODAL : DESIGN EXACT ATLANTIC TRANSPORT                  */}
+        {/* EN-TÊTE MODAL : RESPECT STRICT DE LA CHARTE DE L'APPLICATION      */}
         {/* ================================================================= */}
         <div className="bg-[#0B2545] text-white p-4 sm:p-5 flex items-center justify-between gap-4 border-b-2 border-amber-400/40">
           <div className="flex items-center gap-3">
@@ -554,22 +572,38 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-mono uppercase text-amber-400 font-bold tracking-wider">
-                  Atelier Document Avancé
+                  Générateur de Template E-mail
                 </span>
                 <span className="bg-amber-400/10 text-amber-300 text-[10px] px-2 py-0.5 rounded-full border border-amber-400/20 font-bold">
-                  OCR · Canvas · KitsCMS
+                  Texte 100% Éditable · KitsCMS · Infomaniak
                 </span>
               </div>
               <h2 className="text-base sm:text-lg font-bold text-white leading-tight">
-                Découpage, Masquage &amp; Générateur de Code Source KitsCMS
+                Mise en page HTML native &amp; Texte modifiable au clavier
               </h2>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                if (!originalImageSrc) {
+                  showToast("Veuillez d'abord importer un document de référence.", "error");
+                  return;
+                }
+                setIsHtmlRastModalOpen(true);
+              }}
+              className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-amber-400 via-amber-500 to-amber-400 hover:brightness-105 text-slate-950 text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer shadow-md border border-amber-300"
+              title="Générer un template e-mail reproduisant fidèlement le document original avec HTML RAST"
+            >
+              <Sparkles className="w-4 h-4 text-slate-950" />
+              <span>FONCTION HTML RAST</span>
+            </button>
+
             <label className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer border border-white/20">
               <Upload className="w-3.5 h-3.5 text-amber-400" />
-              <span>Importer Doc (PDF, JPG, DOCX)</span>
+              <span>Importer Doc (PDF, JPG, PNG)</span>
               <input
                 type="file"
                 accept="image/png,image/jpeg,image/webp,application/pdf,.doc,.docx"
@@ -590,7 +624,54 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
         </div>
 
         {/* ================================================================= */}
-        {/* CORPS PRINCIPAL : CANVAS INTERACTIF + PANNEAUX D'ACTIONS          */}
+        {/* BANDEAU DE CONFIGURATION DU DOCUMENT                              */}
+        {/* ================================================================= */}
+        <div className="bg-slate-100 border-b border-slate-200 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex flex-wrap items-center gap-3 flex-1">
+            <div className="flex items-center gap-1.5 min-w-[200px] flex-1">
+              <span className="text-slate-500 font-semibold shrink-0">Titre template :</span>
+              <input
+                type="text"
+                placeholder="Ex : Facture N° 1024, Contrat de mission, etc."
+                value={docTitle}
+                onChange={(e) => setDocTitle(e.target.value)}
+                className="w-full px-2.5 py-1 bg-white rounded-lg border border-slate-300 text-xs font-bold text-[#0B2545] focus:outline-none focus:border-[#0B2545]"
+              />
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-500 font-semibold shrink-0">Réf. dossier :</span>
+              <input
+                type="text"
+                placeholder="REF-001"
+                value={matricule}
+                onChange={(e) => setMatricule(e.target.value)}
+                className="w-28 px-2 py-1 bg-white rounded-lg border border-slate-300 text-xs font-mono font-bold text-amber-700 focus:outline-none focus:border-[#0B2545]"
+              />
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-500 font-semibold shrink-0">Destinataire :</span>
+              <input
+                type="text"
+                placeholder="Nom du client / salarié"
+                value={recipientName}
+                onChange={(e) => setRecipientName(e.target.value)}
+                className="w-36 px-2 py-1 bg-white rounded-lg border border-slate-300 text-xs text-slate-800 focus:outline-none focus:border-[#0B2545]"
+              />
+            </div>
+          </div>
+
+          {originalFileName && (
+            <div className="text-[11px] text-slate-500 flex items-center gap-1 bg-white px-2.5 py-1 rounded-lg border border-slate-200">
+              <FileText className="w-3 h-3 text-amber-500" />
+              <span className="font-mono truncate max-w-[150px]">{originalFileName}</span>
+            </div>
+          )}
+        </div>
+
+        {/* ================================================================= */}
+        {/* CORPS PRINCIPAL : CANVAS / APERÇU HTML + PANNEAUX D'ACTIONS       */}
         {/* ================================================================= */}
         <div className="p-4 sm:p-5 overflow-y-auto flex-1 space-y-5 bg-slate-50">
           
@@ -616,12 +697,12 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
             </div>
           )}
 
-          {/* Grille principale : Canvas à gauche + Contrôles à droite */}
+          {/* Grille principale : Canvas/Aperçu à gauche + Contrôles à droite */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
             
-            {/* Colonne GAUCHE : Canvas interactif & Sélecteur de vue */}
+            {/* Colonne GAUCHE : Canvas interactif OU Aperçu Live HTML Éditable */}
             <div className="lg:col-span-8 space-y-3">
-              {/* Sélecteur de vue du Canvas */}
+              {/* Sélecteur de vue */}
               <div className="flex flex-wrap items-center justify-between gap-2 bg-white p-2 rounded-xl border border-slate-200 shadow-2xs">
                 <div className="flex items-center gap-1">
                   <button
@@ -658,15 +739,21 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => setCanvasViewMode('reconstructed')}
+                    onClick={async () => {
+                      if (!reconstructedHtml) {
+                        const html = await generateEmailHtml(zones, textBlocks);
+                        setReconstructedHtml(html);
+                      }
+                      setCanvasViewMode('reconstructed');
+                    }}
                     className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
                       canvasViewMode === 'reconstructed'
-                        ? 'bg-[#0B2545] text-white shadow-2xs'
+                        ? 'bg-emerald-600 text-white shadow-2xs'
                         : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                     }`}
                   >
-                    <Layout className="w-3.5 h-3.5 text-emerald-500" />
-                    <span>Mise en page Reconstruite</span>
+                    <Layout className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Aperçu HTML Éditable</span>
                   </button>
                 </div>
 
@@ -686,19 +773,118 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
                 </div>
               </div>
 
-              {/* Canvas Interactif */}
-              <DocumentStudioCanvas
-                imageSrc={originalImageSrc}
-                cleanedBackgroundSrc={cleanedBackgroundSrc}
-                zones={zones}
-                selectedZoneId={selectedZoneId}
-                onSelectZone={setSelectedZoneId}
-                onZonesChange={setZones}
-                isSelectionModeActive={isSelectionModeActive}
-                onToggleSelectionMode={() => setIsSelectionModeActive(!isSelectionModeActive)}
-                currentLabel={currentLabelForNewZone}
-                viewMode={canvasViewMode}
-              />
+              {/* Pagination PDF si document multi-pages */}
+              {pdfPages.length > 1 && canvasViewMode !== 'reconstructed' && (
+                <div className="bg-[#0B2545] text-white px-4 py-2 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs border border-amber-400/30 shadow-sm">
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-amber-400" />
+                    <span className="font-semibold text-slate-100">
+                      Document multi-pages :
+                    </span>
+                    <span className="bg-amber-500/20 text-amber-300 font-bold px-2 py-0.5 rounded font-mono">
+                      Page {currentPdfPageIndex + 1} sur {pdfPages.length}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={currentPdfPageIndex === 0}
+                      onClick={() => {
+                        const newIdx = currentPdfPageIndex - 1;
+                        setCurrentPdfPageIndex(newIdx);
+                        setOriginalImageSrc(pdfPages[newIdx]);
+                        setCleanedBackgroundSrc('');
+                        setCompositeDocSrc('');
+                        setCanvasViewMode('original');
+                        showToast(`Affichage de la page ${newIdx + 1} / ${pdfPages.length}`);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white font-semibold flex items-center gap-1 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                      <span>Page précédente</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={currentPdfPageIndex >= pdfPages.length - 1}
+                      onClick={() => {
+                        const newIdx = currentPdfPageIndex + 1;
+                        setCurrentPdfPageIndex(newIdx);
+                        setOriginalImageSrc(pdfPages[newIdx]);
+                        setCleanedBackgroundSrc('');
+                        setCompositeDocSrc('');
+                        setCanvasViewMode('original');
+                        showToast(`Affichage de la page ${newIdx + 1} / ${pdfPages.length}`);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold flex items-center gap-1 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                    >
+                      <span>Page suivante</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Surface d'affichage : Canvas Interactif OU Aperçu Live HTML Éditable */}
+              <div className="relative">
+                {isLoadingPdf && (
+                  <div className="absolute inset-0 z-30 bg-slate-950/75 backdrop-blur-xs flex flex-col items-center justify-center p-6 text-white rounded-2xl">
+                    <RefreshCw className="w-10 h-10 text-amber-400 animate-spin mb-3" />
+                    <span className="text-sm font-bold">Rendu vectoriel du PDF &amp; extraction de texte...</span>
+                    <span className="text-xs text-slate-300 mt-1">Génération du document haute définition et des paragraphes modifiables</span>
+                  </div>
+                )}
+
+                {canvasViewMode === 'reconstructed' ? (
+                  <div className="bg-slate-100 rounded-2xl border border-slate-200 p-4 max-h-[600px] overflow-auto shadow-inner space-y-3">
+                    <div className="bg-emerald-50 border border-emerald-200 px-3.5 py-2 rounded-xl flex items-center justify-between text-xs text-emerald-900 font-semibold">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        <span>Aperçu HTML Éditable : Vous pouvez cliquer et taper directement dans les textes ci-dessous !</span>
+                      </div>
+                      <span className="text-[11px] font-mono bg-emerald-100 px-2 py-0.5 rounded text-emerald-800">
+                        100% natif
+                      </span>
+                    </div>
+
+                    <div
+                      contentEditable
+                      suppressContentEditableWarning
+                      dangerouslySetInnerHTML={{
+                        __html:
+                          reconstructedHtml ||
+                          buildKitsCmsHtml({
+                            title: docTitle || 'Document Officiel',
+                            recipientName,
+                            recipientEmail,
+                            matricule,
+                            zones,
+                            cleanedBackgroundDataUrl: cleanedBackgroundSrc || originalImageSrc,
+                            originalImageDataUrl: originalImageSrc,
+                            publicDownloadUrl: publicUrl,
+                            textBlocks
+                          })
+                      }}
+                      className="bg-white rounded-xl shadow-md border border-slate-200 overflow-hidden outline-none focus:ring-2 focus:ring-emerald-400"
+                    />
+                  </div>
+                ) : (
+                  <DocumentStudioCanvas
+                    imageSrc={originalImageSrc}
+                    cleanedBackgroundSrc={cleanedBackgroundSrc}
+                    zones={zones}
+                    selectedZoneId={selectedZoneId}
+                    onSelectZone={setSelectedZoneId}
+                    onZonesChange={setZones}
+                    isSelectionModeActive={isSelectionModeActive}
+                    onToggleSelectionMode={() => setIsSelectionModeActive(!isSelectionModeActive)}
+                    currentLabel={currentLabelForNewZone}
+                    viewMode={canvasViewMode}
+                    onFileUpload={processUploadedFile}
+                  />
+                )}
+              </div>
             </div>
 
             {/* Colonne DROITE : Sections requises par le cahier des charges */}
@@ -728,7 +914,7 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
                       showToast("Mode sélection manuelle activé : tracez un rectangle sur le document avec la souris.");
                     }}
                     className={`w-full min-h-[42px] px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-between transition-all cursor-pointer ${
-                      isSelectionModeActive
+                      isSelectionModeActive && canvasViewMode === 'original'
                         ? 'bg-amber-500 text-slate-950 shadow-sm ring-2 ring-amber-300'
                         : 'bg-slate-100 text-slate-800 hover:bg-slate-200'
                     }`}
@@ -746,7 +932,7 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
                   <button
                     type="button"
                     onClick={handleAnalyzeDocument}
-                    disabled={isAnalyzingOcr}
+                    disabled={isAnalyzingOcr || !originalImageSrc}
                     className="w-full min-h-[42px] px-3.5 py-2 rounded-xl bg-[#0B2545] hover:bg-[#134074] text-white text-xs sm:text-sm font-bold flex items-center justify-between transition-colors cursor-pointer disabled:opacity-50 shadow-sm"
                   >
                     <span className="flex items-center gap-2">
@@ -766,14 +952,15 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
                   <button
                     type="button"
                     onClick={handleReconstructLayout}
-                    className="w-full min-h-[42px] px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs sm:text-sm font-bold flex items-center justify-between transition-colors cursor-pointer shadow-sm"
+                    disabled={!originalImageSrc}
+                    className="w-full min-h-[42px] px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs sm:text-sm font-bold flex items-center justify-between transition-colors cursor-pointer shadow-sm disabled:opacity-50"
                   >
                     <span className="flex items-center gap-2">
                       <Layout className="w-4 h-4 text-emerald-400" />
                       <span>2. RECONSTRUIRE LA MISE EN PAGE</span>
                     </span>
                     <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-mono">
-                      Layout
+                      Texte Éditable
                     </span>
                   </button>
 
@@ -802,7 +989,8 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
                   <button
                     type="button"
                     onClick={handlePrepareKitsCms}
-                    className="w-full min-h-[42px] px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-[#0B2545] border border-slate-300 text-xs sm:text-sm font-bold flex items-center justify-between transition-colors cursor-pointer"
+                    disabled={!originalImageSrc}
+                    className="w-full min-h-[42px] px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-[#0B2545] border border-slate-300 text-xs sm:text-sm font-bold flex items-center justify-between transition-colors cursor-pointer disabled:opacity-50"
                   >
                     <span className="flex items-center gap-2">
                       <Code className="w-4 h-4 text-amber-600" />
@@ -815,19 +1003,42 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
                   <button
                     type="button"
                     onClick={handleCopyKitsCmsHtml}
-                    className="w-full min-h-[46px] px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer"
+                    disabled={!originalImageSrc}
+                    className="w-full min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all shadow-sm cursor-pointer disabled:opacity-50"
                   >
                     {copiedKitsCmsCode ? (
                       <>
-                        <Check className="w-4 h-4 text-emerald-950" />
-                        <span className="text-emerald-950">Code HTML KitsCMS copié !</span>
+                        <Check className="w-4 h-4 text-emerald-400" />
+                        <span className="text-emerald-300">Code HTML KitsCMS copié !</span>
                       </>
                     ) : (
                       <>
-                        <Copy className="w-4 h-4" />
+                        <Copy className="w-4 h-4 text-amber-400" />
                         <span>COPIER LE CODE HTML POUR KITSCMS</span>
                       </>
                     )}
+                  </button>
+
+                  {/* Bouton Expert : "FONCTION HTML RAST : REPRODUCTION FIDÈLE" */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!originalImageSrc) {
+                        showToast("Veuillez d'abord importer un document de référence.", "error");
+                        return;
+                      }
+                      setIsHtmlRastModalOpen(true);
+                    }}
+                    disabled={!originalImageSrc}
+                    className="w-full min-h-[46px] px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:brightness-105 text-slate-950 font-black text-xs sm:text-sm flex items-center justify-between transition-all shadow-md cursor-pointer disabled:opacity-50 border border-amber-300 ring-2 ring-amber-400/20"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-slate-950" />
+                      <span>FONCTION HTML RAST</span>
+                    </span>
+                    <span className="text-[10px] bg-slate-950 text-amber-300 px-2 py-0.5 rounded-full font-mono font-bold">
+                      Mode Expert
+                    </span>
                   </button>
                 </div>
               </div>
@@ -858,7 +1069,7 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
                       <span>Hébergement des images (KitsCMS)</span>
                     </span>
                     <span className="text-[10px] bg-slate-200 px-2 py-0.5 rounded-full font-mono">
-                      {zones.length} images
+                      {zones.length} zone(s)
                     </span>
                   </button>
 
@@ -866,7 +1077,8 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setIsExportModalOpen(true)}
-                    className="w-full min-h-[42px] px-3.5 py-2 rounded-xl bg-[#0B2545] hover:bg-[#134074] text-white text-xs sm:text-sm font-bold flex items-center justify-between transition-colors cursor-pointer shadow-sm"
+                    disabled={!originalImageSrc}
+                    className="w-full min-h-[42px] px-3.5 py-2 rounded-xl bg-[#0B2545] hover:bg-[#134074] text-white text-xs sm:text-sm font-bold flex items-center justify-between transition-colors cursor-pointer shadow-sm disabled:opacity-50"
                   >
                     <span className="flex items-center gap-2">
                       <Download className="w-4 h-4 text-amber-400" />
@@ -881,26 +1093,19 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
                   <div className="grid grid-cols-2 gap-2 pt-1">
                     <button
                       type="button"
-                      onClick={() => {
-                        const code = reconstructedHtml || buildKitsCmsHtml({
-                          title: docTitle,
-                          recipientName,
-                          recipientEmail,
-                          matricule,
-                          zones,
-                          cleanedBackgroundDataUrl: cleanedBackgroundSrc || originalImageSrc,
-                          publicDownloadUrl: publicUrl
-                        });
+                      onClick={async () => {
+                        const code = reconstructedHtml || (await generateEmailHtml(zones, textBlocks));
                         const blob = new Blob([code], { type: 'text/html' });
                         const url = URL.createObjectURL(blob);
                         const a = document.createElement('a');
                         a.href = url;
-                        a.download = `${matricule}_document_kitscms.html`;
+                        a.download = `${matricule || 'document'}_kitscms.html`;
                         a.click();
                         URL.revokeObjectURL(url);
                         showToast("Fichier HTML Brut téléchargé.");
                       }}
-                      className="min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                      disabled={!originalImageSrc}
+                      className="min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
                     >
                       <FileCode className="w-3.5 h-3.5 text-slate-500" />
                       <span>HTML Brut</span>
@@ -912,16 +1117,17 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
                         showToast("Génération du PDF Simple...", "info");
                         const studioDoc: StudioDocument = {
                           id: docId,
-                          title: docTitle,
+                          title: docTitle || 'Document',
                           matricule,
                           originalFileName,
                           originalFileType: 'image/png',
-                          originalWidth: 800,
-                          originalHeight: 1130,
+                          originalWidth: docDimensions.width,
+                          originalHeight: docDimensions.height,
                           originalImageDataUrl: originalImageSrc,
                           cleanedBackgroundDataUrl: cleanedBackgroundSrc || originalImageSrc,
                           zones,
                           ocrBlocks,
+                          textBlocks,
                           reconstructedHtml: '',
                           publicDownloadUrl: publicUrl,
                           createdAt: new Date().toISOString(),
@@ -931,12 +1137,13 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
                         const url = URL.createObjectURL(blob);
                         const a = document.createElement('a');
                         a.href = url;
-                        a.download = `${matricule}_pdf_simple.pdf`;
+                        a.download = `${matricule || 'document'}_pdf_simple.pdf`;
                         a.click();
                         URL.revokeObjectURL(url);
                         showToast("PDF Simple téléchargé.");
                       }}
-                      className="min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                      disabled={!originalImageSrc}
+                      className="min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
                     >
                       <FileText className="w-3.5 h-3.5 text-amber-600" />
                       <span>PDF Simple</span>
@@ -978,7 +1185,7 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
                       </button>
                     </div>
                     <p className="text-[10px] text-slate-500 leading-tight">
-                      Ce lien unique est automatiquement injecté dans l'e-mail pour permettre au candidat de télécharger directement son PDF officiel.
+                      Ce lien unique est automatiquement intégré au template e-mail pour permettre au destinataire de télécharger directement le document au format PDF.
                     </p>
                   </div>
 
@@ -986,7 +1193,8 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
                   <button
                     type="button"
                     onClick={handleTransferToWebmail}
-                    className="w-full min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-colors shadow-sm cursor-pointer"
+                    disabled={!originalImageSrc}
+                    className="w-full min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-colors shadow-sm cursor-pointer disabled:opacity-50"
                   >
                     <Send className="w-4 h-4" />
                     <span>TRANSFÉRER VERS LE WEBMAIL INFOMANIAK</span>
@@ -997,176 +1205,262 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
           </div>
 
           {/* ================================================================= */}
-          {/* ÉTAPE 3 & 4 : LABELLISATION & OPTIONS PAR ZONE (RÈGLE SANS IA)    */}
+          {/* PANNEAU INFÉRIEUR : GESTION DES ZONES ET CONTENU TEXTE ÉDITABLE    */}
           {/* ================================================================= */}
           <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-sm space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-3">
-              <div>
-                <h3 className="font-bold text-sm sm:text-base text-[#0B2545] flex items-center gap-2">
-                  <Layers className="w-4 h-4 text-amber-500" />
-                  <span>Gestion des Zones Découpées &amp; Options de Traitement</span>
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Attribuez un rôle à chaque rectangle (logo, signature, cachet...) et choisissez son action (Conserver sans IA, Masquer ou Remplacer).
-                </p>
+            
+            {/* Onglets de sélection */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-3">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveBottomTab('zones')}
+                  className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors cursor-pointer ${
+                    activeBottomTab === 'zones'
+                      ? 'bg-[#0B2545] text-white shadow-2xs'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <Layers className="w-4 h-4 text-amber-400" />
+                  <span>Zones Découpées ({zones.length})</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveBottomTab('texts')}
+                  className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors cursor-pointer ${
+                    activeBottomTab === 'texts'
+                      ? 'bg-[#0B2545] text-white shadow-2xs'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <Type className="w-4 h-4 text-emerald-400" />
+                  <span>Contenu Texte Éditable du Mail ({textBlocks.length})</span>
+                </button>
               </div>
 
               <div className="bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-xl text-xs text-amber-900 font-semibold flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-amber-600 shrink-0" />
-                <span>RÈGLE SANS IA : Extraction graphique exacte au pixel près</span>
+                <span>RÈGLE SANS IA : Logos &amp; signatures au pixel exact + texte HTML modifiable</span>
               </div>
             </div>
 
-            {zones.length === 0 ? (
-              <div className="p-8 text-center bg-slate-50 border border-dashed border-slate-300 rounded-xl space-y-2">
-                <MousePointer className="w-8 h-8 text-slate-400 mx-auto" />
-                <h4 className="font-bold text-sm text-slate-700">Aucune zone sélectionnée</h4>
-                <p className="text-xs text-slate-500 max-w-md mx-auto">
-                  Cliquez sur <strong>"SÉLECTION MANUELLE DES ZONES"</strong> ci-dessus puis dessinez un rectangle sur le canvas avec votre souris pour extraire une signature, un logo ou un cachet.
-                </p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                {zones.map((zone) => {
-                  const conf = ZONE_LABELS_CONFIG[zone.label] || ZONE_LABELS_CONFIG.autre;
-                  const isSelected = zone.id === selectedZoneId;
-                  const displayImage = zone.replacementDataUrl || zone.croppedImageDataUrl;
+            {/* TAB 1 : ZONES DÉCOUPÉES */}
+            {activeBottomTab === 'zones' && (
+              <div>
+                {zones.length === 0 ? (
+                  <div className="p-8 text-center bg-slate-50 border border-dashed border-slate-300 rounded-xl space-y-2">
+                    <MousePointer className="w-8 h-8 text-slate-400 mx-auto" />
+                    <h4 className="font-bold text-sm text-slate-700">Aucune zone découpée</h4>
+                    <p className="text-xs text-slate-500 max-w-md mx-auto">
+                      {originalImageSrc ? (
+                        <span>
+                          Tracez un rectangle avec votre souris sur le canvas pour découper un <strong>Logo</strong>, une <strong>Signature</strong> ou un <strong>Cachet officiel</strong>.
+                        </span>
+                      ) : (
+                        <span>
+                          Veuillez d'abord <strong>importer un document de référence</strong> pour pouvoir tracer des zones.
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                    {zones.map((zone) => {
+                      const conf = ZONE_LABELS_CONFIG[zone.label] || ZONE_LABELS_CONFIG.autre;
+                      const isSelected = zone.id === selectedZoneId;
+                      const displayImage = zone.replacementDataUrl || zone.croppedImageDataUrl;
 
-                  return (
+                      return (
+                        <div
+                          key={zone.id}
+                          onClick={() => setSelectedZoneId(zone.id)}
+                          className={`p-3.5 rounded-xl border transition-all cursor-pointer space-y-3 ${
+                            isSelected
+                              ? 'border-[#0B2545] bg-blue-50/40 shadow-sm ring-1 ring-[#0B2545]'
+                              : 'border-slate-200 bg-white hover:border-slate-300'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span
+                              style={{ backgroundColor: conf.bgColor, color: conf.color }}
+                              className="px-2 py-0.5 rounded-md font-bold text-xs inline-flex items-center gap-1 border"
+                            >
+                              <span>{conf.icon}</span>
+                              <span>{zone.name}</span>
+                            </span>
+
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setZones(zones.filter((z) => z.id !== zone.id));
+                                if (selectedZoneId === zone.id) setSelectedZoneId(null);
+                              }}
+                              className="text-slate-400 hover:text-red-600 p-1 rounded-lg hover:bg-red-50"
+                              title="Supprimer cette zone"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+
+                          <div className="h-20 bg-slate-100 rounded-lg overflow-hidden border border-slate-200 flex items-center justify-center p-1.5 relative">
+                            {displayImage ? (
+                              <img
+                                src={displayImage}
+                                alt={zone.name}
+                                className="max-h-full max-w-full object-contain"
+                              />
+                            ) : (
+                              <span className="text-[11px] text-slate-400 font-mono">Image extraite</span>
+                            )}
+                            <span className="absolute bottom-1 right-1 bg-slate-900/80 text-white font-mono text-[9px] px-1 rounded">
+                              {zone.width} × {zone.height} px
+                            </span>
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                              Attribuer un Rôle :
+                            </label>
+                            <select
+                              value={zone.label}
+                              onChange={(e) => handleUpdateZoneLabel(zone.id, e.target.value as ZoneLabelType)}
+                              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs bg-white focus:border-[#0B2545] focus:outline-none"
+                            >
+                              {Object.entries(ZONE_LABELS_CONFIG).map(([k, v]) => (
+                                <option key={k} value={k}>
+                                  {v.icon} {v.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                              Option de Traitement :
+                            </label>
+                            <div className="grid grid-cols-3 gap-1">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleUpdateZoneAction(zone.id, 'keep');
+                                }}
+                                className={`px-2 py-1.5 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                                  zone.action === 'keep'
+                                    ? 'bg-emerald-600 text-white shadow-2xs'
+                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                }`}
+                              >
+                                Afficher
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleUpdateZoneAction(zone.id, 'hide');
+                                }}
+                                className={`px-2 py-1.5 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                                  zone.action === 'hide'
+                                    ? 'bg-slate-800 text-white shadow-2xs'
+                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                }`}
+                              >
+                                Masquer
+                              </button>
+
+                              <label
+                                onClick={(e) => e.stopPropagation()}
+                                className={`px-2 py-1.5 rounded-lg text-[11px] font-bold transition-colors text-center cursor-pointer ${
+                                  zone.action === 'replace'
+                                    ? 'bg-amber-500 text-slate-950 shadow-2xs font-extrabold'
+                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                }`}
+                              >
+                                <span>Remplacer</span>
+                                <input
+                                  type="file"
+                                  accept="image/png,image/jpeg,image/webp"
+                                  onChange={(e) => handleReplaceZoneFile(zone.id, e)}
+                                  className="hidden"
+                                />
+                              </label>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB 2 : CONTENU TEXTE ÉDITABLE DU MAIL */}
+            {activeBottomTab === 'texts' && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-slate-600">
+                    Ces textes sont injectés directement en <strong>vrai texte HTML natif</strong> dans votre template e-mail.
+                    Chaque paragraphe est 100% éditable au clavier dans KitsCMS et le webmail Infomaniak.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleAddTextBlock}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Ajouter un paragraphe</span>
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {textBlocks.map((block, idx) => (
                     <div
-                      key={zone.id}
-                      onClick={() => setSelectedZoneId(zone.id)}
-                      className={`p-3.5 rounded-xl border transition-all cursor-pointer space-y-3 ${
-                        isSelected
-                          ? 'border-[#0B2545] bg-blue-50/40 shadow-sm ring-1 ring-[#0B2545]'
-                          : 'border-slate-200 bg-white hover:border-slate-300'
-                      }`}
+                      key={block.id}
+                      className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2 hover:border-slate-300 transition-colors"
                     >
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
-                          <span
-                            style={{ backgroundColor: conf.bgColor, color: conf.color }}
-                            className="px-2 py-0.5 rounded-md font-bold text-xs inline-flex items-center gap-1 border"
-                          >
-                            <span>{conf.icon}</span>
-                            <span>{zone.name}</span>
+                          <span className="font-mono text-[11px] font-bold text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200">
+                            #{idx + 1}
                           </span>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleHeading(block.id)}
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase transition-colors cursor-pointer ${
+                              block.isHeading
+                                ? 'bg-blue-600 text-white'
+                                : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                            }`}
+                          >
+                            {block.isHeading ? 'Titre / En-tête (H2)' : 'Paragraphe Normal'}
+                          </button>
                         </div>
 
                         <button
                           type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setZones(zones.filter((z) => z.id !== zone.id));
-                            if (selectedZoneId === zone.id) setSelectedZoneId(null);
-                          }}
+                          onClick={() => handleDeleteTextBlock(block.id)}
                           className="text-slate-400 hover:text-red-600 p-1 rounded-lg hover:bg-red-50"
-                          title="Supprimer cette zone"
+                          title="Supprimer ce paragraphe"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
 
-                      {/* Aperçu du découpage exact sans IA */}
-                      <div className="h-20 bg-slate-100 rounded-lg overflow-hidden border border-slate-200 flex items-center justify-center p-1.5 relative">
-                        {displayImage ? (
-                          <img
-                            src={displayImage}
-                            alt={zone.name}
-                            className="max-h-full max-w-full object-contain"
-                          />
-                        ) : (
-                          <span className="text-[11px] text-slate-400 font-mono">Image extraite</span>
-                        )}
-                        <span className="absolute bottom-1 right-1 bg-slate-900/80 text-white font-mono text-[9px] px-1 rounded">
-                          {zone.width} × {zone.height} px
-                        </span>
-                      </div>
-
-                      {/* ÉTAPE 3 : Labellisation */}
-                      <div>
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                          Attribuer un Rôle :
-                        </label>
-                        <select
-                          value={zone.label}
-                          onChange={(e) => handleUpdateZoneLabel(zone.id, e.target.value as ZoneLabelType)}
-                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs bg-white focus:border-[#0B2545] focus:outline-none"
-                        >
-                          {Object.entries(ZONE_LABELS_CONFIG).map(([k, v]) => (
-                            <option key={k} value={k}>
-                              {v.icon} {v.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* ÉTAPE 4 : Options par zone (Masquer / Afficher / Remplacer) */}
-                      <div>
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                          Option de Traitement :
-                        </label>
-                        <div className="grid grid-cols-3 gap-1">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleUpdateZoneAction(zone.id, 'keep');
-                            }}
-                            className={`px-2 py-1.5 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
-                              zone.action === 'keep'
-                                ? 'bg-emerald-600 text-white shadow-2xs'
-                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                            }`}
-                            title="Conserver l'extraction exacte du document original sans aucune altération par IA"
-                          >
-                            Afficher
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleUpdateZoneAction(zone.id, 'hide');
-                            }}
-                            className={`px-2 py-1.5 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
-                              zone.action === 'hide'
-                                ? 'bg-slate-800 text-white shadow-2xs'
-                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                            }`}
-                            title="Masquer cette zone du document reconstruit"
-                          >
-                            Masquer
-                          </button>
-
-                          <label
-                            onClick={(e) => e.stopPropagation()}
-                            className={`px-2 py-1.5 rounded-lg text-[11px] font-bold transition-colors text-center cursor-pointer ${
-                              zone.action === 'replace'
-                                ? 'bg-amber-500 text-slate-950 shadow-2xs font-extrabold'
-                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                            }`}
-                            title="Remplacer par un autre fichier externe (ex: nouveau logo HD ou nouvelle signature)"
-                          >
-                            <span>Remplacer</span>
-                            <input
-                              type="file"
-                              accept="image/png,image/jpeg,image/webp"
-                              onChange={(e) => handleReplaceZoneFile(zone.id, e)}
-                              className="hidden"
-                            />
-                          </label>
-                        </div>
-                      </div>
-
-                      {/* Statut affiché */}
-                      <div className="text-[10px] text-slate-500 flex items-center justify-between pt-1 border-t border-slate-100 font-mono">
-                        <span>Action : {zone.action === 'keep' ? 'Conserver sans IA' : zone.action === 'hide' ? 'Masquée' : 'Remplacée'}</span>
-                        <span>({zone.x}, {zone.y})</span>
-                      </div>
+                      <textarea
+                        value={block.text}
+                        onChange={(e) => handleUpdateTextBlock(block.id, e.target.value)}
+                        rows={block.isHeading ? 1 : 2}
+                        className={`w-full p-2.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:border-[#0B2545] ${
+                          block.isHeading ? 'font-bold text-slate-900' : ''
+                        }`}
+                        placeholder="Saisissez ou modifiez le contenu du paragraphe..."
+                      />
                     </div>
-                  );
-                })}
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -1178,19 +1472,24 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
         <div className="bg-slate-100 border-t border-slate-200 p-4 px-6 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600">
           <div className="flex items-center gap-3">
             <span className="font-semibold text-[#0B2545]">
-              Document : <strong>{docTitle}</strong>
+              Template : <strong>{docTitle || 'Document sans titre'}</strong>
             </span>
             <span>·</span>
             <span>Réf. : <strong className="font-mono text-amber-700">{matricule}</strong></span>
-            <span>·</span>
-            <span>Destinataire : <strong>{recipientName}</strong></span>
+            {recipientName && (
+              <>
+                <span>·</span>
+                <span>Destinataire : <strong>{recipientName}</strong></span>
+              </>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={handleCopyKitsCmsHtml}
-              className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
+              disabled={!originalImageSrc}
+              className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm disabled:opacity-50"
             >
               <Copy className="w-3.5 h-3.5" />
               <span>Copier Code KitsCMS</span>
@@ -1310,16 +1609,17 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
                   showToast("Génération PDF complet en cours...", "info");
                   const studioDoc: StudioDocument = {
                     id: docId,
-                    title: docTitle,
+                    title: docTitle || 'Document',
                     matricule,
                     originalFileName,
                     originalFileType: 'image/png',
-                    originalWidth: 800,
-                    originalHeight: 1130,
+                    originalWidth: docDimensions.width,
+                    originalHeight: docDimensions.height,
                     originalImageDataUrl: originalImageSrc,
                     cleanedBackgroundDataUrl: cleanedBackgroundSrc || originalImageSrc,
                     zones,
                     ocrBlocks,
+                    textBlocks,
                     reconstructedHtml,
                     publicDownloadUrl: publicUrl,
                     createdAt: new Date().toISOString(),
@@ -1329,7 +1629,7 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement('a');
                   a.href = url;
-                  a.download = `${matricule}_document_complet.pdf`;
+                  a.download = `${matricule || 'document'}_complet.pdf`;
                   a.click();
                   URL.revokeObjectURL(url);
                   setIsExportModalOpen(false);
@@ -1352,18 +1652,19 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
                 onClick={() => {
                   const studioDoc: StudioDocument = {
                     id: docId,
-                    title: docTitle,
+                    title: docTitle || 'Document',
                     matricule,
                     recipientName,
                     recipientEmail,
                     originalFileName,
                     originalFileType: 'image/png',
-                    originalWidth: 800,
-                    originalHeight: 1130,
+                    originalWidth: docDimensions.width,
+                    originalHeight: docDimensions.height,
                     originalImageDataUrl: originalImageSrc,
                     cleanedBackgroundDataUrl: cleanedBackgroundSrc || originalImageSrc,
                     zones,
                     ocrBlocks,
+                    textBlocks,
                     reconstructedHtml,
                     publicDownloadUrl: publicUrl,
                     createdAt: new Date().toISOString(),
@@ -1373,7 +1674,7 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement('a');
                   a.href = url;
-                  a.download = `${matricule}_document.doc`;
+                  a.download = `${matricule || 'document'}.doc`;
                   a.click();
                   URL.revokeObjectURL(url);
                   setIsExportModalOpen(false);
@@ -1393,21 +1694,13 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
               {/* HTML Brut */}
               <button
                 type="button"
-                onClick={() => {
-                  const code = reconstructedHtml || buildKitsCmsHtml({
-                    title: docTitle,
-                    recipientName,
-                    recipientEmail,
-                    matricule,
-                    zones,
-                    cleanedBackgroundDataUrl: cleanedBackgroundSrc || originalImageSrc,
-                    publicDownloadUrl: publicUrl
-                  });
+                onClick={async () => {
+                  const code = reconstructedHtml || (await generateEmailHtml(zones, textBlocks));
                   const blob = new Blob([code], { type: 'text/html' });
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement('a');
                   a.href = url;
-                  a.download = `${matricule}_document.html`;
+                  a.download = `${matricule || 'document'}.html`;
                   a.click();
                   URL.revokeObjectURL(url);
                   setIsExportModalOpen(false);
@@ -1430,16 +1723,17 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
                 onClick={async () => {
                   const studioDoc: StudioDocument = {
                     id: docId,
-                    title: docTitle,
+                    title: docTitle || 'Document',
                     matricule,
                     originalFileName,
                     originalFileType: 'image/png',
-                    originalWidth: 800,
-                    originalHeight: 1130,
+                    originalWidth: docDimensions.width,
+                    originalHeight: docDimensions.height,
                     originalImageDataUrl: originalImageSrc,
                     cleanedBackgroundDataUrl: cleanedBackgroundSrc || originalImageSrc,
                     zones,
                     ocrBlocks,
+                    textBlocks,
                     reconstructedHtml,
                     publicDownloadUrl: publicUrl,
                     createdAt: new Date().toISOString(),
@@ -1448,7 +1742,7 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
                   const dataUrl = await exportStudioImage(studioDoc, 'png');
                   const a = document.createElement('a');
                   a.href = dataUrl;
-                  a.download = `${matricule}_rendu_visuel.png`;
+                  a.download = `${matricule || 'document'}_rendu.png`;
                   a.click();
                   setIsExportModalOpen(false);
                   showToast("Image PNG haute résolution téléchargée !");
@@ -1477,6 +1771,27 @@ export const DocumentStudioModal: React.FC<DocumentStudioModalProps> = ({
           </div>
         </div>
       )}
+
+      {/* =================================================================== */}
+      {/* MODAL FONCTION HTML RAST : REPRODUCTION FIDÈLE DU DOCUMENT         */}
+      {/* =================================================================== */}
+      <HtmlRastModal
+        isOpen={isHtmlRastModalOpen}
+        onClose={() => setIsHtmlRastModalOpen(false)}
+        inputData={{
+          documentTitle: docTitle || 'Document Officiel',
+          originalFileName,
+          originalImageDataUrl: originalImageSrc,
+          cleanedBackgroundDataUrl: cleanedBackgroundSrc,
+          publicDownloadUrl: publicUrl,
+          zones,
+          textBlocks,
+          recipientName,
+          recipientEmail,
+          referenceNumber: matricule
+        }}
+        onOpenInWebmail={onOpenInWebmail}
+      />
     </div>
   );
 };

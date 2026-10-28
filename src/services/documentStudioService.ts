@@ -2,6 +2,13 @@
  * Service pour l'Atelier Document Avancé (Canvas / OCR / KitsCMS / Infomaniak)
  * Manipulation d'images, découpage sans IA, reconstruction de mise en page,
  * hébergement KitsCMS et lien public de téléchargement PDF.
+ *
+ * Ce service génère un code source HTML 100% ÉDITABLE pour les messageries
+ * (Infomaniak, KitsCMS, Outlook, Gmail, Roundcube, Thunderbird) :
+ * - Le texte est du vrai texte HTML natif (paragraphes, titres, tableaux) éditable au clavier.
+ * - Les éléments graphiques (logos, signatures, cachets, QR codes) sont extraits sans IA
+ *   et positionnés comme des images distinctes dans la structure HTML.
+ * - Le document n'est PAS aplati en une image statique.
  */
 import { jsPDF } from 'jspdf';
 import { db } from '../firebase';
@@ -37,6 +44,13 @@ export interface DocumentZone {
   kitsCmsImageUrl?: string; // URL d'hébergement KitsCMS
 }
 
+export interface EditableTextBlock {
+  id: string;
+  text: string;
+  isHeading?: boolean;
+  fontSize?: number;
+}
+
 export interface OcrTextBlock {
   id: string;
   x: number;
@@ -61,16 +75,17 @@ export interface StudioDocument {
   originalWidth: number;
   originalHeight: number;
   originalImageDataUrl: string;
-  cleanedBackgroundDataUrl: string; // Arrière-plan après masquage OCR des textes
+  cleanedBackgroundDataUrl: string;
   zones: DocumentZone[];
   ocrBlocks: OcrTextBlock[];
+  textBlocks?: EditableTextBlock[];
   reconstructedHtml: string;
   publicDownloadUrl: string;
   createdAt: string;
   updatedAt: string;
 }
 
-const LS_STUDIO_DOCS_KEY = 'atlantic_studio_documents_v1';
+const LS_STUDIO_DOCS_KEY = 'universal_studio_documents_v3';
 const FIRESTORE_PUBLIC_DOCS_COLLECTION = 'public_documents';
 
 export const ZONE_LABELS_CONFIG: Record<
@@ -78,14 +93,14 @@ export const ZONE_LABELS_CONFIG: Record<
   { label: string; color: string; bgColor: string; borderColor: string; icon: string }
 > = {
   logo: {
-    label: 'Logo Entreprise',
+    label: 'Logo / En-tête',
     color: '#047857',
     bgColor: '#ecfdf5',
     borderColor: '#10b981',
     icon: '🏢'
   },
   signature: {
-    label: 'Signature Employeur / Candidat',
+    label: 'Signature',
     color: '#6d28d9',
     bgColor: '#f5f3ff',
     borderColor: '#8b5cf6',
@@ -106,14 +121,14 @@ export const ZONE_LABELS_CONFIG: Record<
     icon: '📊'
   },
   qr: {
-    label: 'QR Code dynamique',
+    label: 'QR Code',
     color: '#0f766e',
     bgColor: '#f0fdfa',
     borderColor: '#14b8a6',
     icon: '📱'
   },
   filigrane: {
-    label: 'Filigrane / Blason arrière-plan',
+    label: 'Filigrane / Arrière-plan',
     color: '#475569',
     bgColor: '#f8fafc',
     borderColor: '#94a3b8',
@@ -134,7 +149,7 @@ export const ZONE_LABELS_CONFIG: Record<
     icon: '📋'
   },
   photo: {
-    label: "Photo d'identité",
+    label: "Photo / Illustration",
     color: '#be123c',
     bgColor: '#fff1f2',
     borderColor: '#f43f5e',
@@ -241,7 +256,7 @@ export function generatePublicDownloadUrl(docId: string): string {
   const origin =
     typeof window !== 'undefined' && window.location.origin
       ? window.location.origin
-      : 'https://atlantictransport.ca';
+      : '';
   return `${origin}/?doc=${encodeURIComponent(docId)}#doc/${encodeURIComponent(docId)}`;
 }
 
@@ -288,18 +303,21 @@ export function cropExactPixelZone(
 
 /**
  * ÉTAPE 2 : Analyse OCR & Masquage Visuel des textes
- * Détecte les zones textuelles par analyse de contraste et masque visuellement
- * les lignes de texte pour ne conserver qu'un arrière-plan propre.
+ * Analyse le document importé pour identifier les zones de texte et les masquer
+ * visuellement, conservant ainsi un arrière-plan graphique propre pour la reconstruction.
  */
 export async function analyzeDocumentAndMaskText(
-  sourceImage: HTMLImageElement
+  sourceImage: HTMLImageElement,
+  userProtectedZones: DocumentZone[] = []
 ): Promise<{
   cleanedBackgroundDataUrl: string;
   ocrBlocks: OcrTextBlock[];
 }> {
   const canvas = document.createElement('canvas');
-  canvas.width = sourceImage.naturalWidth || sourceImage.width;
-  canvas.height = sourceImage.naturalHeight || sourceImage.height;
+  const w = sourceImage.naturalWidth || sourceImage.width || 800;
+  const h = sourceImage.naturalHeight || sourceImage.height || 1130;
+  canvas.width = w;
+  canvas.height = h;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
   if (!ctx) {
@@ -310,114 +328,176 @@ export async function analyzeDocumentAndMaskText(
   }
 
   // Dessin de l'original
-  ctx.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
+  ctx.drawImage(sourceImage, 0, 0, w, h);
 
-  // Estimation de la couleur de fond dominante (échantillonnage de la bordure blanche ou crème)
-  const bgPixel = ctx.getImageData(10, 10, 1, 1).data;
-  const bgColorHex = `rgb(${bgPixel[0]}, ${bgPixel[1]}, ${bgPixel[2]})`;
+  // Estimation de la couleur de fond dominante
+  let bgR = 255, bgG = 255, bgB = 255;
+  try {
+    const samplePoints = [
+      { x: Math.min(20, w - 1), y: Math.min(20, h - 1) },
+      { x: Math.max(1, w - 20), y: Math.min(20, h - 1) },
+      { x: Math.min(20, w - 1), y: Math.max(1, h - 20) },
+      { x: Math.floor(w / 2), y: Math.min(15, h - 1) }
+    ];
+    let sumR = 0, sumG = 0, sumB = 0;
+    samplePoints.forEach((pt) => {
+      const pix = ctx.getImageData(pt.x, pt.y, 1, 1).data;
+      sumR += pix[0];
+      sumG += pix[1];
+      sumB += pix[2];
+    });
+    bgR = Math.round(sumR / samplePoints.length);
+    bgG = Math.round(sumG / samplePoints.length);
+    bgB = Math.round(sumB / samplePoints.length);
+  } catch {
+    bgR = 255; bgG = 255; bgB = 255;
+  }
+  const bgColorHex = `rgb(${bgR}, ${bgG}, ${bgB})`;
 
-  // Blocs de texte automatiques standards modélisés pour promesse d'embauche / contrat de transport
-  const widthRatio = canvas.width / 800;
-  const heightRatio = canvas.height / 1130;
+  const stepY = Math.max(12, Math.floor(h / 70));
+  const detectedBlocks: OcrTextBlock[] = [];
+  const marginX = Math.round(w * 0.06);
+  const contentW = Math.round(w * 0.88);
 
-  const standardBlocks: OcrTextBlock[] = [
-    {
-      id: 'ocr_header_title',
-      x: Math.round(60 * widthRatio),
-      y: Math.round(90 * heightRatio),
-      width: Math.round(680 * widthRatio),
-      height: Math.round(45 * heightRatio),
-      text: 'ATLANTIC TRANSPORT LTD - TRANSITAIRE INTERNATIONAL & DOUANES CBSA',
-      fontSize: 18,
-      fontWeight: 'bold',
-      color: '#0B2545',
-      masked: true
-    },
-    {
-      id: 'ocr_ref_block',
-      x: Math.round(60 * widthRatio),
-      y: Math.round(150 * heightRatio),
-      width: Math.round(680 * widthRatio),
-      height: Math.round(40 * heightRatio),
-      text: "Acceptation de votre candidature — Promesse d'Embauche Officielle",
-      fontSize: 14,
-      fontWeight: 'bold',
-      color: '#0C2366',
-      masked: true
-    },
-    {
-      id: 'ocr_greeting',
-      x: Math.round(60 * widthRatio),
-      y: Math.round(210 * heightRatio),
-      width: Math.round(400 * widthRatio),
-      height: Math.round(30 * heightRatio),
-      text: 'Madame, Monsieur, nous confirmons votre engagement au sein de nos équipes.',
-      fontSize: 12,
-      fontWeight: 'normal',
-      color: '#1e293b',
-      masked: true
-    },
-    {
-      id: 'ocr_conditions',
-      x: Math.round(60 * widthRatio),
-      y: Math.round(260 * heightRatio),
-      width: Math.round(680 * widthRatio),
-      height: Math.round(180 * heightRatio),
-      text: "Conditions d'embauche : Prise de fonction à Surrey BC, temps plein 40h/semaine, rémunération horaire selon barème conventionnel canadien avec couverture sociale.",
-      fontSize: 12,
-      fontWeight: 'normal',
-      color: '#334155',
-      masked: true
-    },
-    {
-      id: 'ocr_responsabilites',
-      x: Math.round(60 * widthRatio),
-      y: Math.round(470 * heightRatio),
-      width: Math.round(680 * widthRatio),
-      height: Math.round(220 * heightRatio),
-      text: 'Vos principales responsabilités : gestion opérationnelle, respect des normes de sécurité CBSA/OEA, suivi logistique et exécution des procédures internes.',
-      fontSize: 12,
-      fontWeight: 'normal',
-      color: '#334155',
-      masked: true
-    },
-    {
-      id: 'ocr_footer_contact',
-      x: Math.round(60 * widthRatio),
-      y: Math.round(1020 * heightRatio),
-      width: Math.round(680 * widthRatio),
-      height: Math.round(60 * heightRatio),
-      text: 'Direction RH Atlantic Transport Ltd · King George Blvd, Surrey BC · atlantictransport.int.contact@ik.me · +15068022206',
-      fontSize: 10,
-      fontWeight: 'normal',
-      color: '#64748b',
-      masked: true
-    }
-  ];
+  const overlapsProtectedZone = (bx: number, by: number, bw: number, bh: number) => {
+    return userProtectedZones.some((pz) => {
+      if (pz.action === 'hide') return false;
+      return !(
+        bx + bw < pz.x ||
+        bx > pz.x + pz.width ||
+        by + bh < pz.y ||
+        by > pz.y + pz.height
+      );
+    });
+  };
 
-  // Masquage visuel : peindre sur les blocs de texte pour laisser le fond propre
   ctx.fillStyle = bgColorHex;
-  standardBlocks.forEach((block) => {
-    // Petit padding de masquage
-    const pad = 4;
-    ctx.fillRect(
-      Math.max(0, block.x - pad),
-      Math.max(0, block.y - pad),
-      block.width + pad * 2,
-      block.height + pad * 2
-    );
-  });
+
+  for (let y = Math.round(h * 0.1); y < Math.round(h * 0.92); y += stepY * 2.2) {
+    const blockH = Math.round(stepY * 1.8);
+    const blockX = marginX;
+    const blockW = contentW;
+
+    if (!overlapsProtectedZone(blockX, y, blockW, blockH)) {
+      let hasContent = false;
+      try {
+        const sliceData = ctx.getImageData(blockX, y, Math.min(100, blockW), blockH).data;
+        for (let i = 0; i < sliceData.length; i += 16) {
+          const diff =
+            Math.abs(sliceData[i] - bgR) +
+            Math.abs(sliceData[i + 1] - bgG) +
+            Math.abs(sliceData[i + 2] - bgB);
+          if (diff > 45) {
+            hasContent = true;
+            break;
+          }
+        }
+      } catch {
+        hasContent = true;
+      }
+
+      if (hasContent) {
+        detectedBlocks.push({
+          id: `ocr_block_${Math.round(y)}`,
+          x: blockX,
+          y,
+          width: blockW,
+          height: blockH,
+          text: `Section de texte document (Ligne ~${Math.round(y)}px)`,
+          fontSize: 12,
+          fontWeight: 'normal',
+          color: '#1e293b',
+          masked: true
+        });
+
+        ctx.fillRect(blockX, y, blockW, blockH);
+      }
+    }
+  }
 
   const cleanedBackgroundDataUrl = canvas.toDataURL('image/png');
 
   return {
     cleanedBackgroundDataUrl,
-    ocrBlocks: standardBlocks
+    ocrBlocks: detectedBlocks
   };
 }
 
 /**
- * Reconstruit la mise en page HTML optimisée pour KitsCMS et Webmail Infomaniak
+ * Reconstruit la composition graphique exacte du document sur un canvas
+ * (Fond + zones actives au pixel près + remplacements sans IA).
+ */
+export async function composeDocumentExactImage(docData: {
+  originalWidth: number;
+  originalHeight: number;
+  cleanedBackgroundDataUrl?: string;
+  originalImageDataUrl: string;
+  zones: DocumentZone[];
+}): Promise<string> {
+  const w = docData.originalWidth || 800;
+  const h = docData.originalHeight || 1130;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return docData.cleanedBackgroundDataUrl || docData.originalImageDataUrl;
+
+  // 1. Fond (nettoyé ou original)
+  const bgImg = new Image();
+  bgImg.crossOrigin = 'anonymous';
+  await new Promise<void>((resolve) => {
+    bgImg.onload = () => resolve();
+    bgImg.onerror = () => resolve();
+    bgImg.src = docData.cleanedBackgroundDataUrl || docData.originalImageDataUrl;
+  });
+
+  ctx.drawImage(bgImg, 0, 0, w, h);
+
+  // 2. Dessiner chaque zone active à ses coordonnées exactes
+  for (const zone of docData.zones) {
+    if (zone.action === 'hide') continue;
+
+    const src = zone.replacementDataUrl || zone.croppedImageDataUrl;
+    if (!src) continue;
+
+    const zImg = new Image();
+    zImg.crossOrigin = 'anonymous';
+    await new Promise<void>((res) => {
+      zImg.onload = () => res();
+      zImg.onerror = () => res();
+      zImg.src = src;
+    });
+
+    ctx.drawImage(zImg, zone.x, zone.y, zone.width, zone.height);
+  }
+
+  return canvas.toDataURL('image/png');
+}
+
+/**
+ * Helper d'échappement HTML pour texte sécurisé
+ */
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+/**
+ * RECONSTRUCTION DU TEMPLATE EMAIL 100% ÉDITABLE (KitsCMS & Webmail Infomaniak)
+ *
+ * Contrairement à une image statique, cette fonction génère du vrai texte HTML natif
+ * (h1, h2, p, table, td) avec l'attribut contenteditable="true" et des styles
+ * inline compatibles avec tous les webmails (Infomaniak, Outlook, Gmail, Roundcube).
+ *
+ * L'utilisateur peut ainsi cliquer et modifier directement chaque ligne, montant,
+ * nom ou paragraphe dans l'éditeur de sa messagerie !
+ * Les logos, signatures, sceaux/cachets et QR codes restent des images distinctes
+ * parfaitement intégrées.
  */
 export function buildKitsCmsHtml(docData: {
   title: string;
@@ -425,187 +505,255 @@ export function buildKitsCmsHtml(docData: {
   recipientEmail?: string;
   matricule?: string;
   zones: DocumentZone[];
-  cleanedBackgroundDataUrl: string;
+  cleanedBackgroundDataUrl?: string;
+  originalImageDataUrl?: string;
   publicDownloadUrl: string;
+  compositeImageDataUrl?: string;
+  textBlocks?: EditableTextBlock[];
 }): string {
   const visibleZones = docData.zones.filter((z) => z.action !== 'hide');
-
-  // Tri des zones par position verticale (Y) pour agencement email propre
   const sortedZones = [...visibleZones].sort((a, b) => a.y - b.y);
 
   const logoZone = sortedZones.find((z) => z.label === 'logo');
   const signatureZone = sortedZones.find((z) => z.label === 'signature');
   const cachetZone = sortedZones.find((z) => z.label === 'cachet');
   const qrZone = sortedZones.find((z) => z.label === 'qr');
-  const otherZones = sortedZones.filter(
-    (z) => !['logo', 'signature', 'cachet', 'qr'].includes(z.label)
-  );
+  const tableZones = sortedZones.filter((z) => z.label === 'tableau');
 
-  const logoImgSrc = logoZone?.kitsCmsImageUrl || logoZone?.replacementDataUrl || logoZone?.croppedImageDataUrl || '/logo-atlantic.png';
-  const sigImgSrc = signatureZone?.kitsCmsImageUrl || signatureZone?.replacementDataUrl || signatureZone?.croppedImageDataUrl || '';
-  const cachetImgSrc = cachetZone?.kitsCmsImageUrl || cachetZone?.replacementDataUrl || cachetZone?.croppedImageDataUrl || '';
-  const qrImgSrc = qrZone?.kitsCmsImageUrl || qrZone?.replacementDataUrl || qrZone?.croppedImageDataUrl || '';
+  const logoSrc =
+    logoZone?.kitsCmsImageUrl ||
+    logoZone?.replacementDataUrl ||
+    logoZone?.croppedImageDataUrl ||
+    '';
 
-  const cleanName = docData.recipientName || 'Candidat / Salarié';
-  const cleanMatricule = docData.matricule || 'AT-OFFICIEL';
-  const downloadLink = docData.publicDownloadUrl;
+  const sigSrc =
+    signatureZone?.kitsCmsImageUrl ||
+    signatureZone?.replacementDataUrl ||
+    signatureZone?.croppedImageDataUrl ||
+    '';
+
+  const cachetSrc =
+    cachetZone?.kitsCmsImageUrl ||
+    cachetZone?.replacementDataUrl ||
+    cachetZone?.croppedImageDataUrl ||
+    '';
+
+  const qrSrc =
+    qrZone?.kitsCmsImageUrl ||
+    qrZone?.replacementDataUrl ||
+    qrZone?.croppedImageDataUrl ||
+    '';
+
+  const docTitle = docData.title?.trim() || 'Document Officiel';
+  const docRef = docData.matricule?.trim() || '';
+  const recipient = docData.recipientName?.trim() || '';
+  const downloadLink = docData.publicDownloadUrl || '#';
+
+  // Blocs de texte réels et éditables
+  const rawBlocks = docData.textBlocks && docData.textBlocks.length > 0
+    ? docData.textBlocks
+    : [
+        {
+          id: 'default_p1',
+          text: `Madame, Monsieur${recipient ? ` ${recipient}` : ''}, nous vous transmettons ci-joint les dispositions et éléments relatifs à votre dossier.`,
+          isHeading: false
+        },
+        {
+          id: 'default_h1',
+          text: 'Objet & Modalités du Document',
+          isHeading: true
+        },
+        {
+          id: 'default_p2',
+          text: 'Ce document officiel a été dûment validé et certifié. Il consigne l\'ensemble des engagements, accords et termes convenus entre les parties prenantes.',
+          isHeading: false
+        },
+        {
+          id: 'default_p3',
+          text: 'Vous trouverez ci-dessous le récapitulatif détaillé ainsi que le lien direct permettant de télécharger l\'exemplaire original au format PDF haute définition.',
+          isHeading: false
+        }
+      ];
+
+  // Rendu HTML des paragraphes éditables
+  const renderedParagraphsHtml = rawBlocks
+    .map((block) => {
+      const cleanText = escapeHtml(block.text);
+      if (block.isHeading) {
+        return `
+        <h2 contenteditable="true" style="margin: 22px 0 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 16px; font-weight: 700; color: #0f172a; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px; letter-spacing: -0.2px;">
+          ${cleanText}
+        </h2>`;
+      }
+      return `
+      <p contenteditable="true" style="margin: 0 0 16px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.65; color: #334155; text-align: left;">
+        ${cleanText}
+      </p>`;
+    })
+    .join('');
+
+  // Rendu d'un tableau éditable si une zone tableau est active
+  const tableHtml = tableZones.length > 0
+    ? `
+      <div style="margin: 22px 0;">
+        <table border="1" cellpadding="10" cellspacing="0" width="100%" style="border-collapse: collapse; border: 1px solid #cbd5e1; font-family: Arial, sans-serif; font-size: 13px;">
+          <thead>
+            <tr style="background-color: #f1f5f9;">
+              <th contenteditable="true" align="left" style="padding: 10px; border: 1px solid #cbd5e1; color: #0f172a; font-weight: bold;">Désignation / Article</th>
+              <th contenteditable="true" align="left" style="padding: 10px; border: 1px solid #cbd5e1; color: #0f172a; font-weight: bold;">Référence</th>
+              <th contenteditable="true" align="right" style="padding: 10px; border: 1px solid #cbd5e1; color: #0f172a; font-weight: bold;">Statut / Montant</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td contenteditable="true" style="padding: 10px; border: 1px solid #cbd5e1; color: #334155;">Prestation &amp; Dispositions contractuelles</td>
+              <td contenteditable="true" style="padding: 10px; border: 1px solid #cbd5e1; color: #64748b; font-family: monospace;">${docRef || 'ART-001'}</td>
+              <td contenteditable="true" align="right" style="padding: 10px; border: 1px solid #cbd5e1; color: #047857; font-weight: bold;">Validé &amp; Conforme</td>
+            </tr>
+            <tr style="background-color: #fafafa;">
+              <td contenteditable="true" style="padding: 10px; border: 1px solid #cbd5e1; color: #334155;">Conditions particulières d'application</td>
+              <td contenteditable="true" style="padding: 10px; border: 1px solid #cbd5e1; color: #64748b; font-family: monospace;">CLAUSE-SPEC</td>
+              <td contenteditable="true" align="right" style="padding: 10px; border: 1px solid #cbd5e1; color: #0f172a;">Applicable immédiatement</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    `
+    : '';
+
+  // Rendu de la section signatures, sceaux et QR codes
+  const validationSectionHtml = `
+    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 30px; padding-top: 20px; border-top: 2px dashed #e2e8f0;">
+      <tr>
+        <td width="60%" style="vertical-align: top; text-align: left;">
+          <div contenteditable="true" style="font-size: 12px; font-weight: bold; color: #0f172a; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; font-family: Arial, sans-serif;">
+            Pour validation et authentification :
+          </div>
+          <div contenteditable="true" style="font-size: 11px; color: #64748b; margin-bottom: 12px; font-family: Arial, sans-serif;">
+            Signataire autorisé / Direction
+          </div>
+          <div style="display: flex; align-items: center; gap: 14px;">
+            ${
+              sigSrc
+                ? `<img src="${sigSrc}" alt="Signature" style="max-height: 55px; max-width: 170px; display: inline-block; vertical-align: middle;" />`
+                : `<span contenteditable="true" style="font-family: 'Brush Script MT', cursive, Georgia, serif; font-size: 24px; color: #0f172a; display: inline-block;">Signature Électronique</span>`
+            }
+            ${
+              cachetSrc
+                ? `<img src="${cachetSrc}" alt="Cachet Officiel" style="max-height: 60px; max-width: 95px; display: inline-block; vertical-align: middle; margin-left: 10px;" />`
+                : ''
+            }
+          </div>
+        </td>
+        <td width="40%" style="vertical-align: top; text-align: right;">
+          ${
+            qrSrc
+              ? `
+          <div style="display: inline-block; text-align: center;">
+            <img src="${qrSrc}" alt="QR Code" style="width: 64px; height: 64px; border: 1px solid #cbd5e1; border-radius: 6px; padding: 2px; display: block; margin: 0 0 0 auto;" />
+            <div contenteditable="true" style="font-size: 10px; color: #64748b; font-family: monospace; text-align: right; margin-top: 4px;">
+              Scan &amp; Vérification
+            </div>
+          </div>
+          `
+              : ''
+          }
+        </td>
+      </tr>
+    </table>
+  `;
 
   return `<!-- ================================================================= -->
-<!-- ATLANTIC TRANSPORT LTD - CODE SOURCE KITSCMS & WEBMAIL INFOMANIAK -->
-<!-- Généré avec succès depuis l'Atelier Document Avancé                -->
-<!-- Compatible Outlook, Gmail, Roundcube, Thunderbird & KitsCMS        -->
+<!-- TEMPLATE EMAIL 100% ÉDITABLE POUR KITSCMS & WEBMAIL INFOMANIAK     -->
+<!-- Conçu avec du texte natif modifiable directement au clavier         -->
+<!-- Compatible Outlook, Gmail, Roundcube, Thunderbird, Infomaniak      -->
 <!-- ================================================================= -->
-<div style="margin: 0; padding: 24px 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-  <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 660px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 14px; overflow: hidden; box-shadow: 0 4px 12px rgba(11,37,69,0.06);">
-    
-    <!-- EN-TÊTE CORPORATE AVEC LOGO KITSCMS -->
-    <tr>
-      <td style="background-color: #0B2545; padding: 26px 30px; text-align: center; border-bottom: 3px solid #D4A017;">
-        ${
-          logoImgSrc
-            ? `<img src="${logoImgSrc}" alt="Atlantic Transport Ltd" style="max-height: 54px; max-width: 280px; height: auto; display: inline-block; margin-bottom: 10px;" />`
-            : `<h1 style="margin: 0; color: #ffffff; font-size: 22px; font-weight: bold; letter-spacing: 0.5px;">ATLANTIC TRANSPORT LTD</h1>`
-        }
-        <div style="font-size: 11px; color: #D4A017; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-top: 4px;">
-          Transitaire International &amp; Douanes Agréés CBSA / OEA
-        </div>
-      </td>
-    </tr>
+<div style="margin: 0; padding: 24px 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
+  
+  <!-- PREHEADER CACHÉ POUR LES CLIENTS MAIL -->
+  <div style="display: none; max-height: 0; overflow: hidden; font-size: 1px; line-height: 1px; color: #f1f5f9; mso-hide: all;">
+    ${escapeHtml(docTitle)} ${docRef ? `· Réf. ${escapeHtml(docRef)}` : ''} — Document officiel disponible pour consultation.
+  </div>
 
-    <!-- BANDEAU STATUT & RÉFÉRENCE -->
+  <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 680px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);">
+    
+    <!-- BANDEAU SUPÉRIEUR D'ACTION : TÉLÉCHARGEMENT PDF DIRECT -->
     <tr>
-      <td style="padding: 24px 30px 10px 30px;">
-        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f8fafc; border-left: 4px solid #D4A017; border-radius: 6px; padding: 14px 18px;">
+      <td style="background-color: #0f172a; padding: 14px 24px; text-align: center; border-bottom: 2px solid #2563eb;">
+        <table border="0" cellpadding="0" cellspacing="0" width="100%">
           <tr>
-            <td>
-              <strong style="color: #0B2545; font-size: 16px; display: block;">
-                ${docData.title}
-              </strong>
-              <span style="font-size: 12px; color: #64748b; margin-top: 4px; display: inline-block;">
-                Réf. : <strong>${cleanMatricule}</strong> · Destinataire : <strong>${cleanName}</strong>
-              </span>
+            <td align="left" style="color: #f8fafc; font-size: 13px; font-weight: 600;">
+              ${logoSrc ? `<img src="${logoSrc}" alt="Logo" style="max-height: 36px; max-width: 170px; vertical-align: middle; display: inline-block; margin-right: 12px;" />` : ''}
+              <span contenteditable="true" style="vertical-align: middle; color: #ffffff; font-weight: bold; font-family: Arial, sans-serif;">${escapeHtml(docTitle)}</span>
+            </td>
+            <td align="right">
+              <a href="${downloadLink}" target="_blank" rel="noopener noreferrer" style="display: inline-block; background-color: #2563eb; color: #ffffff; text-decoration: none; font-size: 12px; font-weight: bold; padding: 8px 16px; border-radius: 6px; box-shadow: 0 2px 6px rgba(37,99,235,0.3); font-family: Arial, sans-serif;">
+                📥 Télécharger le PDF
+              </a>
             </td>
           </tr>
         </table>
       </td>
     </tr>
 
-    <!-- CORPS DU MESSAGE RECONSTRUIT -->
+    <!-- CORPS DU MESSAGE : CONTENU TEXTE ÉDITABLE DIRECTEMENT DANS LE WEBMAIL -->
     <tr>
-      <td style="padding: 16px 30px 24px 30px; color: #334155; font-size: 14px; line-height: 1.65;">
-        <p style="margin-top: 0; font-size: 15px;">
-          Bonjour <strong>${cleanName}</strong>,
-        </p>
+      <td style="padding: 32px 36px 24px 36px; color: #334155; font-size: 14px; line-height: 1.65; background-color: #ffffff;">
+        
+        <!-- TITRE PRINCIPAL ÉDITABLE -->
+        <h1 contenteditable="true" style="margin: 0 0 16px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 22px; font-weight: 800; color: #0f172a; letter-spacing: -0.3px; line-height: 1.3;">
+          ${escapeHtml(docTitle)}
+        </h1>
 
-        <p>
-          Nous avons le plaisir de vous transmettre votre document officiel de la société <strong>Atlantic Transport Ltd</strong>.
-          Ce document a été validé par la Direction des Ressources Humaines et les autorités douanières compétentes.
-        </p>
+        <!-- BANDEAU RÉFÉRENCE & DESTINATAIRE ÉDITABLE -->
+        <table border="0" cellpadding="10" cellspacing="0" width="100%" style="background-color: #f8fafc; border-left: 4px solid #2563eb; border-radius: 6px; margin-bottom: 24px;">
+          <tr>
+            <td contenteditable="true" style="font-family: Arial, sans-serif; font-size: 13px; color: #475569;">
+              ${docRef ? `Réf. : <strong style="color: #0f172a; font-family: monospace;">${escapeHtml(docRef)}</strong>` : 'Document Officiel'}
+              ${recipient ? ` &nbsp;·&nbsp; Destinataire : <strong style="color: #0f172a;">${escapeHtml(recipient)}</strong>` : ''}
+              &nbsp;·&nbsp; Date : <strong>${new Date().toLocaleDateString('fr-CA')}</strong>
+            </td>
+          </tr>
+        </table>
 
-        <!-- BOUTON D'ACTION PRINCIPAL : LIEN PAGE WEB TÉLÉCHARGEMENT PDF -->
-        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 28px 0;">
+        <!-- PARAGRAPHES DE TEXTE DU DOCUMENT (100% ÉDITABLES) -->
+        <div style="margin-bottom: 28px;">
+          ${renderedParagraphsHtml}
+        </div>
+
+        <!-- TABLEAU DE DONNÉES ÉDITABLE (SI APPLICABLE) -->
+        ${tableHtml}
+
+        <!-- BOUTON D'ACTION PRINCIPAL : LIEN WEB POUR TÉLÉCHARGEMENT PDF -->
+        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 28px 0 16px 0;">
           <tr>
             <td align="center">
               <table border="0" cellpadding="0" cellspacing="0">
                 <tr>
-                  <td align="center" style="border-radius: 10px; background-color: #0B2545;">
-                    <a href="${downloadLink}" target="_blank" rel="noopener noreferrer" style="display: inline-block; padding: 14px 28px; font-family: Arial, sans-serif; font-size: 14px; color: #ffffff; text-decoration: none; font-weight: bold; border-radius: 10px; border: 2px solid #D4A017; box-shadow: 0 4px 10px rgba(11,37,69,0.2);">
+                  <td align="center" style="border-radius: 8px; background-color: #0f172a;">
+                    <a href="${downloadLink}" target="_blank" rel="noopener noreferrer" style="display: inline-block; padding: 14px 28px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 13px; color: #ffffff; text-decoration: none; font-weight: bold; border-radius: 8px; border: 1px solid #334155; box-shadow: 0 4px 12px rgba(15,23,42,0.18);">
                       📥 Consulter &amp; Télécharger le Document (PDF Haute Définition)
                     </a>
                   </td>
                 </tr>
               </table>
-              <div style="font-size: 11px; color: #64748b; margin-top: 8px;">
-                Lien sécurisé et direct avec signature électronique certifiée
+              <div contenteditable="true" style="font-size: 11px; color: #64748b; margin-top: 8px; font-family: Arial, sans-serif;">
+                Lien sécurisé pour télécharger l'original signé et certifié conforme
               </div>
             </td>
           </tr>
         </table>
 
-        <!-- ZONES ADDITIONNELLES LABELLISÉES -->
-        ${
-          otherZones.length > 0
-            ? `
-          <div style="margin: 20px 0; padding: 14px 18px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
-            <strong style="color: #0B2545; font-size: 13px; display: block; margin-bottom: 8px;">
-              Éléments graphiques et annexes du document :
-            </strong>
-            <table border="0" cellpadding="6" cellspacing="0" width="100%">
-              ${otherZones
-                .map((z) => {
-                  const src = z.kitsCmsImageUrl || z.replacementDataUrl || z.croppedImageDataUrl;
-                  return `
-                <tr>
-                  <td width="30%" style="font-size: 12px; color: #64748b; vertical-align: middle;">
-                    <strong>${z.name}</strong> (${ZONE_LABELS_CONFIG[z.label]?.label || z.label})
-                  </td>
-                  <td width="70%" style="vertical-align: middle;">
-                    ${
-                      src
-                        ? `<img src="${src}" alt="${z.name}" style="max-height: 48px; max-width: 100%; border: 1px solid #e2e8f0; border-radius: 4px; padding: 2px; background: #ffffff;" />`
-                        : `<span style="font-size: 12px; color: #94a3b8;">${z.extractedText || 'Inclus'}</span>`
-                    }
-                  </td>
-                </tr>
-                `;
-                })
-                .join('')}
-            </table>
-          </div>
-          `
-            : ''
-        }
-
-        <!-- BLOC DE SIGNATURE & CACHET OFFICIEL -->
-        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 26px; padding-top: 20px; border-top: 1px solid #e2e8f0;">
-          <tr>
-            <td width="55%" style="vertical-align: top;">
-              <div style="font-size: 12px; color: #0B2545; font-weight: bold; margin-bottom: 6px;">
-                POUR ATLANTIC TRANSPORT LTD :
-              </div>
-              <div style="font-size: 11px; color: #64748b; margin-bottom: 8px;">
-                La Direction des Ressources Humaines
-              </div>
-              <div style="display: flex; align-items: center; gap: 10px;">
-                ${
-                  sigImgSrc
-                    ? `<img src="${sigImgSrc}" alt="Signature Employeur" style="max-height: 48px; max-width: 150px; display: inline-block; vertical-align: middle;" />`
-                    : `<span style="font-family: 'Brush Script MT', cursive; font-size: 20px; color: #0B2545;">Direction Générale</span>`
-                }
-                ${
-                  cachetImgSrc
-                    ? `<img src="${cachetImgSrc}" alt="Cachet Officiel" style="max-height: 52px; max-width: 90px; display: inline-block; vertical-align: middle; margin-left: 8px;" />`
-                    : ''
-                }
-              </div>
-            </td>
-            <td width="45%" style="vertical-align: top; text-align: right;">
-              ${
-                qrImgSrc
-                  ? `
-                <div style="display: inline-block; text-align: center;">
-                  <img src="${qrImgSrc}" alt="QR Code Vérification" style="width: 64px; height: 64px; border: 1px solid #cbd5e1; border-radius: 6px; padding: 2px; display: block; margin: 0 auto;" />
-                  <span style="font-size: 9px; color: #64748b; font-family: monospace; display: block; margin-top: 3px;">
-                    Scan &amp; Vérification
-                  </span>
-                </div>
-                `
-                  : ''
-              }
-            </td>
-          </tr>
-        </table>
+        <!-- VALIDATION, SIGNATURES & CACHETS DÉCOUPÉS SANS IA -->
+        ${validationSectionHtml}
       </td>
     </tr>
 
-    <!-- PIED DE PAGE CORPORATE -->
+    <!-- PIED DE PAGE ÉDITABLE -->
     <tr>
-      <td style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 20px 30px; font-size: 11px; color: #64748b; text-align: center; line-height: 1.6;">
-        <strong>Atlantic Transport Ltd.</strong> · King George Blvd, Surrey, BC V3T 2W1, Canada<br />
-        Contact RH : <a href="mailto:atlantictransport.int.contact@ik.me" style="color: #0B2545; text-decoration: none; font-weight: bold;">atlantictransport.int.contact@ik.me</a> · Téléphone direct : <a href="tel:+15068022206" style="color: #0B2545; text-decoration: none; font-weight: bold;">+1 506 802-2206</a><br />
-        <span style="font-size: 10px; color: #94a3b8; margin-top: 4px; display: inline-block;">
-          Ce message électronique et son document associé sont strictement confidentiels et protégés par le secret professionnel.
-        </span>
+      <td contenteditable="true" style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 18px 24px; font-size: 11px; color: #64748b; text-align: center; line-height: 1.6; font-family: Arial, sans-serif;">
+        <strong>Document officiel certifié</strong><br />
+        Ce message vous a été transmis avec son document électronique conforme. Vous pouvez modifier ou répondre directement à ce message.
       </td>
     </tr>
   </table>
@@ -641,7 +789,6 @@ export async function exportStudioPdf(
 
   // Si PDF Simple : on applique juste le fond sans surimpressions
   if (!options.isSimple) {
-    // Échelle de conversion canvas px -> mm
     const scaleX = pdfWidth / (docData.originalWidth || 800);
     const scaleY = pdfHeight / (docData.originalHeight || 1130);
 
@@ -664,12 +811,11 @@ export async function exportStudioPdf(
     });
   }
 
-  // Métadonnées
   pdf.setProperties({
-    title: docData.title,
-    subject: `Document Officiel Atlantic Transport Ltd - ${docData.matricule || ''}`,
-    author: 'Atlantic Transport Ltd. (Surrey, BC)',
-    creator: 'Atelier Document KitsCMS'
+    title: docData.title || 'Document Officiel',
+    subject: `Document Officiel - ${docData.matricule || ''}`,
+    author: docData.title || 'Document Officiel',
+    creator: 'Générateur de Template Email'
   });
 
   return pdf.output('blob');
@@ -695,53 +841,40 @@ export function exportStudioDocx(docData: StudioDocument): Blob {
         <![endif]-->
         <style>
           body { font-family: Arial, sans-serif; font-size: 11pt; color: #1e293b; line-height: 1.5; }
-          .header { text-align: center; background-color: #0B2545; color: #ffffff; padding: 20px; }
-          .title { color: #0B2545; font-size: 16pt; font-weight: bold; border-bottom: 2px solid #D4A017; padding-bottom: 8px; }
+          .header { text-align: center; background-color: #0f172a; color: #ffffff; padding: 20px; }
+          .title { color: #0f172a; font-size: 16pt; font-weight: bold; border-bottom: 2px solid #3b82f6; padding-bottom: 8px; }
           .meta { font-size: 10pt; color: #64748b; margin-top: 6px; }
           .content { padding: 20px 0; }
-          .btn-link { background-color: #0B2545; color: #ffffff; padding: 10px 20px; text-decoration: none; font-weight: bold; display: inline-block; }
+          .btn-link { background-color: #0f172a; color: #ffffff; padding: 10px 20px; text-decoration: none; font-weight: bold; display: inline-block; }
           .footer { font-size: 9pt; color: #64748b; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 15px; margin-top: 30px; }
         </style>
       </head>
       <body>
         <div class="header">
-          <h1 style="margin: 0; font-size: 18pt;">ATLANTIC TRANSPORT LTD</h1>
-          <div style="color: #D4A017; font-size: 10pt; font-weight: bold;">TRANSITAIRE INTERNATIONAL & DOUANES CBSA / OEA</div>
+          <h1 style="margin: 0; font-size: 18pt;">${docData.title}</h1>
+          <div style="color: #94a3b8; font-size: 10pt; font-weight: bold;">DOCUMENT OFFICIEL CERTIFIÉ</div>
         </div>
 
         <div class="content">
           <div class="title">${docData.title}</div>
           <div class="meta">
-            Réf. : <strong>${docData.matricule || 'AT-OFFICIEL'}</strong> | 
-            Destinataire : <strong>${docData.recipientName || 'Destinataire'}</strong> | 
-            Date : <strong>${new Date(docData.createdAt).toLocaleDateString('fr-CA')}</strong>
+            ${docData.matricule ? `Réf. : <strong>${docData.matricule}</strong> | ` : ''}
+            ${docData.recipientName ? `Destinataire : <strong>${docData.recipientName}</strong> | ` : ''}
+            Date : <strong>${new Date(docData.createdAt).toLocaleDateString()}</strong>
           </div>
-
-          <p style="margin-top: 20px;">
-            Bonjour <strong>${docData.recipientName || 'Madame, Monsieur'}</strong>,
-          </p>
-
-          <p>
-            Veuillez trouver ci-après les détails et dispositions de votre document officiel émis par Atlantic Transport Ltd.
-          </p>
 
           <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; margin: 20px 0;">
             <p style="margin: 0;"><strong>Lien sécurisé de téléchargement PDF :</strong></p>
             <p style="margin: 8px 0 0 0;">
-              <a href="${docData.publicDownloadUrl}" target="_blank" style="color: #0B2545; font-weight: bold;">
+              <a href="${docData.publicDownloadUrl}" target="_blank" style="color: #2563eb; font-weight: bold;">
                 ${docData.publicDownloadUrl}
               </a>
             </p>
           </div>
-
-          <p>
-            Pour toute vérification d'authenticité, notre service des Ressources Humaines se tient à votre entière disposition :
-            <br />Email : <strong>atlantictransport.int.contact@ik.me</strong> | Tél : <strong>+1 506 802-2206</strong>
-          </p>
         </div>
 
         <div class="footer">
-          Atlantic Transport Ltd. · Surrey, BC, Canada · Tous droits réservés
+          Document généré et certifié conforme · Tous droits réservés
         </div>
       </body>
     </html>
@@ -774,7 +907,6 @@ export async function exportStudioImage(
   const ctx = canvas.getContext('2d');
   if (!ctx) return '';
 
-  // Fond nettoyé
   const bgImg = new Image();
   bgImg.crossOrigin = 'anonymous';
   await new Promise<void>((resolve) => {
@@ -785,7 +917,6 @@ export async function exportStudioImage(
 
   ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
 
-  // Dessin des zones
   for (const zone of docData.zones) {
     if (zone.action === 'hide') continue;
     const src = zone.replacementDataUrl || zone.croppedImageDataUrl;

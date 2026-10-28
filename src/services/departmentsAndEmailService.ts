@@ -11,13 +11,13 @@ import { db, isTransientUnavailableError } from '../firebase';
 
 export interface PosteDefinition {
   titre: string;
-  missions: [string, string, string, string, string, string];
+  missions: string[];
 }
 
 export interface DepartmentDefinition {
   code: string;
   name: string;
-  missions: [string, string, string, string, string, string];
+  missions: string[];
   postesLies: string[];
   postesDetail: PosteDefinition[];
 }
@@ -1034,6 +1034,88 @@ export const OFFICIAL_DEPARTMENTS: DepartmentDefinition[] = [
         ]
       }
     ]
+  },
+  {
+    code: 'SSMT',
+    name: 'Santé, sécurité et mieux-être au travail (SSMT)',
+    missions: [
+      'Prévention des risques professionnels dans les entrepôts, les dépôts et les activités de transport.',
+      'Suivi de la santé des employés, premiers soins et actions de sensibilisation.',
+      'Coordination des programmes de sécurité, inspections et suivi des mesures correctives.',
+      'Gestion administrative des dossiers d’accidents du travail et suivi des retours au travail.',
+      'Formation continue du personnel aux règles de sécurité, manutention et premiers secours.',
+      'Analyse ergonomique et opérationnelle des risques et amélioration des conditions de travail.'
+    ],
+    postesLies: [
+      'Infirmier en santé au travail',
+      'Agent de santé et sécurité au travail',
+      'Coordonnateur en santé et sécurité au travail',
+      'Agent de gestion des accidents du travail et des retours au travail',
+      'Formateur en santé et sécurité au travail',
+      'Conseiller en prévention des risques professionnels'
+    ],
+    postesDetail: [
+      {
+        titre: 'Infirmier en santé au travail',
+        missions: [
+          'Assurer le suivi de la santé des employés dans le cadre de ses compétences et des autorisations professionnelles requises.',
+          'Dispenser les premiers soins en cas de malaise ou de blessure.',
+          'Participer à la prévention des risques professionnels.',
+          'Contribuer aux actions de sensibilisation à la santé au travail.',
+          'Participer au suivi des blessures professionnelles et au retour au travail, dans le respect de la confidentialité.'
+        ]
+      },
+      {
+        titre: 'Agent de santé et sécurité au travail',
+        missions: [
+          'Identifier les risques professionnels dans les entrepôts, les dépôts et les activités de transport.',
+          'Participer à la prévention des accidents du travail.',
+          'Contrôler l\'application des procédures de santé et de sécurité.',
+          'Participer aux enquêtes et aux analyses après un incident.',
+          'Sensibiliser le personnel aux bonnes pratiques de sécurité.'
+        ]
+      },
+      {
+        titre: 'Coordonnateur en santé et sécurité au travail',
+        missions: [
+          'Coordonner les programmes de prévention des risques professionnels.',
+          'Organiser les inspections de sécurité et le suivi des mesures correctives.',
+          'Participer à l\'élaboration des procédures de sécurité.',
+          'Assurer le suivi des indicateurs d\'accidents et d\'incidents.',
+          'Coordonner les activités de sensibilisation et de formation en sécurité.'
+        ]
+      },
+      {
+        titre: 'Agent de gestion des accidents du travail et des retours au travail',
+        missions: [
+          'Assurer le suivi administratif des dossiers d\'accidents du travail.',
+          'Coordonner les échanges professionnels nécessaires au traitement des dossiers.',
+          'Suivre les absences liées aux blessures professionnelles, dans le respect de la confidentialité.',
+          'Participer à l\'organisation du retour au travail des employés.',
+          'Tenir à jour les dossiers et les indicateurs de suivi.'
+        ]
+      },
+      {
+        titre: 'Formateur en santé et sécurité au travail',
+        missions: [
+          'Former les employés aux règles de sécurité applicables à leurs activités.',
+          'Sensibiliser le personnel aux risques liés au transport, à la manutention et au travail en entrepôt.',
+          'Organiser des séances de prévention des accidents.',
+          'Participer à la formation aux premiers secours lorsque les qualifications requises sont détenues.',
+          'Évaluer la compréhension et l\'application des consignes de sécurité.'
+        ]
+      },
+      {
+        titre: 'Conseiller en prévention des risques professionnels',
+        missions: [
+          'Analyser les risques liés aux opérations de transport et de logistique.',
+          'Proposer des mesures préventives adaptées aux activités de l\'entreprise.',
+          'Participer à l\'amélioration des conditions de travail.',
+          'Contribuer à la rédaction et à la mise à jour des procédures de prévention.',
+          'Collaborer avec les ressources humaines, l\'exploitation et la direction pour réduire les risques professionnels.'
+        ]
+      }
+    ]
   }
 ];
 
@@ -1112,7 +1194,7 @@ export function findPosteDefinition(
 export function getMissionsForPosteOrDepartment(
   posteName?: string,
   deptName?: string
-): [string, string, string, string, string, string] {
+): string[] {
   const matchedPoste = findPosteDefinition(posteName, deptName);
   if (matchedPoste) {
     return matchedPoste.poste.missions;
@@ -1171,6 +1253,20 @@ export function findDepartmentByPoste(posteName?: string): DepartmentDefinition 
     {
       keywords: ['LITIGE', 'CLIENT', 'AVARIE', 'SAV', 'RECLAMATION'],
       code: 'SERVICE_CLIENT_LITIGES'
+    },
+    {
+      keywords: [
+        'SSMT',
+        'SANTE',
+        'MIEUX ETRE',
+        'INFIRMIER',
+        'ACCIDENTS DU TRAVAIL',
+        'ACCIDENT DU TRAVAIL',
+        'RETOUR AU TRAVAIL',
+        'PREVENTION DES RISQUES',
+        'SANTE ET SECURITE'
+      ],
+      code: 'SSMT'
     },
     {
       keywords: ['QHSE', 'SECURITE', 'QUALITE', 'HSE', 'ADR', 'RSE', 'ENVIRONNEMENT'],

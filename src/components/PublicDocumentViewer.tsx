@@ -3,15 +3,10 @@ import {
   Download,
   Printer,
   ShieldCheck,
-  Building2,
   FileText,
-  Clock,
   ArrowLeft,
-  CheckCircle2,
-  ExternalLink,
-  Phone,
-  Mail,
-  Lock
+  Lock,
+  ExternalLink
 } from 'lucide-react';
 import {
   StudioDocument,
@@ -43,7 +38,7 @@ export const PublicDocumentViewer: React.FC<PublicDocumentViewerProps> = ({
           setDocData(data);
         } else {
           setError(
-            "Le document demandé est introuvable ou a été archivé. Veuillez contacter la Direction des Ressources Humaines d'Atlantic Transport Ltd."
+            "Le document demandé est introuvable ou a été archivé. Veuillez vérifier le lien reçu par e-mail."
           );
         }
       })
@@ -69,7 +64,8 @@ export const PublicDocumentViewer: React.FC<PublicDocumentViewerProps> = ({
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${docData.title.replace(/[^a-zA-Z0-9_-]/g, '_')}_${docData.matricule || 'OFFICIEL'}.pdf`;
+      const cleanTitle = (docData.title || 'document').replace(/[^a-zA-Z0-9_-]/g, '_');
+      a.download = `${cleanTitle}${docData.matricule ? `_${docData.matricule}` : ''}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -90,9 +86,9 @@ export const PublicDocumentViewer: React.FC<PublicDocumentViewerProps> = ({
       <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-center p-6 text-slate-800">
         <div className="w-12 h-12 border-4 border-[#0B2545] border-t-amber-400 rounded-full animate-spin mb-4" />
         <h2 className="text-base font-bold text-[#0B2545]">
-          Chargement du document officiel sécurisé...
+          Chargement du document sécurisé...
         </h2>
-        <p className="text-xs text-slate-500 mt-1">Atlantic Transport Ltd. · Surrey, BC</p>
+        <p className="text-xs text-slate-500 mt-1">Préparation du visualiseur haute définition</p>
       </div>
     );
   }
@@ -114,7 +110,7 @@ export const PublicDocumentViewer: React.FC<PublicDocumentViewerProps> = ({
               onClick={onBackToHome}
               className="px-5 py-2.5 rounded-xl bg-[#0B2545] text-white text-xs font-bold hover:bg-[#134074] transition-colors cursor-pointer"
             >
-              Retour au site officiel
+              Retour à l'accueil
             </button>
           </div>
         </div>
@@ -124,7 +120,7 @@ export const PublicDocumentViewer: React.FC<PublicDocumentViewerProps> = ({
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans">
-      {/* Barre supérieure officielle Atlantic Transport */}
+      {/* Barre supérieure officielle */}
       <header className="bg-[#0B2545] text-white border-b-2 border-amber-400/40 sticky top-0 z-40 shadow-md">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -138,10 +134,10 @@ export const PublicDocumentViewer: React.FC<PublicDocumentViewerProps> = ({
             </button>
             <div>
               <span className="text-[10px] font-mono text-amber-400 font-bold uppercase tracking-wider block">
-                Portail de Vérification Officiel
+                Portail de Consultation Sécurisé
               </span>
               <h1 className="text-sm sm:text-base font-bold text-white leading-tight">
-                Atlantic Transport Ltd.
+                {docData.title || 'Document Officiel'}
               </h1>
             </div>
           </div>
@@ -185,68 +181,53 @@ export const PublicDocumentViewer: React.FC<PublicDocumentViewerProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-1">
-                Destinataire : <strong className="text-slate-800">{docData.recipientName || 'Non spécifié'}</strong> · 
-                Réf. : <span className="font-mono text-amber-700 font-bold">{docData.matricule || 'AT-OFFICIEL'}</span> · 
-                Émis le {new Date(docData.createdAt).toLocaleDateString('fr-CA')}
+                {docData.recipientName ? (
+                  <>
+                    Destinataire : <strong className="text-slate-800">{docData.recipientName}</strong> ·{' '}
+                  </>
+                ) : null}
+                {docData.matricule ? (
+                  <>
+                    Réf. : <span className="font-mono text-amber-700 font-bold">{docData.matricule}</span> ·{' '}
+                  </>
+                ) : null}
+                Date : {new Date(docData.createdAt).toLocaleDateString()}
               </p>
             </div>
           </div>
 
           <div className="text-xs text-slate-500 bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-right shrink-0">
-            <span className="block font-mono text-[11px] text-slate-700">CBSA / OEA Agrément</span>
-            <span className="text-[10px] text-slate-400">ID Document : {docData.id}</span>
+            <span className="block font-mono text-[11px] text-slate-700">Document Conforme</span>
+            <span className="text-[10px] text-slate-400">ID : {docData.id}</span>
           </div>
         </div>
 
-        {/* Aperçu A4 du document */}
+        {/* Aperçu du document */}
         <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-8 shadow-md">
           <div className="max-w-[720px] mx-auto border border-slate-200 rounded-xl overflow-hidden shadow-sm bg-white">
-            {/* Si HTML reconstruit existe, affichage propre */}
-            {docData.reconstructedHtml ? (
-              <div
-                dangerouslySetInnerHTML={{ __html: docData.reconstructedHtml }}
-                className="overflow-x-auto"
-              />
-            ) : (
+            {docData.cleanedBackgroundDataUrl || docData.originalImageDataUrl ? (
               <img
                 src={docData.cleanedBackgroundDataUrl || docData.originalImageDataUrl}
                 alt={docData.title}
                 className="w-full h-auto block"
               />
+            ) : docData.reconstructedHtml ? (
+              <div
+                dangerouslySetInnerHTML={{ __html: docData.reconstructedHtml }}
+                className="overflow-x-auto"
+              />
+            ) : (
+              <div className="p-12 text-center text-slate-400">
+                <FileText className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                <p className="text-sm">Aperçu non disponible</p>
+              </div>
             )}
-          </div>
-        </div>
-
-        {/* Coordonnées & Support Entreprise */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm text-xs text-slate-600 flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <strong className="text-[#0B2545] block font-bold text-sm">
-              Atlantic Transport Ltd.
-            </strong>
-            <span>Surrey, Colombie-Britannique, Canada</span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-4">
-            <a
-              href="mailto:atlantictransport.int.contact@ik.me"
-              className="text-[#0B2545] font-semibold hover:underline flex items-center gap-1.5"
-            >
-              <Mail className="w-3.5 h-3.5 text-amber-500" />
-              <span>atlantictransport.int.contact@ik.me</span>
-            </a>
-            <a
-              href="tel:+15068022206"
-              className="text-[#0B2545] font-semibold hover:underline flex items-center gap-1.5"
-            >
-              <Phone className="w-3.5 h-3.5 text-amber-500" />
-              <span>+1 506 802-2206</span>
-            </a>
           </div>
         </div>
       </main>
 
       <footer className="bg-slate-200/70 py-4 text-center text-xs text-slate-500 border-t border-slate-200">
-        © {new Date().getFullYear()} Atlantic Transport Ltd. · Document certifié et sécurisé
+        Document officiel sécurisé · Accès protégé par lien unique
       </footer>
     </div>
   );
