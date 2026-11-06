@@ -66,6 +66,11 @@ service cloud.firestore {
       allow delete: if isValidId(settingId);
     }
 
+    match /job_offers/{offerId} {
+      allow get, list: if true;
+      allow create, update, delete: if isValidId(offerId);
+    }
+
     match /test/{docId} {
       allow read: if true;
     }

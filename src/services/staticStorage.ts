@@ -833,6 +833,12 @@ export function subscribeToEmployeesFirestore(
   );
 }
 
+export async function addEmployee(
+  emp: Employee
+): Promise<{ docId: string; employee: Employee }> {
+  return writeEmployeeToFirestore(emp, false);
+}
+
 export async function writeEmployeeToFirestore(
   emp: Employee,
   isUpdate: boolean

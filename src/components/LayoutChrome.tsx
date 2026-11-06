@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Menu, X, Lock, Phone, Mail, MapPin, MessageCircle, ArrowRight } from 'lucide-react';
+import { Menu, X, Lock, Phone, Mail, MapPin, MessageCircle, ArrowRight, Building2, ShieldCheck } from 'lucide-react';
 import { PublicPage, SiteSettings } from '../types';
 import { BrandLogo } from './BrandLogo';
+import { SiteContext } from '../services/multisiteService';
 
 interface HeaderProps {
   settings: SiteSettings;
@@ -9,6 +10,8 @@ interface HeaderProps {
   onNavigate: (page: PublicPage) => void;
   onOpenEmployeeModal: () => void;
   isEmployeeLoggedIn: boolean;
+  siteContext?: SiteContext;
+  onSwitchSite?: (site: SiteContext) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -16,7 +19,9 @@ export const Header: React.FC<HeaderProps> = ({
   currentPage,
   onNavigate,
   onOpenEmployeeModal,
-  isEmployeeLoggedIn
+  isEmployeeLoggedIn,
+  siteContext = 'main',
+  onSwitchSite
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -24,6 +29,8 @@ export const Header: React.FC<HeaderProps> = ({
     { id: 'accueil', label: 'Accueil' },
     { id: 'services', label: 'Services' },
     { id: 'apropos', label: 'À propos' },
+    { id: 'nos-offres', label: 'Nos Offres' },
+    { id: 'entretien', label: 'Entretien d’Embauche' },
     { id: 'contact', label: 'Contact' }
   ];
 
@@ -33,56 +40,105 @@ export const Header: React.FC<HeaderProps> = ({
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const hasPhone = Boolean(settings.phone && settings.phone.trim().length > 0);
+  const hasEmail = Boolean(settings.email && settings.email.trim().length > 0);
+
   return (
     <>
-      {/* Barre Top Noire #0A0A0A 11px avec adresse/téléphone/email à gauche et "Transitaire & Douanes Agréés CBSA / OEA" à droite */}
+      {/* Barre Top Noire #0A0A0A 11px avec adresse / coordonnées filtrées + sélecteur multisite étanche */}
       <div className="bg-[#0A0A0A] text-gray-300 text-[11px] leading-tight border-b border-white/10">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 flex flex-col sm:flex-row items-center justify-between gap-1.5">
-          <div className="flex flex-wrap items-center justify-center sm:justify-start gap-x-3.5 gap-y-1">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 flex flex-col md:flex-row items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-center md:justify-start gap-x-3.5 gap-y-1">
             <span className="inline-flex items-center gap-1.5 text-gray-300">
               <MapPin className="w-3 h-3 text-[#D4A017] shrink-0" />
               <span>{settings.address}</span>
             </span>
-            <div className="inline-flex items-center gap-1.5 text-gray-300 font-mono tabular-nums">
-              <Phone className="w-3 h-3 text-[#D4A017] shrink-0" />
-              <a
-                href="tel:+15068022206"
-                className="text-[#D4A017] hover:text-white font-bold transition-colors"
-                title="Téléphone principal : +15068022206"
-              >
-                +15068022206
-              </a>
-              <span className="text-gray-500">/</span>
-              <a
-                href="tel:+15068022226"
-                className="text-gray-300 hover:text-white transition-colors"
-                title="Numéro secondaire : +1 (506) 802-2226"
-              >
-                +1 (506) 802-2226
-              </a>
-            </div>
-            <div className="inline-flex items-center gap-1.5 text-gray-300">
-              <Mail className="w-3 h-3 text-[#D4A017] shrink-0" />
-              <a
-                href="mailto:atlantictransport.int.contact@ik.me"
-                className="text-[#D4A017] hover:text-white font-medium transition-colors"
-                title="Email principal : atlantictransport.int.contact@ik.me"
-              >
-                atlantictransport.int.contact@ik.me
-              </a>
-              <span className="text-gray-500">/</span>
-              <a
-                href="mailto:atlantictransport.int@ik.me"
-                className="text-gray-300 hover:text-white transition-colors"
-                title="Email secondaire : atlantictransport.int@ik.me"
-              >
-                atlantictransport.int@ik.me
-              </a>
-            </div>
+
+            {/* SÉCURITÉ ÉTANCHÉITÉ : Coordonnées masquées à 100% sur le Secrétariat */}
+            {hasPhone && (
+              <div className="inline-flex items-center gap-1.5 text-gray-300 font-mono tabular-nums">
+                <Phone className="w-3 h-3 text-[#D4A017] shrink-0" />
+                <a
+                  href={`tel:${settings.phone.replace(/\s+/g, '')}`}
+                  className="text-[#D4A017] hover:text-white font-bold transition-colors"
+                  title={`Téléphone principal : ${settings.phone}`}
+                >
+                  {settings.phone}
+                </a>
+                {settings.phone_secondary && (
+                  <>
+                    <span className="text-gray-500">/</span>
+                    <a
+                      href={`tel:${settings.phone_secondary.replace(/\s+/g, '')}`}
+                      className="text-gray-300 hover:text-white transition-colors"
+                      title={`Numéro secondaire : ${settings.phone_secondary}`}
+                    >
+                      {settings.phone_secondary}
+                    </a>
+                  </>
+                )}
+              </div>
+            )}
+
+            {hasEmail && (
+              <div className="inline-flex items-center gap-1.5 text-gray-300">
+                <Mail className="w-3 h-3 text-[#D4A017] shrink-0" />
+                <a
+                  href={`mailto:${settings.email}`}
+                  className="text-[#D4A017] hover:text-white font-medium transition-colors"
+                  title={`Email principal : ${settings.email}`}
+                >
+                  {settings.email}
+                </a>
+                {settings.email_secondary && (
+                  <>
+                    <span className="text-gray-500">/</span>
+                    <a
+                      href={`mailto:${settings.email_secondary}`}
+                      className="text-gray-300 hover:text-white transition-colors"
+                      title={`Email secondaire : ${settings.email_secondary}`}
+                    >
+                      {settings.email_secondary}
+                    </a>
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
-          <div className="font-semibold text-[#D4A017] tracking-wide uppercase whitespace-nowrap">
-            Transitaire &amp; Douanes Agréés CBSA / OEA
+          <div className="flex items-center gap-3">
+            {/* Basculeur Multisite Sécurisé (Option 2) */}
+            <div className="flex items-center gap-1 bg-white/10 px-2 py-0.5 rounded-full border border-white/15 text-[10px]">
+              <span className="text-gray-400 font-medium mr-0.5">Site :</span>
+              <button
+                type="button"
+                onClick={() => onSwitchSite?.('main')}
+                className={`px-2 py-0.5 rounded-full font-bold transition-all cursor-pointer ${
+                  siteContext !== 'secretariat'
+                    ? 'bg-[#D4A017] text-gray-950 shadow-xs'
+                    : 'text-gray-300 hover:text-white'
+                }`}
+                title="Consulter le site principal (Direction RH)"
+              >
+                Principal (RH)
+              </button>
+              <button
+                type="button"
+                onClick={() => onSwitchSite?.('secretariat')}
+                className={`px-2 py-0.5 rounded-full font-bold transition-all cursor-pointer ${
+                  siteContext === 'secretariat'
+                    ? 'bg-[#D4A017] text-gray-950 shadow-xs'
+                    : 'text-gray-300 hover:text-white'
+                }`}
+                title="Consulter le clone dédié au Secrétariat (Données sensibles masquées)"
+              >
+                Secrétariat
+              </button>
+            </div>
+
+            <div className="hidden sm:inline-block font-semibold text-[#D4A017] tracking-wide uppercase whitespace-nowrap">
+              Transitaire &amp; Douanes Agréés CBSA / OEA
+            </div>
           </div>
         </div>
       </div>
@@ -214,13 +270,17 @@ interface FooterProps {
   onNavigate: (page: PublicPage) => void;
   onOpenEmployeeModal: () => void;
   onSecretAdminTrigger: () => void;
+  siteContext?: SiteContext;
+  onSwitchSite?: (site: SiteContext) => void;
 }
 
 export const Footer: React.FC<FooterProps> = ({
   settings,
   onNavigate,
   onOpenEmployeeModal,
-  onSecretAdminTrigger
+  onSecretAdminTrigger,
+  siteContext = 'main',
+  onSwitchSite
 }) => {
   const [secretClicks, setSecretClicks] = useState(0);
 
@@ -239,6 +299,9 @@ export const Footer: React.FC<FooterProps> = ({
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const hasPhone = Boolean(settings.phone && settings.phone.trim().length > 0);
+  const hasEmail = Boolean(settings.email && settings.email.trim().length > 0);
+  const hasWhatsapp = Boolean(settings.whatsapp && settings.whatsapp.trim().length > 0);
   const cleanWhatsapp = settings.whatsapp || settings.phone.replace(/[^\d]/g, '');
 
   return (
@@ -304,6 +367,25 @@ export const Footer: React.FC<FooterProps> = ({
               <li>
                 <button
                   type="button"
+                  onClick={() => handleNav('nos-offres')}
+                  className="hover:text-[#F59E0B] transition-colors py-1 flex items-center gap-1.5"
+                >
+                  <span>Nos Offres d&apos;Emploi</span>
+                  <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-500/20 text-[#D4A017]">Recrutement</span>
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  onClick={() => handleNav('entretien')}
+                  className="hover:text-[#F59E0B] transition-colors py-1 flex items-center gap-1.5 text-slate-300"
+                >
+                  <span>Entretien d&apos;Embauche (Chat &amp; Code)</span>
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
                   onClick={() => handleNav('contact')}
                   className="hover:text-[#F59E0B] transition-colors py-1"
                 >
@@ -341,7 +423,7 @@ export const Footer: React.FC<FooterProps> = ({
             </ul>
           </div>
 
-          {/* Col 4: Coordonnées Officielles */}
+          {/* Col 4: Coordonnées Officielles (Filtrées selon siteContext) */}
           <div>
             <h3 className="text-sm font-semibold text-white mb-4">Siège Social &amp; Contact</h3>
             <ul className="space-y-3 text-sm">
@@ -349,63 +431,87 @@ export const Footer: React.FC<FooterProps> = ({
                 <MapPin className="w-4 h-4 text-[#D4A017] shrink-0 mt-1" />
                 <span className="text-gray-200 leading-snug">{settings.address}</span>
               </li>
-              <li className="flex items-start gap-2.5">
-                <Phone className="w-4 h-4 text-[#D4A017] shrink-0 mt-1" />
-                <div className="space-y-1 font-mono tabular-nums">
-                  <div>
-                    <a
-                      href="tel:+15068022206"
-                      className="text-white hover:text-[#F59E0B] transition-colors block font-bold"
-                      title="Téléphone principal"
-                    >
-                      +15068022206 <span className="text-[10px] text-[#D4A017] uppercase font-sans font-semibold ml-1">(Principal)</span>
-                    </a>
+
+              {/* Téléphone : Uniquement si non masqué */}
+              {hasPhone && (
+                <li className="flex items-start gap-2.5">
+                  <Phone className="w-4 h-4 text-[#D4A017] shrink-0 mt-1" />
+                  <div className="space-y-1 font-mono tabular-nums">
+                    <div>
+                      <a
+                        href={`tel:${settings.phone.replace(/\s+/g, '')}`}
+                        className="text-white hover:text-[#F59E0B] transition-colors block font-bold"
+                        title="Téléphone principal"
+                      >
+                        {settings.phone} <span className="text-[10px] text-[#D4A017] uppercase font-sans font-semibold ml-1">(Principal)</span>
+                      </a>
+                    </div>
+                    {settings.phone_secondary && (
+                      <div>
+                        <a
+                          href={`tel:${settings.phone_secondary.replace(/\s+/g, '')}`}
+                          className="text-gray-400 hover:text-white transition-colors block text-xs"
+                          title="Numéro secondaire"
+                        >
+                          {settings.phone_secondary} <span className="text-[10px] text-gray-500 font-sans">(Secondaire)</span>
+                        </a>
+                      </div>
+                    )}
                   </div>
-                  <div>
-                    <a
-                      href="tel:+15068022226"
-                      className="text-gray-400 hover:text-white transition-colors block text-xs"
-                      title="Numéro secondaire"
-                    >
-                      +1 (506) 802-2226 <span className="text-[10px] text-gray-500 font-sans">(Secondaire)</span>
-                    </a>
+                </li>
+              )}
+
+              {/* WhatsApp direct : Uniquement si non masqué */}
+              {hasWhatsapp && (
+                <li className="flex items-center gap-2.5">
+                  <MessageCircle className="w-4 h-4 text-[#D4A017] shrink-0" />
+                  <a
+                    href={`https://wa.me/${settings.whatsapp.replace(/[^\d]/g, '')}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-gray-200 hover:text-[#F59E0B] transition-colors"
+                  >
+                    WhatsApp Direct : {settings.whatsapp}
+                  </a>
+                </li>
+              )}
+
+              {/* Email officiel : Uniquement si non masqué */}
+              {hasEmail && (
+                <li className="flex items-start gap-2.5">
+                  <Mail className="w-4 h-4 text-[#D4A017] shrink-0 mt-1" />
+                  <div className="space-y-1 break-all">
+                    <div>
+                      <a
+                        href={`mailto:${settings.email}`}
+                        className="text-white hover:text-[#F59E0B] transition-colors block font-medium"
+                        title="Email principal"
+                      >
+                        {settings.email} <span className="text-[10px] text-[#D4A017] font-semibold ml-1">(Principal)</span>
+                      </a>
+                    </div>
+                    {settings.email_secondary && (
+                      <div>
+                        <a
+                          href={`mailto:${settings.email_secondary}`}
+                          className="text-gray-400 hover:text-white transition-colors block text-xs"
+                          title="Email secondaire"
+                        >
+                          {settings.email_secondary} <span className="text-[10px] text-gray-500">(Secondaire)</span>
+                        </a>
+                      </div>
+                    )}
                   </div>
-                </div>
-              </li>
-              <li className="flex items-center gap-2.5">
-                <MessageCircle className="w-4 h-4 text-[#D4A017] shrink-0" />
-                <a
-                  href="https://wa.me/15068022206"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-gray-200 hover:text-[#F59E0B] transition-colors"
-                >
-                  WhatsApp Direct : +15068022206
-                </a>
-              </li>
-              <li className="flex items-start gap-2.5">
-                <Mail className="w-4 h-4 text-[#D4A017] shrink-0 mt-1" />
-                <div className="space-y-1 break-all">
-                  <div>
-                    <a
-                      href="mailto:atlantictransport.int.contact@ik.me"
-                      className="text-white hover:text-[#F59E0B] transition-colors block font-medium"
-                      title="Email principal"
-                    >
-                      atlantictransport.int.contact@ik.me <span className="text-[10px] text-[#D4A017] font-semibold ml-1">(Principal)</span>
-                    </a>
-                  </div>
-                  <div>
-                    <a
-                      href="mailto:atlantictransport.int@ik.me"
-                      className="text-gray-400 hover:text-white transition-colors block text-xs"
-                      title="Email secondaire"
-                    >
-                      atlantictransport.int@ik.me <span className="text-[10px] text-gray-500">(Secondaire)</span>
-                    </a>
-                  </div>
-                </div>
-              </li>
+                </li>
+              )}
+
+              {/* Message de confidentialité étanche pour le Secrétariat */}
+              {!hasPhone && !hasEmail && (
+                <li className="p-3.5 rounded-xl bg-white/5 border border-white/10 text-xs text-gray-300 leading-relaxed">
+                  <span className="font-semibold text-[#D4A017] block mb-1">Espace Secrétariat Général</span>
+                  Coordonnées directes et dossiers administratifs communiqués sur convocation officielle ou via le formulaire de contact.
+                </li>
+              )}
             </ul>
           </div>
         </div>
@@ -414,6 +520,45 @@ export const Footer: React.FC<FooterProps> = ({
           <p onClick={handleCopyrightClick} className="select-none cursor-default">
             © 2026 {settings.company_name}. Tous droits réservés.
           </p>
+
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <div className="flex items-center gap-1.5 bg-white/10 px-2.5 py-1 rounded-lg border border-white/10 text-[11px]">
+              <span className="text-gray-400">Site actif :</span>
+              <button
+                type="button"
+                onClick={() => onSwitchSite?.('main')}
+                className={`px-2 py-0.5 rounded font-bold transition-all cursor-pointer ${
+                  siteContext !== 'secretariat'
+                    ? 'bg-[#D4A017] text-gray-950 shadow-xs'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                Principal (RH)
+              </button>
+              <span className="text-gray-600">|</span>
+              <button
+                type="button"
+                onClick={() => onSwitchSite?.('secretariat')}
+                className={`px-2 py-0.5 rounded font-bold transition-all cursor-pointer ${
+                  siteContext === 'secretariat'
+                    ? 'bg-[#D4A017] text-gray-950 shadow-xs'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                Secrétariat
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={onSecretAdminTrigger}
+              className="text-xs text-gray-400 hover:text-[#D4A017] transition-colors flex items-center gap-1 cursor-pointer"
+            >
+              <Lock className="w-3 h-3 text-[#D4A017]" />
+              <span>{siteContext === 'secretariat' ? 'Espace Secrétaire' : 'Administration RH'}</span>
+            </button>
+          </div>
+
           <p className="text-center sm:text-right">
             Surrey, British Columbia, Canada · Transitaire &amp; Douanes Agréés CBSA / OEA
           </p>

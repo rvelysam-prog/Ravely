@@ -99,4 +99,4 @@ export interface ContactMessage {
   created_at: string;
 }
 
-export type PublicPage = 'accueil' | 'services' | 'apropos' | 'contact' | 'espace-employe' | 'admin';
+export type PublicPage = 'accueil' | 'services' | 'apropos' | 'nos-offres' | 'entretien' | 'contact' | 'espace-employe' | 'admin';

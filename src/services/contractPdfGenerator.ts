@@ -339,8 +339,10 @@ function drawRichParagraph(
       if (!token) continue;
 
       const isWhitespace = /^\s+$/.test(token);
-      const tokenToMeasure = isWhitespace ? ' ' : token;
-      const tokenWidth = doc.getTextWidth(tokenToMeasure);
+      // Assurer un espace visuel clair et franc d'au moins 2.2 mm pour éviter que les mots/noms ne soient collés
+      const tokenWidth = isWhitespace
+        ? Math.max(doc.getTextWidth(' '), 2.2)
+        : doc.getTextWidth(token);
 
       if (isWhitespace) {
         // Only advance cursor if not at the very start of a new line
@@ -459,7 +461,17 @@ export async function generateEmployeeContractPdfDataUri(emp: Employee): Promise
   // Dynamic employee variables with non-breaking spaces (Rule 4, 5, 7)
   const isCDD = String(emp.type_contrat).toUpperCase().includes('CDD');
   const civilite = (emp.civilite || 'Monsieur').trim();
-  const fullNameUpper = (emp.nom_complet || `${emp.prenom} ${emp.nom}`).trim().toUpperCase();
+  const cleanPrenom = (emp.prenom || '').trim();
+  const cleanNom = (emp.nom || '').trim();
+  let fullName = '';
+  if (cleanPrenom && cleanNom) {
+    fullName = `${cleanPrenom} ${cleanNom}`;
+  } else if (emp.nom_complet) {
+    fullName = emp.nom_complet.trim().replace(/\s+/g, ' ');
+  } else {
+    fullName = `${cleanPrenom} ${cleanNom}`.trim();
+  }
+  const fullNameUpper = fullName.toUpperCase();
   const dateNaissanceLong = formatDateLongFr(emp.date_naissance || '1984-08-24');
   const nationalite = (emp.nationalite || 'Canadienne').trim();
   const adresseResidence = (
@@ -613,10 +625,10 @@ export async function generateEmployeeContractPdfDataUri(emp: Employee): Promise
   y = drawRichParagraph(
     doc,
     [
-      { text: `${civilite}:\u00A0`, fontStyle: 'bolditalic', color: COLOR_BLACK },
+      { text: `${civilite} :\u00A0`, fontStyle: 'bolditalic', color: COLOR_BLACK },
       { text: withNbsp(fullNameUpper), fontStyle: 'normal', color: COLOR_BLUE_KEY },
       {
-        text: `demeurant\u00A0: ${withNbsp(adresseResidence)}né(e) le ${withNbsp(dateNaissanceLong)}de nationalité\u00A0: ${withNbsp(nationalite)}, qui déclare expressément être libre de tout engagement, ne pas être soumis(e) à une clause de non-concurrence et être en mesure de conclure le présent contrat.`,
+        text: `, demeurant\u00A0: ${withNbsp(adresseResidence)}, né(e) le ${withNbsp(dateNaissanceLong)}, de nationalité\u00A0: ${withNbsp(nationalite)}, qui déclare expressément être libre de tout engagement, ne pas être soumis(e) à une clause de non-concurrence et être en mesure de conclure le présent contrat.`,
         fontStyle: 'bolditalic',
         color: COLOR_BLACK
       }

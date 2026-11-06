@@ -1,15 +1,27 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Employee, PublicPage, SiteSettings } from './types';
 import { Header, Footer } from './components/LayoutChrome';
 import { PublicPages } from './components/PublicPages';
 import { EmployeePortal } from './components/EmployeePortal';
 import { AdminBackoffice } from './components/AdminBackoffice';
 import { PublicDocumentViewer } from './components/PublicDocumentViewer';
+import { NosOffresPage } from './components/NosOffresPage';
+import { EntretienEmbauchePage } from './components/EntretienEmbauchePage';
 import {
   getEmployees,
   getSiteSettings,
   syncFromStaticEmployesJson
 } from './services/staticStorage';
+import {
+  detectSiteContext,
+  filterSettingsForSite,
+  setStoredSiteContext,
+  getAdminSession,
+  clearAdminSession,
+  SiteContext,
+  AdminAuthSession
+} from './services/multisiteService';
+import { SecretaireAdminBackoffice } from './components/admin/SecretaireAdminBackoffice';
 
 function extractPublicDocIdFromUrl(): string | null {
   try {
@@ -81,8 +93,11 @@ function resolveInitialPage(): PublicPage {
     path === '/admin' ||
     path === '/admin.html' ||
     path.startsWith('/admin/') ||
+    path === '/secretariat/admin' ||
+    path.startsWith('/secretariat/admin/') ||
     hash === '#/admin' ||
     hash === '#admin' ||
+    hash.includes('secretariat/admin') ||
     hash.startsWith('#/admin/') ||
     hash.startsWith('#admin/')
   ) {
@@ -97,13 +112,33 @@ function resolveInitialPage(): PublicPage {
   ) {
     return 'espace-employe';
   }
-  if (path === '/services' || hash === '#services') {
+  if (
+    path === '/offres' ||
+    path === '/nos-offres' ||
+    path.startsWith('/offres/') ||
+    hash === '#offres' ||
+    hash === '#nos-offres' ||
+    path.includes('/secretariat/offres')
+  ) {
+    return 'nos-offres';
+  }
+  if (
+    path === '/entretien' ||
+    path === '/entretien-embauche' ||
+    path.startsWith('/entretien/') ||
+    hash === '#entretien' ||
+    hash.startsWith('#entretien') ||
+    path.includes('/secretariat/entretien')
+  ) {
+    return 'entretien';
+  }
+  if (path === '/services' || hash === '#services' || path.includes('/secretariat/services')) {
     return 'services';
   }
-  if (path === '/apropos' || hash === '#apropos') {
+  if (path === '/apropos' || hash === '#apropos' || path.includes('/secretariat/apropos')) {
     return 'apropos';
   }
-  if (path === '/contact' || hash === '#contact') {
+  if (path === '/contact' || hash === '#contact' || path.includes('/secretariat/contact')) {
     return 'contact';
   }
   return 'accueil';
@@ -116,6 +151,19 @@ export default function App() {
   const [publicDocId, setPublicDocId] = useState<string | null>(extractPublicDocIdFromUrl);
   const [directAccessToken, setDirectAccessToken] = useState<string | null>(extractDirectTokenFromUrl);
   const [isEmployeeModalOpen, setIsEmployeeModalOpen] = useState<boolean>(false);
+
+  // Contexte Multisite (Option 2) : 'main' (Site Principal RH) vs 'secretariat' (Secrétariat)
+  const [siteContext, setSiteContext] = useState<SiteContext>(() => detectSiteContext());
+
+  // Session Administrateur Multisite (Super Admin RH ou Secrétaire)
+  const [adminSession, setAdminSession] = useState<AdminAuthSession | null>(() => getAdminSession());
+
+  // SÉCURITÉ & ÉTANCHÉITÉ TOTALE AU NIVEAU DE L'ÉTAT ET DU RENDU :
+  // Quand siteContext === 'secretariat', le numéro principal (+15068022206) et les deux emails ik.me
+  // sont complètement vidés et supprimés de l'arbre mémoire, jamais transmis aux composants.
+  const filteredSettings = useMemo(() => {
+    return filterSettingsForSite(settings, siteContext);
+  }, [settings, siteContext]);
 
   // Employee session in pure JS
   const [employeeToken, setEmployeeToken] = useState<string | null>(() =>
@@ -154,6 +202,7 @@ export default function App() {
     const handlePopState = () => {
       setPublicDocId(extractPublicDocIdFromUrl());
       setDirectAccessToken(extractDirectTokenFromUrl());
+      setSiteContext(detectSiteContext());
       setCurrentPage(resolveInitialPage());
     };
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -171,6 +220,23 @@ export default function App() {
     };
   }, []);
 
+  const handleSwitchSite = (newSite: SiteContext) => {
+    setStoredSiteContext(newSite);
+    setSiteContext(newSite);
+    try {
+      const url = new URL(window.location.href);
+      if (newSite === 'secretariat') {
+        url.searchParams.set('site', 'secretariat');
+      } else {
+        url.searchParams.delete('site');
+      }
+      window.history.pushState({}, '', url.toString());
+    } catch {
+      // Ignore URL history errors in sandboxes
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const navigateTo = (page: PublicPage, prefillService?: string) => {
     if (prefillService) {
       setSelectedServiceForQuote(prefillService);
@@ -180,14 +246,15 @@ export default function App() {
     }
     setCurrentPage(page);
     try {
+      const isSec = siteContext === 'secretariat';
       if (page === 'admin') {
         if (!window.location.pathname.toLowerCase().startsWith('/admin/promesse-embauche')) {
-          window.history.pushState({}, '', '/admin.html');
+          window.history.pushState({}, '', isSec ? '/secretariat/admin' : '/admin.html');
         }
       } else if (page === 'espace-employe') {
         window.history.pushState({}, '', '/employe.html');
       } else {
-        const nextUrl = page === 'accueil' ? '/' : `/${page}`;
+        const nextUrl = page === 'accueil' ? (isSec ? '/secretariat' : '/') : (isSec ? `/secretariat/${page}` : `/${page}`);
         window.history.pushState({}, '', nextUrl);
       }
     } catch {
@@ -227,16 +294,23 @@ export default function App() {
     setDirectAccessToken(null);
   };
 
-  const handleAdminAuthenticated = (token: string) => {
+  const handleAdminAuthenticated = (token: string, session?: AdminAuthSession) => {
     sessionStorage.setItem('atlantic_admin_token', token);
     setAdminToken(token);
+    if (session) {
+      setAdminSession(session);
+    } else {
+      setAdminSession(getAdminSession());
+    }
     setIsEmployeeModalOpen(false);
     navigateTo('admin');
   };
 
   const handleAdminLogout = () => {
     sessionStorage.removeItem('atlantic_admin_token');
+    clearAdminSession();
     setAdminToken(null);
+    setAdminSession(null);
     navigateTo('accueil');
   };
 
@@ -260,27 +334,51 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col bg-[#F8F9FA] text-gray-900">
       <Header
-        settings={settings}
+        settings={filteredSettings}
         currentPage={currentPage}
         onNavigate={(page) => navigateTo(page)}
         onOpenEmployeeModal={() => setIsEmployeeModalOpen(true)}
         isEmployeeLoggedIn={Boolean((employee && employeeToken) || directAccessToken)}
+        siteContext={siteContext}
+        onSwitchSite={handleSwitchSite}
       />
 
       <main className="flex-1">
         {currentPage === 'admin' ? (
-          <AdminBackoffice
-            settings={settings}
-            adminToken={adminToken}
-            onAdminAuthenticated={handleAdminAuthenticated}
-            onAdminLogout={handleAdminLogout}
-            onSettingsUpdated={(updated) => setSettings(updated)}
-            onBackToSite={() => navigateTo('accueil')}
-            onOpenDirectEmployeeLink={handleOpenDirectEmployeeLink}
-          />
+          // Espace Administration avec contrôle strict des rôles & multisite
+          adminToken && adminSession?.role === 'secretaire' ? (
+            <SecretaireAdminBackoffice
+              settings={filteredSettings}
+              session={adminSession}
+              onLogout={handleAdminLogout}
+              onBackToSite={() => navigateTo('accueil')}
+            />
+          ) : adminToken && adminSession?.role === 'super_admin_rh' && siteContext === 'secretariat' ? (
+            // Super Admin RH accédant au Secrétariat : vue dédiée avec option de retour RH
+            <SecretaireAdminBackoffice
+              settings={filteredSettings}
+              session={adminSession}
+              onLogout={handleAdminLogout}
+              onBackToSite={() => navigateTo('accueil')}
+              onSwitchToRhBackoffice={() => handleSwitchSite('main')}
+            />
+          ) : (
+            <AdminBackoffice
+              settings={filteredSettings}
+              adminToken={adminToken}
+              onAdminAuthenticated={handleAdminAuthenticated}
+              onAdminLogout={handleAdminLogout}
+              onSettingsUpdated={(updated) => setSettings(updated)}
+              onBackToSite={() => navigateTo('accueil')}
+              onOpenDirectEmployeeLink={handleOpenDirectEmployeeLink}
+              siteContext={siteContext}
+              onSwitchSite={handleSwitchSite}
+              adminSession={adminSession}
+            />
+          )
         ) : currentPage === 'espace-employe' ? (
           <EmployeePortal
-            settings={settings}
+            settings={filteredSettings}
             employeeToken={employeeToken}
             employee={employee}
             directAccessToken={directAccessToken}
@@ -289,22 +387,32 @@ export default function App() {
             onAdminAuthenticated={handleAdminAuthenticated}
             onCloseModal={() => navigateTo('accueil')}
           />
+        ) : currentPage === 'nos-offres' ? (
+          <NosOffresPage
+            settings={filteredSettings}
+            onNavigate={navigateTo}
+          />
+        ) : currentPage === 'entretien' ? (
+          <EntretienEmbauchePage
+            settings={filteredSettings}
+            onNavigate={navigateTo}
+          />
         ) : (
           <PublicPages
             page={currentPage}
-            settings={settings}
+            settings={filteredSettings}
             onNavigate={navigateTo}
             selectedServiceForQuote={selectedServiceForQuote}
           />
         )}
       </main>
 
-      {/* Modal "Espace Employé" intact lorsqu'on clique sur "Espace Employé" dans le header ou footer */}
+      {/* Modal "Espace Employé" intact */}
       {isEmployeeModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs overflow-y-auto flex items-center justify-center p-3 sm:p-6">
           <div className="w-full max-w-6xl my-auto">
             <EmployeePortal
-              settings={settings}
+              settings={filteredSettings}
               employeeToken={employeeToken}
               employee={employee}
               directAccessToken={null}
@@ -318,10 +426,12 @@ export default function App() {
       )}
 
       <Footer
-        settings={settings}
+        settings={filteredSettings}
         onNavigate={(page) => navigateTo(page)}
         onOpenEmployeeModal={() => setIsEmployeeModalOpen(true)}
         onSecretAdminTrigger={() => navigateTo('admin')}
+        siteContext={siteContext}
+        onSwitchSite={handleSwitchSite}
       />
     </div>
   );

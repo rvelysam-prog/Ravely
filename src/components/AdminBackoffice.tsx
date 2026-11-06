@@ -30,7 +30,8 @@ import {
   Building2,
   Phone,
   Scissors,
-  Sparkles
+  Sparkles,
+  Briefcase
 } from 'lucide-react';
 import { ContactMessage, Employee, SiteSettings } from '../types';
 import { BrandLogo } from './BrandLogo';
@@ -93,11 +94,20 @@ import { EmailHtmlCodeGeneratorModal } from './admin/EmailHtmlCodeGeneratorModal
 import { EmployeeBadgeGeneratorModal } from './admin/EmployeeBadgeGeneratorModal';
 import { CompanyContactSettingsModal } from './admin/CompanyContactSettingsModal';
 import { DocumentStudioModal } from './admin/DocumentStudioModal';
+import { JobOfferGeneratorModal } from './admin/JobOfferGeneratorModal';
+import { GenerationContratMasterModule } from './admin/GenerationContratMasterModule';
+import { searchOrRegisterPoste } from '../services/posteCatalogService';
 import { getCompanyContactConfig, PHONE_PRESETS, EMAIL_PRESETS } from '../services/companyConfigService';
+import {
+  authenticateAdminCredentials,
+  AdminAuthSession,
+  SiteContext
+} from '../services/multisiteService';
 
 type AdminTab =
   | 'employees'
   | 'promesse'
+  | 'job_offers'
   | 'mail_logs'
   | 'webmail'
   | 'badges'
@@ -125,17 +135,28 @@ function resolveInitialAdminTab(): AdminTab {
   if (path.includes('/admin/code-mail') || hash.includes('code-mail')) {
     return 'email_code';
   }
+  if (
+    path.includes('/admin/offres') ||
+    hash.includes('offres') ||
+    path.includes('/admin/emploi') ||
+    hash.includes('emploi')
+  ) {
+    return 'job_offers';
+  }
   return 'employees';
 }
 
 interface AdminBackofficeProps {
   settings: SiteSettings;
   adminToken: string | null;
-  onAdminAuthenticated: (token: string) => void;
+  onAdminAuthenticated: (token: string, session?: AdminAuthSession) => void;
   onAdminLogout: () => void;
   onSettingsUpdated: (newSettings: SiteSettings) => void;
   onBackToSite: () => void;
   onOpenDirectEmployeeLink?: (token: string) => void;
+  siteContext?: SiteContext;
+  onSwitchSite?: (site: SiteContext) => void;
+  adminSession?: AdminAuthSession | null;
 }
 
 export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
@@ -145,12 +166,16 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
   onAdminLogout,
   onSettingsUpdated,
   onBackToSite,
-  onOpenDirectEmployeeLink
+  onOpenDirectEmployeeLink,
+  siteContext = 'main',
+  onSwitchSite,
+  adminSession
 }) => {
-  // Login states (Simple JS password verification for admin.html)
+  // Login states (Multisite & Étanchéité)
   const [loginPassword, setLoginPassword] = useState('');
   const [showLoginPass, setShowLoginPass] = useState(false);
   const [loginError, setLoginError] = useState('');
+  const [isForbiddenError, setIsForbiddenError] = useState(false);
 
   // Dashboard states
   const [activeTab, setActiveTab] = useState<AdminTab>(resolveInitialAdminTab);
@@ -200,6 +225,8 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
   const [empForm, setEmpForm] = useState({
     civilite: 'Monsieur' as 'Monsieur' | 'Madame',
     nom_complet: '',
+    prenom: '',
+    nom: '',
     email: '',
     telephone: getCompanyContactConfig().primaryPhone || '+1 (506) 802-2226',
     adresse: '',
@@ -215,6 +242,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     lieu_travail: 'Surrey, Colombie-Britannique (King George Blvd, Surrey BC V3T 2W1)',
     horaires: '40 heures par semaine (du lundi au vendredi, 08h00 - 17h00)',
     salaire: '4600',
+    salaire_horaire: '28.75',
     devise: 'CAD',
     hebergement_fourni: false,
     hebergement_duree_type: 'duree_precise' as 'duree_precise' | 'toute_duree_contrat',
@@ -287,6 +315,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
   const [isEmailCodeModalOpen, setIsEmailCodeModalOpen] = useState(false);
   const [isDocumentStudioOpen, setIsDocumentStudioOpen] = useState(false);
   const [isBadgeModalOpen, setIsBadgeModalOpen] = useState(false);
+  const [isJobOfferModalOpen, setIsJobOfferModalOpen] = useState(false);
   const [badgeTargetEmployee, setBadgeTargetEmployee] = useState<Employee | null>(null);
   const [emailCodeTargetEmployee, setEmailCodeTargetEmployee] = useState<Employee | null>(null);
   const [webmailInitialContent, setWebmailInitialContent] = useState<{
@@ -349,16 +378,23 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     };
   }, []);
 
-  // Pure JS password authentication
+  // Authentification sécurisée Multisite & Super Admin RH
   const handleAdminLogin = (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError('');
-    if (!verifyAdminPasswordJS(loginPassword)) {
-      setLoginError('Mot de passe administrateur incorrect.');
+    setIsForbiddenError(false);
+
+    const authRes = authenticateAdminCredentials(loginPassword, undefined, siteContext);
+    if (!authRes.ok) {
+      setLoginError(authRes.error);
+      if (authRes.isForbidden) {
+        setIsForbiddenError(true);
+      }
       return;
     }
+
     setLoginPassword('');
-    onAdminAuthenticated('admin-js-local-session');
+    onAdminAuthenticated(authRes.session.token, authRes.session);
   };
 
   const openAddEmployeeModal = () => {
@@ -370,6 +406,8 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     setEmpForm({
       civilite: 'Monsieur',
       nom_complet: '',
+      prenom: '',
+      nom: '',
       email: '',
       telephone: '+1 (604) 555-0199',
       adresse: 'King George Blvd, Surrey, BC V3T 2W1, Canada',
@@ -385,6 +423,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       lieu_travail: 'Surrey, Colombie-Britannique (King George Blvd, Surrey BC V3T 2W1)',
       horaires: '40 heures par semaine (du lundi au vendredi, 08h00 - 17h00)',
       salaire: '4600',
+      salaire_horaire: '28.75',
       devise: 'CAD',
       hebergement_fourni: false,
       hebergement_duree_type: 'duree_precise',
@@ -405,9 +444,16 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     setModalError(null);
     setAutoDownloadPdfOnSave(false);
     const isCddType = String(emp.type_contrat).toUpperCase().includes('CDD');
+    const cleanP = emp.prenom || (emp.nom_complet ? emp.nom_complet.split(' ')[0] : '');
+    const cleanN = emp.nom || (emp.nom_complet ? emp.nom_complet.split(' ').slice(1).join(' ') : '');
+    const fullN = emp.nom_complet || `${cleanP} ${cleanN}`.trim().toUpperCase();
+    const defaultHourly = emp.salaire ? (Number(emp.salaire) / 160).toFixed(2) : '28.75';
+
     setEmpForm({
       civilite: emp.civilite === 'Madame' ? 'Madame' : 'Monsieur',
-      nom_complet: emp.nom_complet || `${emp.prenom} ${emp.nom}`.toUpperCase(),
+      nom_complet: fullN,
+      prenom: cleanP,
+      nom: cleanN,
       email: emp.email,
       telephone: emp.telephone || '',
       adresse: emp.adresse || '',
@@ -429,6 +475,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       horaires:
         emp.horaires || '40 heures par semaine (du lundi au vendredi, 08h00 - 17h00)',
       salaire: String(emp.salaire),
+      salaire_horaire: String(emp.salaire_horaire || defaultHourly),
       devise: emp.devise || 'CAD',
       hebergement_fourni: Boolean(emp.hebergement_fourni),
       hebergement_duree_type:
@@ -512,10 +559,19 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
     try {
       const currentList = employees.length > 0 ? employees : getEmployees();
-      const fullNameClean = empForm.nom_complet.trim().toUpperCase();
+      const rawPrenom = empForm.prenom.trim();
+      const rawNom = empForm.nom.trim();
+      let fullNameClean = '';
+      if (rawPrenom && rawNom) {
+        fullNameClean = `${rawPrenom} ${rawNom}`.toUpperCase();
+      } else if (empForm.nom_complet.trim()) {
+        fullNameClean = empForm.nom_complet.trim().replace(/\s+/g, ' ').toUpperCase();
+      } else {
+        fullNameClean = `${rawPrenom} ${rawNom}`.trim().toUpperCase() || 'SALARIÉ ATLANTIC';
+      }
       const nameParts = fullNameClean.split(/\s+/);
-      const prenom = nameParts[0] || 'Salarié';
-      const nom = nameParts.slice(1).join(' ') || fullNameClean;
+      const prenom = rawPrenom || nameParts[0] || 'Salarié';
+      const nom = rawNom || nameParts.slice(1).join(' ') || fullNameClean;
 
       // 1. Verify random matricule uniqueness in Firestore before validation (regenerate if duplicate)
       const uniqueMatricule = editingEmployee
@@ -535,6 +591,8 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           : editingEmployee?.photo ||
             generateDefaultAvatarSvgDataUri(prenom, nom, uniqueMatricule);
       const resolvedPhotoBase64 = await compressPhotoToSafeBase64(rawPhoto);
+
+      const computedHourly = parseFloat(empForm.salaire_horaire) || (parseFloat(empForm.salaire) ? parseFloat((parseFloat(empForm.salaire) / 160).toFixed(2)) : 28.75);
 
       const baseEmpRecord: Employee = {
         id: editingEmployee
@@ -564,6 +622,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
         lieu_travail: empForm.lieu_travail.trim(),
         horaires: empForm.horaires.trim(),
         salaire: parseFloat(empForm.salaire) || 0,
+        salaire_horaire: computedHourly,
         devise: empForm.devise || 'CAD',
         hebergement_fourni: empForm.hebergement_fourni,
         hebergement_duree_type: empForm.hebergement_duree_type,
@@ -648,7 +707,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             date_embauche: savedEmp.date_embauche,
             date_etablissement: savedEmp.date_etablissement || savedEmp.date_signature,
             date_fin: savedEmp.date_fin_cdd,
-            salaire_horaire: savedEmp.salaire_horaire || 22,
+            salaire_horaire: savedEmp.salaire_horaire || parseFloat(empForm.salaire_horaire) || 28.75,
             lieu_travail: savedEmp.lieu_travail,
             horaire: savedEmp.horaires,
             ni: savedEmp.ni || 'BC1129970',
@@ -668,7 +727,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             ),
             matricule: savedEmp.matricule,
             departement: savedEmp.departement,
-            salaireHoraire: savedEmp.salaire_horaire || 22,
+            salaireHoraire: savedEmp.salaire_horaire || parseFloat(empForm.salaire_horaire) || 28.75,
             lieuTravail: savedEmp.lieu_travail,
             dateEmbauche: formatPromesseDateLongFr(savedEmp.date_embauche),
             pdfDataUri: promessePdfDataUri,
@@ -978,9 +1037,20 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           </p>
 
           {loginError && (
-            <div className="mb-4 p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs sm:text-sm flex items-start gap-2">
-              <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5 text-red-600" />
-              <span>{loginError}</span>
+            <div className={`mb-4 p-3.5 rounded-xl border text-xs sm:text-sm flex items-start gap-2.5 ${
+              isForbiddenError
+                ? 'bg-red-50 border-red-300 text-red-900 shadow-xs'
+                : 'bg-red-50 border-red-200 text-red-800'
+            }`}>
+              <ShieldAlert className="w-5 h-5 shrink-0 mt-0.5 text-red-600" />
+              <div className="space-y-0.5">
+                {isForbiddenError && (
+                  <span className="font-bold text-red-700 block uppercase tracking-wide text-[11px]">
+                    Sécurité &amp; Cloisonnement RH (Erreur 403)
+                  </span>
+                )}
+                <span className="leading-relaxed">{loginError}</span>
+              </div>
             </div>
           )}
 
@@ -1053,6 +1123,28 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-8">
+      {/* Bandeau Supervision Super Admin RH */}
+      <div className="bg-gradient-to-r from-[#0B2545] via-[#134074] to-[#0B2545] text-white px-4 py-2.5 rounded-xl border border-amber-400/40 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+          <span className="text-amber-300 font-bold">SUPER ADMINISTRATEUR (RH) :</span>
+          <span className="text-slate-200">
+            Droit de regard et de modification total sur le site principal et le Secrétariat.
+          </span>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => onSwitchSite?.('secretariat')}
+            className="px-3 py-1 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs text-xs"
+            title="Consulter et superviser l'espace Secrétariat"
+          >
+            <Building2 className="w-3.5 h-3.5" />
+            <span>Superviser Espace Secrétariat</span>
+          </button>
+        </div>
+      </div>
+
       {/* Admin Top Header with Prominent "Exporter employes.json" Button */}
       <div className="bg-[#0B2545] text-white rounded-2xl p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-4 border border-amber-400/30">
         <div className="space-y-1">
@@ -1065,6 +1157,16 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => switchAdminTab('job_offers')}
+            className="min-h-[44px] px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-xs sm:text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap shadow-sm cursor-pointer border border-amber-300"
+            title="Générer et télécharger les fiches d'offres d'emploi au format PDF A4 conforme Vitadis"
+          >
+            <Briefcase className="w-4 h-4 text-slate-950" />
+            <span>Offres d&apos;Emploi (Fiches PDF)</span>
+          </button>
+
           <button
             type="button"
             onClick={() => setIsCompanyContactModalOpen(true)}
@@ -1181,6 +1283,19 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
         <button
           type="button"
+          onClick={() => switchAdminTab('job_offers')}
+          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
+            activeTab === 'job_offers'
+              ? 'bg-[#0B2545] text-white shadow-sm ring-1 ring-amber-400/50'
+              : 'text-slate-700 hover:text-slate-950'
+          }`}
+        >
+          <FileText className="w-4 h-4 text-amber-400" />
+          <span>Génération Contrat (Prestation, Offres &amp; Tickets)</span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => switchAdminTab('mail_logs')}
           className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
             activeTab === 'mail_logs'
@@ -1277,6 +1392,24 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           onEmployeesUpdated={(updatedList) => {
             setEmployees(updatedList);
             setNextMatricule(getNextMatricule(updatedList));
+          }}
+        />
+      )}
+
+      {activeTab === 'job_offers' && (
+        <GenerationContratMasterModule
+          settings={settings}
+          onOpenInWebmail={(content) => {
+            setWebmailInitialContent({
+              htmlBody: content,
+              subject: 'Documents Contractuels & Offre Officielle — Atlantic Transport'
+            });
+            switchAdminTab('webmail');
+          }}
+          onEmployeeCreated={(newEmp) => {
+            const updated = [newEmp, ...employees];
+            setEmployees(updated);
+            setNextMatricule(getNextMatricule(updated));
           }}
         />
       )}
@@ -2196,9 +2329,45 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                   </select>
                 </div>
 
-                <div className="sm:col-span-9">
+                <div className="sm:col-span-3">
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Nom complet du salarié (affiché en BLEU MAJUSCULES sur le contrat) *
+                    Prénom du salarié *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={empForm.prenom}
+                    onChange={(e) => {
+                      const newPrenom = e.target.value;
+                      const combined = `${newPrenom} ${empForm.nom}`.trim().toUpperCase();
+                      setEmpForm({ ...empForm, prenom: newPrenom, nom_complet: combined });
+                    }}
+                    placeholder="Ex: Jean-Pierre"
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-semibold"
+                  />
+                </div>
+
+                <div className="sm:col-span-3">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Nom de famille *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={empForm.nom}
+                    onChange={(e) => {
+                      const newNom = e.target.value;
+                      const combined = `${empForm.prenom} ${newNom}`.trim().toUpperCase();
+                      setEmpForm({ ...empForm, nom: newNom, nom_complet: combined });
+                    }}
+                    placeholder="Ex: Kamga"
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-bold uppercase"
+                  />
+                </div>
+
+                <div className="sm:col-span-3">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Nom complet vérifié (espace garanti) *
                   </label>
                   <input
                     type="text"
@@ -2206,7 +2375,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                     value={empForm.nom_complet}
                     onChange={(e) => setEmpForm({ ...empForm, nom_complet: e.target.value })}
                     placeholder="Ex: JEAN-PIERRE KAMGA"
-                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-bold uppercase text-blue-700"
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-bold uppercase text-blue-700 bg-slate-50"
                   />
                 </div>
               </div>
@@ -2302,7 +2471,16 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                         <button
                           key={pItem.titre}
                           type="button"
-                          onClick={() => setEmpForm({ ...empForm, poste: pItem.titre })}
+                          onClick={() => {
+                            const item = searchOrRegisterPoste(pItem.titre, empForm.departement);
+                            setEmpForm({
+                              ...empForm,
+                              poste: item.titre,
+                              departement: item.departement,
+                              salaire: String(item.salaireMensuelDefaut),
+                              salaire_horaire: String(item.salaireHoraireDefaut)
+                            });
+                          }}
                           className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors ${
                             isActive
                               ? 'bg-[#0B2545] text-white border-[#0B2545]'
@@ -2345,13 +2523,26 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 pt-1">
                   <div className="sm:col-span-7">
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Poste occupé (Article II — sélection ou saisie libre) *
+                      Poste occupé (Article II — sélection ou saisie libre avec recherche auto) *
                     </label>
                     <input
                       type="text"
                       required
                       value={empForm.poste}
                       onChange={(e) => setEmpForm({ ...empForm, poste: e.target.value })}
+                      onBlur={(e) => {
+                        const val = e.target.value.trim();
+                        if (val.length >= 2) {
+                          const item = searchOrRegisterPoste(val, empForm.departement);
+                          setEmpForm((prev) => ({
+                            ...prev,
+                            poste: item.titre,
+                            departement: item.departement,
+                            salaire: prev.salaire || String(item.salaireMensuelDefaut),
+                            salaire_horaire: prev.salaire_horaire || String(item.salaireHoraireDefaut)
+                          }));
+                        }
+                      }}
                       placeholder="Ex: Chauffeur Poids Lourd / Coordinateur Logistique"
                       className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm bg-white"
                     />
@@ -2478,27 +2669,47 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                 </div>
               </div>
 
-              {/* Row 6: Salaire brut mensuel ("X.XXX CAD") + Devise */}
+              {/* Row 6: Salaire brut mensuel (pour contrat) + Salaire horaire (pour promesse d'embauche) + Devise */}
               <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
-                <div className="sm:col-span-6">
+                <div className="sm:col-span-4">
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Salaire brut mensuel (Article VII — affiché comme{' '}
-                    <span className="text-[#0000AA] font-mono">
-                      {formatSalaryContract(empForm.salaire, empForm.devise)}
-                    </span>
-                    ) *
+                    Salaire mensuel (affiché sur le contrat) *
                   </label>
                   <input
                     type="number"
                     step="1"
                     required
                     value={empForm.salaire}
-                    onChange={(e) => setEmpForm({ ...empForm, salaire: e.target.value })}
+                    onChange={(e) => {
+                      const monthly = parseFloat(e.target.value) || 0;
+                      const hourly = monthly > 0 ? (monthly / 160).toFixed(2) : empForm.salaire_horaire;
+                      setEmpForm({ ...empForm, salaire: e.target.value, salaire_horaire: hourly });
+                    }}
                     className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm font-mono font-bold text-[#0000AA]"
                   />
+                  <span className="text-[10px] text-slate-500 mt-0.5 block">
+                    Affiché : {formatSalaryContract(empForm.salaire, empForm.devise)}
+                  </span>
                 </div>
 
-                <div className="sm:col-span-6">
+                <div className="sm:col-span-4">
+                  <label className="block text-xs font-semibold text-amber-900 mb-1">
+                    Salaire horaire (appliqué sur promesse d&apos;embauche) *
+                  </label>
+                  <input
+                    type="number"
+                    step="0.25"
+                    required
+                    value={empForm.salaire_horaire}
+                    onChange={(e) => setEmpForm({ ...empForm, salaire_horaire: e.target.value })}
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-amber-400 text-sm font-mono font-bold text-amber-800 bg-amber-50/50"
+                  />
+                  <span className="text-[10px] text-amber-700 mt-0.5 block">
+                    Génère : {empForm.salaire_horaire} CAD par heure
+                  </span>
+                </div>
+
+                <div className="sm:col-span-4">
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Devise *
                   </label>
@@ -3054,6 +3265,13 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           setWebmailInitialContent(content);
           switchAdminTab('webmail');
         }}
+      />
+
+      {/* Modal de Génération d'Offres d'Emploi (Fiches Postes PDF A4) */}
+      <JobOfferGeneratorModal
+        settings={settings}
+        isOpen={isJobOfferModalOpen}
+        onClose={() => setIsJobOfferModalOpen(false)}
       />
     </div>
   );
