@@ -9,6 +9,8 @@ import {
 } from 'firebase/firestore';
 import { db, isTransientUnavailableError } from '../firebase';
 
+import { OFFICIAL_30_DEPARTMENTS } from '../data/official30Departments';
+
 export interface PosteDefinition {
   titre: string;
   missions: string[];
@@ -22,7 +24,26 @@ export interface DepartmentDefinition {
   postesDetail: PosteDefinition[];
 }
 
+export const ALL_30_DEPARTMENTS_DEFINITIONS: DepartmentDefinition[] = OFFICIAL_30_DEPARTMENTS.map((d) => ({
+  code: d.code,
+  name: d.name,
+  missions: [
+    `Définir et superviser les activités stratégiques et opérationnelles relatives au ${d.name}.`,
+    `Coordonner les équipes opérationnelles et garantir l'atteinte des indicateurs de performance.`,
+    `Appliquer rigoureusement les normes de conformité réglementaire, de qualité et de sécurité au travail.`,
+    `Gérer et archiver avec traçabilité l'ensemble de la documentation contractuelle et administrative.`,
+    `Diagnostiquer les dysfonctionnements et déployer des plans d'actions correctifs et préventifs.`,
+    `Assurer le reporting périodique et veiller à l'excellence du service rendu aux partenaires.`
+  ],
+  postesLies: d.postes.map((p) => p.titre),
+  postesDetail: d.postes.map((p) => ({
+    titre: p.titre,
+    missions: [...p.missions]
+  }))
+}));
+
 export const OFFICIAL_DEPARTMENTS: DepartmentDefinition[] = [
+  ...ALL_30_DEPARTMENTS_DEFINITIONS,
   {
     code: 'EXPLOITATION_TRANSPORT',
     name: 'DEPARTEMENT EXPLOITATION TRANSPORT',
@@ -1449,6 +1470,7 @@ export interface PdfImportedAssetsConfig {
   signature: PdfAssetItemSettings;
   cachet: PdfAssetItemSettings;
   filigrane: PdfAssetItemSettings;
+  arrierePlan?: PdfAssetItemSettings;
   updated_at?: string;
 }
 
@@ -1506,6 +1528,21 @@ export const DEFAULT_PDF_ASSETS_CONFIG: PdfImportedAssetsConfig = {
     opacity: 100,
     tintEnabled: false,
     tintColor: '#64748B',
+    offsetX: 0,
+    offsetY: 0,
+    alignX: 'center',
+    alignY: 'middle',
+    rotation: 0,
+    zIndex: 0
+  },
+  arrierePlan: {
+    widthValue: 100,
+    widthUnit: '%',
+    heightValue: 100,
+    heightUnit: '%',
+    opacity: 20,
+    tintEnabled: false,
+    tintColor: '#CBD5E1',
     offsetX: 0,
     offsetY: 0,
     alignX: 'center',
@@ -1576,6 +1613,7 @@ export function normalizePdfAssetsConfig(
     signature: sanitizeAssetItem(raw?.signature, DEFAULT_PDF_ASSETS_CONFIG.signature),
     cachet: sanitizeAssetItem(raw?.cachet, DEFAULT_PDF_ASSETS_CONFIG.cachet),
     filigrane: sanitizeAssetItem(raw?.filigrane, DEFAULT_PDF_ASSETS_CONFIG.filigrane),
+    arrierePlan: sanitizeAssetItem(raw?.arrierePlan, DEFAULT_PDF_ASSETS_CONFIG.arrierePlan || DEFAULT_PDF_ASSETS_CONFIG.filigrane),
     updated_at: raw?.updated_at || new Date().toISOString()
   };
 }

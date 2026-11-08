@@ -78,17 +78,19 @@ import {
   getMissionsForPosteOrDepartment,
   getSavedCustomCachet,
   getSavedCustomFiligrane,
+  getSavedCustomLogo,
   getSavedCustomSignature,
   sendCandidatureAcceptanceEmailViaFirebase,
   setSavedCustomCachet,
   setSavedCustomFiligrane,
+  setSavedCustomLogo,
   setSavedCustomSignature
 } from '../services/departmentsAndEmailService';
 import { PromesseEmbaucheSection } from './PromesseEmbaucheSection';
 import { EmailLogsSection } from './EmailLogsSection';
 import { sendPromesseEmbaucheViaEmailJs } from '../services/emailjsService';
 import { EmailJsConfigModal } from './EmailJsConfigModal';
-import { Globe, CreditCard, Code, PhoneCall, Sparkles as SparklesIcon } from 'lucide-react';
+import { Globe, CreditCard, Code, PhoneCall, Sparkles as SparklesIcon, Clock } from 'lucide-react';
 import { InfomaniakWebmailTab } from './admin/InfomaniakWebmailTab';
 import { EmailHtmlCodeGeneratorModal } from './admin/EmailHtmlCodeGeneratorModal';
 import { EmployeeBadgeGeneratorModal } from './admin/EmployeeBadgeGeneratorModal';
@@ -96,8 +98,12 @@ import { CompanyContactSettingsModal } from './admin/CompanyContactSettingsModal
 import { DocumentStudioModal } from './admin/DocumentStudioModal';
 import { JobOfferGeneratorModal } from './admin/JobOfferGeneratorModal';
 import { GenerationContratMasterModule } from './admin/GenerationContratMasterModule';
+import { BrouillonsTab } from './admin/BrouillonsTab';
+import { NouveauSalarieGenerateurModal } from './admin/NouveauSalarieGenerateurModal';
+import { PosteInputWithAnalyze } from './common/PosteInputWithAnalyze';
 import { searchOrRegisterPoste } from '../services/posteCatalogService';
 import { getCompanyContactConfig, PHONE_PRESETS, EMAIL_PRESETS } from '../services/companyConfigService';
+import { DraftItem } from '../services/draftsService';
 import {
   authenticateAdminCredentials,
   AdminAuthSession,
@@ -108,6 +114,7 @@ type AdminTab =
   | 'employees'
   | 'promesse'
   | 'job_offers'
+  | 'drafts'
   | 'mail_logs'
   | 'webmail'
   | 'badges'
@@ -256,6 +263,11 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     photo_name: ''
   });
 
+  const [customLogoLabel, setCustomLogoLabel] = useState<string>(() =>
+    getSavedCustomLogo() ? 'Logo importé actif' : 'Logo officiel du site'
+  );
+  const [applyCustomLogoToEmployeeDoc, setApplyCustomLogoToEmployeeDoc] = useState<boolean>(true);
+
   const [customSigLabel, setCustomSigLabel] = useState<string>(() =>
     getSavedCustomSignature() ? 'Signature personnalisée active' : 'signature.png (Par défaut)'
   );
@@ -268,7 +280,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
   const handleModalAssetUpload = (
     e: React.ChangeEvent<HTMLInputElement>,
-    target: 'signature' | 'cachet' | 'filigrane'
+    target: 'signature' | 'cachet' | 'filigrane' | 'logo'
   ) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -276,7 +288,15 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     reader.onload = async () => {
       const res = typeof reader.result === 'string' ? reader.result : '';
       if (!res) return;
-      if (target === 'signature') {
+      if (target === 'logo') {
+        const conv = await convertUploadedImageForPdf(res, {
+          maxWidth: 800,
+          maxHeight: 400,
+          removeWhiteBackground: false
+        });
+        setSavedCustomLogo(conv);
+        setCustomLogoLabel(file.name);
+      } else if (target === 'signature') {
         const conv = await convertUploadedImageForPdf(res, {
           maxWidth: 600,
           maxHeight: 350,
@@ -323,6 +343,10 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     subject?: string;
     htmlBody?: string;
   } | undefined>(undefined);
+
+  // Modal Générateur Automatique Multi-Documents & Brouillons
+  const [isGenerateurModalOpen, setIsGenerateurModalOpen] = useState(false);
+  const [generateurModalEmployee, setGenerateurModalEmployee] = useState<Partial<Employee> | undefined>(undefined);
 
   // Site CMS Editor State
   const [cmsForm, setCmsForm] = useState<SiteSettings>(settings);
@@ -1296,6 +1320,19 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
         <button
           type="button"
+          onClick={() => switchAdminTab('drafts')}
+          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
+            activeTab === 'drafts'
+              ? 'bg-[#0B2545] text-white shadow-sm ring-1 ring-amber-400/50'
+              : 'text-slate-700 hover:text-slate-950'
+          }`}
+        >
+          <Clock className="w-4 h-4 text-amber-500" />
+          <span>Brouillons &amp; Travaux en Attente</span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => switchAdminTab('mail_logs')}
           className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
             activeTab === 'mail_logs'
@@ -1410,6 +1447,19 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             const updated = [newEmp, ...employees];
             setEmployees(updated);
             setNextMatricule(getNextMatricule(updated));
+          }}
+        />
+      )}
+
+      {activeTab === 'drafts' && (
+        <BrouillonsTab
+          onResumeDraft={(draft) => {
+            setGenerateurModalEmployee({
+              nom_complet: draft.nomCandidat || '',
+              poste: draft.poste || '',
+              departement: draft.departement || ''
+            });
+            setIsGenerateurModalOpen(true);
           }}
         />
       )}
@@ -1680,6 +1730,24 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
               >
                 <Download className="w-4 h-4 text-emerald-700" />
                 <span>Exporter employes.json</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setGenerateurModalEmployee({
+                    nom_complet: '',
+                    poste: '',
+                    salaire_horaire: 30.0,
+                    salaire: 4800
+                  });
+                  setIsGenerateurModalOpen(true);
+                }}
+                className="min-h-[44px] px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs sm:text-sm shadow-sm transition-all flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer active:scale-95 border border-amber-300"
+                title="Générateur complet : Promesse, Contrat CRIC, Ticket, Offre & Brouillon"
+              >
+                <SparklesIcon className="w-4 h-4 text-slate-950" />
+                <span>Nouveau Salarié (Générateur Multi-Documents)</span>
               </button>
 
               <button
@@ -2475,10 +2543,10 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                             const item = searchOrRegisterPoste(pItem.titre, empForm.departement);
                             setEmpForm({
                               ...empForm,
-                              poste: item.titre,
-                              departement: item.departement,
-                              salaire: String(item.salaireMensuelDefaut),
-                              salaire_horaire: String(item.salaireHoraireDefaut)
+                              poste: item.poste.titre,
+                              departement: item.poste.departement,
+                              salaire: String(item.poste.salaireMensuelDefaut),
+                              salaire_horaire: String(item.poste.salaireHoraireDefaut)
                             });
                           }}
                           className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors ${
@@ -2522,29 +2590,22 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
                 <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 pt-1">
                   <div className="sm:col-span-7">
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Poste occupé (Article II — sélection ou saisie libre avec recherche auto) *
-                    </label>
-                    <input
-                      type="text"
-                      required
+                    <PosteInputWithAnalyze
+                      label="Poste occupé (Article II — Analyse universelle & Création auto)"
                       value={empForm.poste}
-                      onChange={(e) => setEmpForm({ ...empForm, poste: e.target.value })}
-                      onBlur={(e) => {
-                        const val = e.target.value.trim();
-                        if (val.length >= 2) {
-                          const item = searchOrRegisterPoste(val, empForm.departement);
-                          setEmpForm((prev) => ({
-                            ...prev,
-                            poste: item.titre,
-                            departement: item.departement,
-                            salaire: prev.salaire || String(item.salaireMensuelDefaut),
-                            salaire_horaire: prev.salaire_horaire || String(item.salaireHoraireDefaut)
-                          }));
-                        }
+                      onChange={(val) => setEmpForm({ ...empForm, poste: val })}
+                      onAnalyzed={(res) => {
+                        setEmpForm((prev) => ({
+                          ...prev,
+                          poste: res.poste.titre,
+                          departement: res.poste.departement,
+                          salaire: String(res.poste.salaireMensuelDefaut),
+                          salaire_horaire: String(res.poste.salaireHoraireDefaut)
+                        }));
                       }}
-                      placeholder="Ex: Chauffeur Poids Lourd / Coordinateur Logistique"
-                      className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 text-sm bg-white"
+                      deptHint={empForm.departement}
+                      placeholder="Ex: Mécanicien Poids Lourds, Chauffeur..."
+                      required
                     />
                   </div>
 
@@ -2982,12 +3043,26 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                 </div>
               </div>
 
-              {/* Row 8: Upload Signature, Cachet & Filigrane (Blason) */}
-              <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
+              {/* Row 8: Upload Logo, Signature, Cachet & Filigrane (Blason) */}
+              <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 space-y-2.5">
                 <span className="text-xs font-bold text-[#0B2545] block">
-                  Fichiers PDF Officiels : Signature (PNG/JPG), Cachet &amp; Filigrane Blason (utilisés tels quels sans génération IA)
+                  Fichiers PDF Officiels : Logo, Signature (PNG/JPG), Cachet &amp; Filigrane Blason (utilisés tels quels sans génération IA)
                 </span>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                  <label className="cursor-pointer p-2.5 rounded-xl bg-white border border-slate-300 hover:border-[#0B2545] text-xs flex items-center gap-2">
+                    <Upload className="w-4 h-4 text-blue-700 shrink-0" />
+                    <div className="truncate">
+                      <span className="font-semibold block text-slate-800">Logo Officiel</span>
+                      <span className="text-[11px] text-slate-500 truncate block">{customLogoLabel}</span>
+                    </div>
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      onChange={(e) => handleModalAssetUpload(e, 'logo')}
+                      className="hidden"
+                    />
+                  </label>
+
                   <label className="cursor-pointer p-2.5 rounded-xl bg-white border border-slate-300 hover:border-[#0B2545] text-xs flex items-center gap-2">
                     <Upload className="w-4 h-4 text-[#0B2545] shrink-0" />
                     <div className="truncate">
@@ -3028,6 +3103,19 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                       onChange={(e) => handleModalAssetUpload(e, 'filigrane')}
                       className="hidden"
                     />
+                  </label>
+                </div>
+
+                <div className="pt-1 flex items-center gap-2">
+                  <input
+                    id="checkbox-apply-logo-emp"
+                    type="checkbox"
+                    checked={applyCustomLogoToEmployeeDoc}
+                    onChange={(e) => setApplyCustomLogoToEmployeeDoc(e.target.checked)}
+                    className="w-4 h-4 rounded text-[#0B2545] border-slate-300 focus:ring-[#0B2545] cursor-pointer"
+                  />
+                  <label htmlFor="checkbox-apply-logo-emp" className="text-xs font-semibold text-[#0B2545] cursor-pointer select-none">
+                    Afficher le logo importé sur le contrat &amp; documents du salarié
                   </label>
                 </div>
               </div>
@@ -3272,6 +3360,32 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
         settings={settings}
         isOpen={isJobOfferModalOpen}
         onClose={() => setIsJobOfferModalOpen(false)}
+      />
+
+      {/* Modal Nouveau Salarié - Centre de Génération Multi-Documents & Brouillons */}
+      <NouveauSalarieGenerateurModal
+        isOpen={isGenerateurModalOpen}
+        onClose={() => setIsGenerateurModalOpen(false)}
+        employeeData={generateurModalEmployee}
+        settings={settings}
+        onSavedDraft={(draft) => {
+          switchAdminTab('drafts');
+        }}
+        onPublishedOffer={(offer) => {
+          switchAdminTab('job_offers');
+        }}
+        onOpenInWebmail={(content) => {
+          setWebmailInitialContent({
+            htmlBody: content,
+            subject: 'Dossier Candidature & Documents Officiels — Atlantic Transport'
+          });
+          switchAdminTab('webmail');
+        }}
+        onEnrollEmployee={(newEmp) => {
+          const updated = [newEmp, ...employees];
+          setEmployees(updated);
+          setNextMatricule(getNextMatricule(updated));
+        }}
       />
     </div>
   );

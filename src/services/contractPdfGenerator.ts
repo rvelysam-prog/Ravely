@@ -433,8 +433,9 @@ export async function generateEmployeeContractPdfDataUri(emp: Employee): Promise
     generateEmployeeQrDataUrl(emp.matricule)
   ]);
 
-  // Rule 2 & Default: Logo officiel de l'entreprise (/logo-atlantic.png) par défaut
-  const logoAtlanticDataUrl = defaultLogoAtlanticDataUrl || (await loadStaticImageAsPngDataUrl(CONTRACT_STATIC_ASSETS.logoAtlantic));
+  // Rule 2 & Default: Logo officiel importé ou logo officiel du site
+  const savedCustomLogo = getSavedCustomLogo();
+  const logoAtlanticDataUrl = savedCustomLogo || defaultLogoAtlanticDataUrl || (await loadStaticImageAsPngDataUrl(CONTRACT_STATIC_ASSETS.logoAtlantic));
 
   const rawSig = emp.signature_url || getSavedCustomSignature() || defaultSignatureDataUrl;
   const signatureDataUrl = rawSig

@@ -71,6 +71,16 @@ service cloud.firestore {
       allow create, update, delete: if isValidId(offerId);
     }
 
+    match /drafts/{draftId} {
+      allow get, list: if true;
+      allow create, update, delete: if isValidId(draftId);
+    }
+
+    match /custom_postes/{posteId} {
+      allow get, list: if true;
+      allow create, update, delete: if isValidId(posteId);
+    }
+
     match /test/{docId} {
       allow read: if true;
     }

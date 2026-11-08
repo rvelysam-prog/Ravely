@@ -56,8 +56,9 @@ export const Header: React.FC<HeaderProps> = ({
 
             {/* SÉCURITÉ ÉTANCHÉITÉ : Coordonnées masquées à 100% sur le Secrétariat */}
             {hasPhone && (
-              <div className="inline-flex items-center gap-1.5 text-gray-300 font-mono tabular-nums">
-                <Phone className="w-3 h-3 text-[#D4A017] shrink-0" />
+              <div className="inline-flex items-center gap-1.5 text-gray-300 font-mono tabular-nums text-xs">
+                <Phone className="w-3.5 h-3.5 text-[#D4A017] shrink-0" />
+                <span className="text-gray-400 text-[10px] uppercase font-sans font-semibold">Tél :</span>
                 <a
                   href={`tel:${settings.phone.replace(/\s+/g, '')}`}
                   className="text-[#D4A017] hover:text-white font-bold transition-colors"
@@ -65,18 +66,14 @@ export const Header: React.FC<HeaderProps> = ({
                 >
                   {settings.phone}
                 </a>
-                {settings.phone_secondary && (
-                  <>
-                    <span className="text-gray-500">/</span>
-                    <a
-                      href={`tel:${settings.phone_secondary.replace(/\s+/g, '')}`}
-                      className="text-gray-300 hover:text-white transition-colors"
-                      title={`Numéro secondaire : ${settings.phone_secondary}`}
-                    >
-                      {settings.phone_secondary}
-                    </a>
-                  </>
-                )}
+                <span className="text-gray-500 font-bold">|</span>
+                <a
+                  href={`tel:${(settings.phone_secondary || '+1 (506) 802-2226').replace(/\s+/g, '')}`}
+                  className="text-gray-300 hover:text-white font-medium transition-colors"
+                  title={`Ligne secondaire / Opérations : ${settings.phone_secondary || '+1 (506) 802-2226'}`}
+                >
+                  {settings.phone_secondary || '+1 (506) 802-2226'}
+                </a>
               </div>
             )}
 
@@ -107,36 +104,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
 
           <div className="flex items-center gap-3">
-            {/* Basculeur Multisite Sécurisé (Option 2) */}
-            <div className="flex items-center gap-1 bg-white/10 px-2 py-0.5 rounded-full border border-white/15 text-[10px]">
-              <span className="text-gray-400 font-medium mr-0.5">Site :</span>
-              <button
-                type="button"
-                onClick={() => onSwitchSite?.('main')}
-                className={`px-2 py-0.5 rounded-full font-bold transition-all cursor-pointer ${
-                  siteContext !== 'secretariat'
-                    ? 'bg-[#D4A017] text-gray-950 shadow-xs'
-                    : 'text-gray-300 hover:text-white'
-                }`}
-                title="Consulter le site principal (Direction RH)"
-              >
-                Principal (RH)
-              </button>
-              <button
-                type="button"
-                onClick={() => onSwitchSite?.('secretariat')}
-                className={`px-2 py-0.5 rounded-full font-bold transition-all cursor-pointer ${
-                  siteContext === 'secretariat'
-                    ? 'bg-[#D4A017] text-gray-950 shadow-xs'
-                    : 'text-gray-300 hover:text-white'
-                }`}
-                title="Consulter le clone dédié au Secrétariat (Données sensibles masquées)"
-              >
-                Secrétariat
-              </button>
-            </div>
-
-            <div className="hidden sm:inline-block font-semibold text-[#D4A017] tracking-wide uppercase whitespace-nowrap">
+            <div className="hidden sm:inline-block font-semibold text-[#D4A017] tracking-wide uppercase whitespace-nowrap text-xs">
               Transitaire &amp; Douanes Agréés CBSA / OEA
             </div>
           </div>
@@ -440,23 +408,21 @@ export const Footer: React.FC<FooterProps> = ({
                     <div>
                       <a
                         href={`tel:${settings.phone.replace(/\s+/g, '')}`}
-                        className="text-white hover:text-[#F59E0B] transition-colors block font-bold"
+                        className="text-white hover:text-[#F59E0B] transition-colors block font-bold text-xs"
                         title="Téléphone principal"
                       >
-                        {settings.phone} <span className="text-[10px] text-[#D4A017] uppercase font-sans font-semibold ml-1">(Principal)</span>
+                        {settings.phone} <span className="text-[10px] text-[#D4A017] uppercase font-sans font-semibold ml-1">(Ligne 1 - Directe)</span>
                       </a>
                     </div>
-                    {settings.phone_secondary && (
-                      <div>
-                        <a
-                          href={`tel:${settings.phone_secondary.replace(/\s+/g, '')}`}
-                          className="text-gray-400 hover:text-white transition-colors block text-xs"
-                          title="Numéro secondaire"
-                        >
-                          {settings.phone_secondary} <span className="text-[10px] text-gray-500 font-sans">(Secondaire)</span>
-                        </a>
-                      </div>
-                    )}
+                    <div>
+                      <a
+                        href={`tel:${(settings.phone_secondary || '+1 (506) 802-2226').replace(/\s+/g, '')}`}
+                        className="text-gray-300 hover:text-white transition-colors block text-xs"
+                        title="Ligne secondaire / Opérations"
+                      >
+                        {settings.phone_secondary || '+1 (506) 802-2226'} <span className="text-[10px] text-gray-400 font-sans ml-1">(Ligne 2 - International)</span>
+                      </a>
+                    </div>
                   </div>
                 </li>
               )}
@@ -522,33 +488,6 @@ export const Footer: React.FC<FooterProps> = ({
           </p>
 
           <div className="flex flex-wrap items-center justify-center gap-3">
-            <div className="flex items-center gap-1.5 bg-white/10 px-2.5 py-1 rounded-lg border border-white/10 text-[11px]">
-              <span className="text-gray-400">Site actif :</span>
-              <button
-                type="button"
-                onClick={() => onSwitchSite?.('main')}
-                className={`px-2 py-0.5 rounded font-bold transition-all cursor-pointer ${
-                  siteContext !== 'secretariat'
-                    ? 'bg-[#D4A017] text-gray-950 shadow-xs'
-                    : 'text-gray-400 hover:text-white'
-                }`}
-              >
-                Principal (RH)
-              </button>
-              <span className="text-gray-600">|</span>
-              <button
-                type="button"
-                onClick={() => onSwitchSite?.('secretariat')}
-                className={`px-2 py-0.5 rounded font-bold transition-all cursor-pointer ${
-                  siteContext === 'secretariat'
-                    ? 'bg-[#D4A017] text-gray-950 shadow-xs'
-                    : 'text-gray-400 hover:text-white'
-                }`}
-              >
-                Secrétariat
-              </button>
-            </div>
-
             <button
               type="button"
               onClick={onSecretAdminTrigger}

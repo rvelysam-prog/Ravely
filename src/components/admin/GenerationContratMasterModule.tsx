@@ -24,18 +24,32 @@ import {
   UserX,
   ExternalLink,
   ChevronRight,
-  Eye
+  Eye,
+  ChevronDown,
+  Palette,
+  Image,
+  Edit3,
+  Sliders,
+  RotateCcw,
+  Save,
+  Maximize2
 } from 'lucide-react';
 import { SiteSettings, Employee } from '../../types';
 import {
-  PrestationContractData,
+  CricContractVariables,
+  PRESTATAIRES_PRESETS,
+  buildDefaultCricContractVariables,
+  applyPrestatairePreset,
+  generateModel1PlainText,
+  generateModel2PlainText,
+  generateModel1AttestationPdf,
+  generateModel2ContratPdf,
+  downloadWordDocument,
+  generateCricContractResponsiveEmailHtml
+} from '../../services/cricContractService';
+import {
   TicketEntretienData,
-  AnnonceGabaritData,
-  buildDefaultPrestationContract,
   buildDefaultTicketEntretien,
-  buildDefaultAnnonceGabarit,
-  formatAnnonceGabaritAsPlainText,
-  generatePrestationContractPdf,
   generateTicketEntretienPdf,
   saveInterviewSession,
   generateSmallStackedBarcodeCanvasDataUrl
@@ -49,10 +63,24 @@ import {
   unpublishJobOffer,
   getAllAvailablePostes
 } from '../../services/jobOfferService';
-import { searchOrRegisterPoste } from '../../services/posteCatalogService';
+import {
+  generateAssembledBookBundlePdf,
+  BundleAssemblyData
+} from '../../services/bundleAssemblyService';
+import { PosteInputWithAnalyze } from '../common/PosteInputWithAnalyze';
 import { addEmployee, getEmployees } from '../../services/staticStorage';
-import { JobOfferGeneratorModal } from './JobOfferGeneratorModal';
 import { BrandLogo } from '../BrandLogo';
+import {
+  PanneauReglagesFichiersImportes,
+  AssetTabKey
+} from '../common/PanneauReglagesFichiersImportes';
+import { InteractiveDocumentCanvas } from '../common/InteractiveDocumentCanvas';
+import {
+  getSavedPdfAssetsConfig,
+  PdfImportedAssetsConfig,
+  loadPdfAssetsConfigFromFirestore
+} from '../../services/departmentsAndEmailService';
+import { CONTRACT_STATIC_ASSETS } from '../../services/contractPdfGenerator';
 
 interface GenerationContratMasterModuleProps {
   settings: SiteSettings;
@@ -65,183 +93,194 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
   onOpenInWebmail,
   onEmployeeCreated
 }) => {
-  // Onglet actif :
-  // 'prestation' : Contrat de prestation CRIC
-  // 'ticket'     : Ticket d'entretien d'embauche avec code-barres
-  // 'offre'      : Offre d'emploi & Annonce gabarit CNP
-  // 'bundle'     : Bundle assemblé multi-pages (Offre + Prestation + Ticket)
-  // 'models5'    : 5 Modèles au choix & Édition pour X entreprise
+  // Onglets du module maître :
   const [activeSubTab, setActiveSubTab] = useState<
-    'prestation' | 'ticket' | 'offre' | 'bundle' | 'models5'
+    'prestation' | 'ticket' | 'offre' | 'models5' | 'bundle'
   >('prestation');
 
-  // Données Contrat de prestation
-  const [prestation, setPrestation] = useState<PrestationContractData>(() =>
-    buildDefaultPrestationContract(settings)
+  // Choix du modèle CRIC : Modèle 1 (Attestation) ou Modèle 2 (Contrat Intégral 8 Articles)
+  const [cricModelChoice, setCricModelChoice] = useState<'model1' | 'model2'>('model1');
+
+  // Variables exhaustives du contrat CRIC avec cases à cocher de visibilité
+  const [cricVars, setCricVars] = useState<CricContractVariables>(() =>
+    buildDefaultCricContractVariables(settings)
   );
+
+  // Configuration des réglages de fichiers importés (largeur, hauteur, opacité, positions X/Y, rotation, z-index, filtres)
+  const [assetsConfig, setAssetsConfig] = useState<PdfImportedAssetsConfig>(() =>
+    getSavedPdfAssetsConfig()
+  );
+
+  // Fichiers importés personnalisés (Data URLs en mémoire et Base64)
+  const [uploadedAssets, setUploadedAssets] = useState<{
+    logo?: string;
+    signature?: string;
+    cachet?: string;
+    filigrane?: string;
+    arrierePlan?: string;
+  }>({
+    logo: settings.logo_url || CONTRACT_STATIC_ASSETS.logoAtlantic,
+    signature: CONTRACT_STATIC_ASSETS.signature,
+    cachet: CONTRACT_STATIC_ASSETS.cachet,
+    filigrane: '',
+    arrierePlan: ''
+  });
 
   // Données Ticket d'entretien
   const [ticket, setTicket] = useState<TicketEntretienData>(() =>
-    buildDefaultTicketEntretien('JEAN DUPONT', 'Conducteur Routier International (H/F)', settings, prestation.codeIdCandidature)
-  );
-
-  // Données Annonce gabarit
-  const [annonce, setAnnonce] = useState<AnnonceGabaritData>(() =>
-    buildDefaultAnnonceGabarit('Conducteur Routier International (H/F)', settings)
+    buildDefaultTicketEntretien(
+      'JEAN DUPONT',
+      cricVars.intitulePoste,
+      settings,
+      cricVars.referenceEimtOuSuivi
+    )
   );
 
   // Données Offre d'emploi
   const [jobOffer, setJobOffer] = useState<JobOfferData>(() =>
-    buildDefaultJobOfferForPoste('Conducteur Routier International', undefined, settings)
+    buildDefaultJobOfferForPoste(cricVars.intitulePoste, undefined, settings)
   );
 
-  // États "5 modèles au choix"
-  const [enable5Models, setEnable5Models] = useState(false);
-  const [selectedModelIdx, setSelectedModelIdx] = useState(0);
-  const [registerAsEmployeeOnSite, setRegisterAsEmployeeOnSite] = useState(true);
+  // 5 Modèles de design au choix générés à partir du contrat CRIC personnalisé
+  const [selected5ModelIdx, setSelected5ModelIdx] = useState(0);
 
-  // Mode "Édition pour X entreprise"
-  const [isCustomCompanyMode, setIsCustomCompanyMode] = useState(false);
-  const [customCompanyName, setCustomCompanyName] = useState(settings.company_name);
-  const [customDirigeant, setCustomDirigeant] = useState('Direction Générale');
-  const [customSiege, setCustomSiege] = useState(settings.address);
-  const [customNe, setCustomNe] = useState('799094917');
-  const [customBcReg, setCustomBcReg] = useState('BC1129970');
-  const [customLogoUrl, setCustomLogoUrl] = useState(settings.logo_url);
-  const [customSignatureUrl, setCustomSignatureUrl] = useState('');
-  const [customCachetUrl, setCustomCachetUrl] = useState('');
-
-  // Notifications
+  // Notifications et chargements
   const [copiedNotification, setCopiedNotification] = useState<string | null>(null);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<string | null>(null);
 
-  // Synchronisation du code de candidature entre le contrat de prestation et le ticket d'entretien
+  // Synchronisation Firestore des réglages d'actifs visuels au montage
   useEffect(() => {
-    setTicket((prev) => ({
-      ...prev,
-      codeIdCandidature: prestation.codeIdCandidature,
-      posteConcerne: prestation.posteCible,
-      codeCnp: prestation.codeCnp
-    }));
-  }, [prestation.codeIdCandidature, prestation.posteCible, prestation.codeCnp]);
+    loadPdfAssetsConfigFromFirestore().then((remoteCfg) => {
+      if (remoteCfg) {
+        setAssetsConfig(remoteCfg);
+      }
+    });
+  }, []);
 
-  // Sauvegarde automatique de la session d'entretien
+  // Synchronisation automatique de la session d'entretien
   useEffect(() => {
     saveInterviewSession(ticket);
   }, [ticket]);
 
-  // 5 Modèles pré-configurés
-  const FIVE_MODELS = [
+  // Toast de copie
+  const triggerCopied = (msg: string) => {
+    setCopiedNotification(msg);
+    setTimeout(() => setCopiedNotification(null), 3500);
+  };
+
+  // Gestion des uploads d'actifs visuels (logo, signature, cachet, filigrane, arrière-plan)
+  const handleUploadAsset = (key: AssetTabKey, dataUrl: string) => {
+    setUploadedAssets((prev) => ({
+      ...prev,
+      [key]: dataUrl
+    }));
+
+    if (key === 'logo') {
+      setCricVars((prev) => ({ ...prev, logoEmployeurUrl: dataUrl }));
+    } else if (key === 'signature') {
+      setCricVars((prev) => ({ ...prev, signatureEmployeurUrl: dataUrl }));
+    } else if (key === 'cachet') {
+      setCricVars((prev) => ({ ...prev, cachetEmployeurUrl: dataUrl }));
+    } else if (key === 'filigrane') {
+      setCricVars((prev) => ({ ...prev, filigraneEmployeurUrl: dataUrl }));
+    }
+  };
+
+  // 5 Modèles de design visuel générés à partir du contrat CRIC personnalisé
+  const FIVE_DESIGN_MODELS = [
     {
-      id: 'mod_1',
-      titre: 'Modèle 1 : Transport Routier & Logistique Multimodale Canada',
-      description: 'Adapté aux conducteurs routiers classe 1, exploitants de flotte et répartiteurs fret.',
-      typeContrat: 'CDI Temps Plein (40h/semaine)',
-      salaireRef: '30.50 CAD / h (4 880 CAD / mois)',
-      cnp: '73300'
+      id: 'design_1',
+      titre: 'Modèle 1 : Exécutif & Diplomatique (Navy & Or)',
+      description: 'Double bordure dorée et marine, typographie solennelle, sceaux en filigrane centré et paraphes formels.',
+      accentColor: '#D4A017',
+      primaryColor: '#0B2545',
+      badge: 'Format Recommandé Canada',
+      fontStyle: 'Georgia, serif'
     },
     {
-      id: 'mod_2',
-      titre: 'Modèle 2 : Douanes, Transit International & Affrètement',
-      description: 'Pour déclarants en douane, transitaires CBSA/OEA et spécialistes conformité import/export.',
-      typeContrat: 'CDI Temps Plein (37.5h/semaine)',
-      salaireRef: '33.50 CAD / h (5 440 CAD / mois)',
-      cnp: '12200'
+      id: 'design_2',
+      titre: 'Modèle 2 : Moderne Minimaliste & International',
+      description: 'Design contemporain épuré, bandeaux azur, badges gouvernementaux CNESST & CCIC avec QR code de vérification.',
+      accentColor: '#0284C7',
+      primaryColor: '#0369A1',
+      badge: 'Haute Lisibilité Mobile',
+      fontStyle: 'system-ui, sans-serif'
     },
     {
-      id: 'mod_3',
-      titre: 'Modèle 3 : Logistique, Entrepôt & Gestion des Stocks (WMS)',
-      description: 'Pour caristes, magasiniers, gestionnaires d’inventaire et préparateurs de commandes.',
-      typeContrat: 'CDI Temps Plein (40h/semaine)',
-      salaireRef: '26.50 CAD / h (4 240 CAD / mois)',
-      cnp: '75101'
+      id: 'design_3',
+      titre: 'Modèle 3 : Notarié Solennel & Fiduciaire',
+      description: 'Armoiries en filigrane pleine page, articles encadrés avec lettrines discrètes et mentions légales bilingues.',
+      accentColor: '#475569',
+      primaryColor: '#1E293B',
+      badge: 'Conformité Juridique',
+      fontStyle: 'Times New Roman, serif'
     },
     {
-      id: 'mod_4',
-      titre: 'Modèle 4 : Santé, Sécurité & Mieux-être au Travail (SSMT / WorkSafeBC)',
-      description: 'Pour infirmiers d’entreprise, coordonnateurs SST et préventeurs des risques professionnels.',
-      typeContrat: 'CDI Temps Plein (37.5h/semaine)',
-      salaireRef: '44.00 CAD / h (7 040 CAD / mois)',
-      cnp: '31301'
+      id: 'design_4',
+      titre: 'Modèle 4 : Logistique & Fret Transfrontalier',
+      description: 'Cartouche douanier en tête avec code-barres scannable, structure tabulaire des engagements et double signature.',
+      accentColor: '#D97706',
+      primaryColor: '#047857',
+      badge: 'Spécial Fret & Douanes',
+      fontStyle: 'Segoe UI, sans-serif'
     },
     {
-      id: 'mod_5',
-      titre: 'Modèle 5 : Maintenance Industrielle, Atelier & Gestion du Parc Poids Lourds',
-      description: 'Pour mécaniciens diesel véhicules lourds, électromécaniciens et techniciens GMAO.',
-      typeContrat: 'CDI Temps Plein (40h/semaine)',
-      salaireRef: '37.50 CAD / h (6 000 CAD / mois)',
-      cnp: '72401'
+      id: 'design_5',
+      titre: 'Modèle 5 : Protocole d’Entente Canadien Bilingue',
+      description: 'Format accord bilatéral bilingue, sceau d’État stylisé et encadré spécial protection des travailleurs étrangers sans frais.',
+      accentColor: '#F59E0B',
+      primaryColor: '#7C3AED',
+      badge: 'Protocole International',
+      fontStyle: 'Calibri, sans-serif'
     }
   ];
 
-  // Helper Toast Copie
-  const triggerCopied = (msg: string) => {
-    setCopiedNotification(msg);
-    setTimeout(() => setCopiedNotification(null), 3000);
+  // Gestion du changement de Prestataire via le Select Dropdown
+  const handleSelectPrestatairePreset = (presetId: string) => {
+    const updated = applyPrestatairePreset(cricVars, presetId);
+    setCricVars(updated);
   };
 
-  // 1. Télécharger PDF Contrat de Prestation CRIC
-  const handleDownloadPrestationPdf = async () => {
-    try {
-      setDownloadingPdf(true);
-      const { doc, filename } = await generatePrestationContractPdf(
-        prestation,
-        isCustomCompanyMode ? customLogoUrl : settings.logo_url
-      );
-      doc.save(filename);
-    } catch (err) {
-      console.error('Erreur téléchargement prestation:', err);
-    } finally {
-      setDownloadingPdf(false);
-    }
+  // Synchronisation lors de l'analyse intelligente du poste
+  const handlePosteAnalyzed = (res: { poste: any; isNewlyCreated: boolean }) => {
+    setCricVars((prev) => ({
+      ...prev,
+      intitulePoste: res.poste.titre,
+      codeCnp: res.poste.codeCnp
+    }));
+
+    setTicket((prev) => ({
+      ...prev,
+      posteConcerne: res.poste.titre,
+      codeCnp: res.poste.codeCnp,
+      departement: res.poste.departement
+    }));
+
+    setJobOffer(buildDefaultJobOfferForPoste(res.poste.titre, res.poste.departement, settings));
+    triggerCopied(`Poste synchronisé : ${res.poste.titre} (CNP ${res.poste.codeCnp})`);
   };
 
-  // 2. Télécharger PDF Ticket d'Entretien
-  const handleDownloadTicketPdf = async () => {
-    try {
-      setDownloadingPdf(true);
-      const { doc, filename } = await generateTicketEntretienPdf(
-        ticket,
-        isCustomCompanyMode ? customLogoUrl : settings.logo_url
-      );
-      doc.save(filename);
-    } catch (err) {
-      console.error('Erreur téléchargement ticket:', err);
-    } finally {
-      setDownloadingPdf(false);
-    }
-  };
-
-  // 3. Télécharger Bundle Multi-Pages Assemblé (Offre + Contrat Prestation + Ticket)
+  // Téléchargement du Bundle complet assemblé (4 Pages avec couverture de livre)
   const handleDownloadAssembledBundlePdf = async () => {
     try {
       setDownloadingPdf(true);
-
-      // Générer l'offre d'emploi
-      const { doc: offerDoc } = await generateJobOfferPdf(
+      const bundleData: BundleAssemblyData = {
+        titreDossier: `Dossier Mobilité - ${ticket.candidatNom}`,
+        nomCandidat: ticket.candidatNom,
+        titrePoste: cricVars.intitulePoste,
+        codeCnp: cricVars.codeCnp,
+        referenceDossier: cricVars.referenceEimtOuSuivi,
+        dateEtablissement: cricVars.dateJour,
         jobOffer,
-        isCustomCompanyMode ? customLogoUrl : settings.logo_url
-      );
+        cricVariables: cricVars,
+        ticketData: ticket,
+        logoUrl: uploadedAssets.logo || settings.logo_url,
+        companyName: settings.company_name
+      };
 
-      // Générer le contrat de prestation
-      const { doc: prestDoc } = await generatePrestationContractPdf(
-        prestation,
-        isCustomCompanyMode ? customLogoUrl : settings.logo_url
-      );
-
-      // Générer le ticket
-      const { doc: ticketDoc } = await generateTicketEntretienPdf(
-        ticket,
-        isCustomCompanyMode ? customLogoUrl : settings.logo_url
-      );
-
-      // Télécharger les 3 documents séparément ou l'offre master
-      offerDoc.save(`1_Offre_Emploi_${jobOffer.reference}.pdf`);
-      prestDoc.save(`2_Contrat_Prestation_CRIC_${prestation.referenceContrat}.pdf`);
-      ticketDoc.save(`3_Ticket_Entretien_${ticket.codeIdCandidature}.pdf`);
-
-      triggerCopied('3 Fichiers PDF officiels assemblés générés et téléchargés avec succès !');
+      const { doc, filename } = await generateAssembledBookBundlePdf(bundleData, settings);
+      doc.save(filename);
+      triggerCopied('Bundle complet (4 Pages avec Couverture de Livre) téléchargé avec succès !');
     } catch (err) {
       console.error('Erreur bundle assemblé:', err);
     } finally {
@@ -249,81 +288,25 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
     }
   };
 
-  // 4. Copier Code Mail HTML du contrat de prestation
-  const handleCopyHtmlMailPrestation = () => {
-    const html = `<div style="font-family: Arial, sans-serif; max-width: 650px; margin: 0 auto; border: 1px solid #CBD5E1; border-radius: 8px; overflow: hidden;">
-  <div style="background-color: #0B2545; color: #FFFFFF; padding: 20px; text-align: center;">
-    <h2 style="margin: 0; font-size: 20px; color: #F59E0B;">${prestation.clientNomLegal}</h2>
-    <p style="margin: 5px 0 0 0; font-size: 13px; color: #CBD5E1;">ACCORD DE PRESTATION CRIC &amp; RECRUTEMENT INTERNATIONAL</p>
-  </div>
-  <div style="padding: 24px; color: #1E293B; line-height: 1.6; font-size: 14px;">
-    <p>Madame, Monsieur,</p>
-    <p>Nous vous transmettons le <strong>Contrat de Prestation de Recrutement et d'Immigration (LIPR / IRCC)</strong> portant la référence <strong>${prestation.referenceContrat}</strong>.</p>
-    <div style="background-color: #F8FAFC; border-left: 4px solid #0066B3; padding: 12px 16px; margin: 16px 0;">
-      <p style="margin: 0 0 6px 0;"><strong>Poste concerné :</strong> ${prestation.posteCible} (Code CNP ${prestation.codeCnp})</p>
-      <p style="margin: 0 0 6px 0;"><strong>Mandataire accrédité :</strong> ${prestation.prestataireNomLegal} (Permis ${prestation.prestataireNumeroPermis})</p>
-      <p style="margin: 0;"><strong>Code ID Candidature sécurisé :</strong> <span style="font-family: monospace; font-size: 16px; color: #0066B3; font-weight: bold;">${prestation.codeIdCandidature}</span></p>
-    </div>
-    <p>Ce code permet au candidat de déverrouiller son entretien d'embauche en ligne sur la plateforme sécurisée de l'entreprise.</p>
-    <p style="margin-top: 24px;">Veuillez agréer nos salutations distinguées.<br/><strong>Direction des Ressources Humaines &amp; Recrutement</strong><br/>${prestation.clientNomLegal}</p>
-  </div>
-</div>`;
-
-    navigator.clipboard.writeText(html);
-    triggerCopied('Code Mail HTML copié dans le presse-papier !');
+  // Convertisseur HTML Mail Template pour Webmail
+  const handleTransferToWebmail = (htmlContent: string) => {
+    navigator.clipboard.writeText(htmlContent);
+    triggerCopied('Code HTML e-mail copié ! Redirection vers le Webmail...');
     if (onOpenInWebmail) {
-      onOpenInWebmail(html);
+      onOpenInWebmail(htmlContent);
     }
   };
 
-  // 5. Enregistrer le salarié sur le site si option "Inscrire salarié sur le site" est sélectionnée
-  const handleRegisterEmployeeNow = () => {
-    const matricule = `EMP${Math.floor(1000 + Math.random() * 9000)}`;
-    const newEmp: Employee = {
-      id: Date.now(),
-      matricule,
-      civilite: 'Monsieur',
-      nom_complet: ticket.candidatNom.toUpperCase(),
-      prenom: ticket.candidatNom.split(' ')[0] || 'Candidat',
-      nom: ticket.candidatNom.split(' ').slice(1).join(' ') || ticket.candidatNom,
-      email: ticket.candidatEmail,
-      telephone: ticket.candidatTelephone,
-      adresse: 'King George Blvd, Surrey, BC V3T 2W1, Canada',
-      date_naissance: '1992-06-14',
-      nationalite: ticket.candidatNationalite || 'Canadienne',
-      poste: ticket.posteConcerne,
-      departement: ticket.departement,
-      type_contrat: 'CDI',
-      date_effet: new Date().toISOString().slice(0, 10),
-      date_embauche: new Date().toISOString().slice(0, 10),
-      duree_periode_essai: '3 semaines',
-      lieu_travail: 'Surrey, Colombie-Britannique (Canada)',
-      horaires: '40 heures par semaine (du lundi au vendredi)',
-      salaire: 4800,
-      salaire_horaire: 30.0,
-      devise: 'CAD',
-      hebergement_fourni: false,
-      photo: '',
-      photo_url: '',
-      contrat_pdf_url: '',
-      has_custom_pdf: false,
-      must_change_password: false,
-      is_active: true,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-
-    addEmployee(newEmp);
-    if (onEmployeeCreated) {
-      onEmployeeCreated(newEmp);
-    }
-    setSaveStatus(`Salarié ${newEmp.nom_complet} (${newEmp.matricule}) inscrit avec succès dans la base de données du site !`);
-    setTimeout(() => setSaveStatus(null), 4000);
-  };
+  // Génération du code HTML Email Responsive pour le contrat CRIC
+  const currentCricEmailHtml = generateCricContractResponsiveEmailHtml(
+    cricVars,
+    cricModelChoice,
+    selected5ModelIdx
+  );
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-      {/* En-tête du Module Maître */}
+      {/* En-tête principal */}
       <div className="bg-[#0B2545] text-white p-5 sm:p-7 flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-amber-400/20">
         <div className="flex items-center gap-3.5">
           <div className="w-11 h-11 rounded-2xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center shrink-0">
@@ -334,32 +317,32 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
               <span className="text-[10px] font-mono uppercase tracking-wider text-amber-400 font-bold bg-amber-400/10 px-2 py-0.5 rounded">
                 Espace Admin RH
               </span>
-              <span className="text-xs text-slate-300">· Module Maître Centralisé</span>
+              <span className="text-xs text-slate-300">· Hub Juridique &amp; Conventions</span>
             </div>
             <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight text-white mt-0.5">
-              Génération Contrat &amp; Documents Officiels
+              Génération Contrat (Prestation CRIC, Offres &amp; Tickets)
             </h2>
           </div>
         </div>
 
-        {/* Boutons d'action rapides */}
+        {/* Bouton de téléchargement Bundle Assemblé */}
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={handleDownloadAssembledBundlePdf}
             disabled={downloadingPdf}
-            className="min-h-[40px] px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm cursor-pointer disabled:opacity-50 transition-all"
-            title="Générer et télécharger l'ensemble assemblé (Offre + Contrat de Prestation + Ticket d'entretien)"
+            className="min-h-[42px] px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm cursor-pointer disabled:opacity-50 transition-all active:scale-95"
+            title="Générer le bundle complet : Couverture livre + Offre + Attestation + Ticket"
           >
             <Layers className="w-4 h-4 text-slate-950" />
-            <span>{downloadingPdf ? 'Génération...' : 'Télécharger Bundle Assemblé (3 Docs)'}</span>
+            <span>{downloadingPdf ? 'Génération...' : 'Télécharger Bundle Assemblé (4 Pages)'}</span>
           </button>
         </div>
       </div>
 
-      {/* Notifications Toast */}
+      {/* Barre de Toast de notification */}
       {copiedNotification && (
-        <div className="bg-emerald-600 text-white text-xs px-6 py-2.5 flex items-center justify-between font-medium shadow-md">
+        <div className="bg-emerald-600 text-white text-xs px-6 py-2.5 flex items-center justify-between font-medium shadow-md animate-fade-in">
           <div className="flex items-center gap-2">
             <Check className="w-4 h-4 text-emerald-200" />
             <span>{copiedNotification}</span>
@@ -370,618 +353,792 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
         </div>
       )}
 
-      {saveStatus && (
-        <div className="bg-blue-600 text-white text-xs px-6 py-2.5 flex items-center justify-between font-medium shadow-md">
-          <div className="flex items-center gap-2">
-            <UserCheck className="w-4 h-4 text-blue-200" />
-            <span>{saveStatus}</span>
-          </div>
-          <span className="text-[10px] underline cursor-pointer" onClick={() => setSaveStatus(null)}>
-            Fermer
-          </span>
-        </div>
-      )}
-
-      {/* BARRE D'ONGLETS / SOUS-MODULES */}
-      <div className="flex items-center border-b border-slate-200 bg-slate-50 px-5 pt-3 gap-2 overflow-x-auto">
-        <button
-          type="button"
-          onClick={() => setActiveSubTab('prestation')}
-          className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded-t-xl transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-            activeSubTab === 'prestation'
-              ? 'bg-white text-[#0B2545] border-t-2 border-[#0B2545] shadow-xs'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          <FileText className="w-4 h-4 text-[#0066B3]" />
-          <span>1. Contrat de Prestation CRIC</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveSubTab('ticket')}
-          className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded-t-xl transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-            activeSubTab === 'ticket'
-              ? 'bg-white text-[#0B2545] border-t-2 border-[#0B2545] shadow-xs'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          <Ticket className="w-4 h-4 text-amber-600" />
-          <span>2. Ticket d’Entretien (Coupon &amp; Barcode)</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveSubTab('offre')}
-          className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded-t-xl transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-            activeSubTab === 'offre'
-              ? 'bg-white text-[#0B2545] border-t-2 border-[#0B2545] shadow-xs'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          <Briefcase className="w-4 h-4 text-emerald-600" />
-          <span>3. Offres d’Emploi &amp; Annonce Gabarit CNP</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveSubTab('models5')}
-          className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded-t-xl transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-            activeSubTab === 'models5'
-              ? 'bg-white text-[#0B2545] border-t-2 border-[#0B2545] shadow-xs'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          <Sparkles className="w-4 h-4 text-purple-600" />
-          <span>4. 5 Modèles au Choix &amp; Import Entreprise</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveSubTab('bundle')}
-          className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded-t-xl transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-            activeSubTab === 'bundle'
-              ? 'bg-white text-[#0B2545] border-t-2 border-[#0B2545] shadow-xs'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          <Layers className="w-4 h-4 text-amber-500" />
-          <span>5. Bundle Assemblé (3 Docs)</span>
-        </button>
+      {/* NAVIGATION ENTRE LES 5 SOUS-MODULES */}
+      <div className="bg-slate-100 border-b border-slate-200 px-6 pt-3 flex gap-2 overflow-x-auto">
+        {[
+          { id: 'prestation', label: '1. Contrat de Prestation CRIC', icon: ShieldCheck },
+          { id: 'ticket', label: '2. Ticket d’Entretien (Barcode)', icon: Ticket },
+          { id: 'offre', label: '3. Offres d’Emploi & Annonce CNP', icon: Briefcase },
+          { id: 'models5', label: '4. 5 Modèles au Choix', icon: Sparkles },
+          { id: 'bundle', label: '5. Bundle Assemblé (Couverture Livre)', icon: Layers }
+        ].map((tab) => {
+          const Icon = tab.icon;
+          const isActive = activeSubTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveSubTab(tab.id as any)}
+              className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded-t-xl transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+                isActive
+                  ? 'bg-white text-[#0B2545] border-t-2 border-[#0B2545] shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+              }`}
+            >
+              <Icon className="w-4 h-4 text-[#0066B3]" />
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
       </div>
 
-      {/* CONTENU DU SOUS-MODULE SÉLECTIONNÉ */}
-      <div className="p-6">
+      {/* CONTENU PRINCIPAL */}
+      <div className="p-6 space-y-6">
         {/* ========================================================================= */}
-        {/* SOUS-MODULE 1 : CONTRAT DE PRESTATION CRIC */}
+        {/* PANNEAU DE RÉGLAGES DES FICHIERS IMPORTÉS (COMMUN À TOUS LES SOUS-MODULES) */}
+        {/* ========================================================================= */}
+        <PanneauReglagesFichiersImportes
+          assetsConfig={assetsConfig}
+          onChangeConfig={setAssetsConfig}
+          onUploadAsset={handleUploadAsset}
+          uploadedAssetUrls={uploadedAssets}
+          title={`Panneau Réglages Fichiers Importés — ${
+            activeSubTab === 'prestation'
+              ? 'Contrat de Prestation CRIC'
+              : activeSubTab === 'ticket'
+              ? 'Ticket d’Entretien'
+              : activeSubTab === 'offre'
+              ? 'Offre d’Emploi CNP'
+              : activeSubTab === 'models5'
+              ? '5 Modèles de Design'
+              : 'Bundle Assemblé'
+          }`}
+        />
+
+        {/* ========================================================================= */}
+        {/* 1. SOUS-MODULE : CONTRAT DE PRESTATION CRIC */}
         {/* ========================================================================= */}
         {activeSubTab === 'prestation' && (
           <div className="space-y-6">
-            <div className="bg-blue-50/70 border border-blue-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-              <div className="flex items-center gap-2.5 text-blue-900">
-                <ShieldCheck className="w-5 h-5 text-[#0066B3] shrink-0" />
-                <div>
-                  <strong>Accord officiel conforme à la Loi sur l&apos;immigration (LIPR) &amp; Démarches EIMT :</strong><br />
-                  Contrat de prestation liant l&apos;Employeur canadien et le Cabinet CRIC accrédité. Réf : <span className="font-mono font-bold">{prestation.referenceContrat}</span>.
+            {/* Barre de contrôle du modèle CRIC et boutons d'export */}
+            <div className="bg-blue-50/70 border border-blue-200 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-blue-900 uppercase tracking-wide">
+                    Choix du modèle légal CRIC :
+                  </span>
+                </div>
+                <div className="flex gap-2 mt-2">
+                  <button
+                    type="button"
+                    onClick={() => setCricModelChoice('model1')}
+                    className={`py-2 px-3.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
+                      cricModelChoice === 'model1'
+                        ? 'bg-[#0066B3] text-white border-[#0066B3] shadow-xs'
+                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                    }`}
+                  >
+                    Modèle 1 (Attestation de Mandat)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCricModelChoice('model2')}
+                    className={`py-2 px-3.5 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
+                      cricModelChoice === 'model2'
+                        ? 'bg-[#0066B3] text-white border-[#0066B3] shadow-xs'
+                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                    }`}
+                  >
+                    Modèle 2 (Contrat Intégral 8 Articles)
+                  </button>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+
+              {/* Boutons de téléchargement distincts PDF et Word (.docx) */}
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={handleCopyHtmlMailPrestation}
-                  className="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-[#0B2545] border border-slate-300 font-bold text-xs flex items-center gap-1 cursor-pointer"
+                  onClick={async () => {
+                    if (cricModelChoice === 'model1') {
+                      const { doc, filename } = await generateModel1AttestationPdf(cricVars);
+                      doc.save(filename);
+                    } else {
+                      const { doc, filename } = await generateModel2ContratPdf(cricVars);
+                      doc.save(filename);
+                    }
+                    triggerCopied('Document PDF téléchargé avec succès !');
+                  }}
+                  className="px-3.5 py-2 text-xs font-bold bg-[#0B2545] hover:bg-[#134074] text-white rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
                 >
-                  <Copy className="w-3.5 h-3.5 text-[#0066B3]" />
-                  <span>Code Mail HTML</span>
+                  <Download className="w-3.5 h-3.5 text-[#D4A017]" />
+                  <span>Télécharger PDF</span>
                 </button>
+
                 <button
                   type="button"
-                  onClick={handleDownloadPrestationPdf}
-                  disabled={downloadingPdf}
-                  className="px-3.5 py-1.5 rounded-xl bg-[#0B2545] hover:bg-[#134074] text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  onClick={() => {
+                    const title =
+                      cricModelChoice === 'model1'
+                        ? 'Attestation de Mandat de Recrutement International'
+                        : 'Contrat de Prestation de Services de Recrutement International';
+                    const content =
+                      cricModelChoice === 'model1'
+                        ? generateModel1PlainText(cricVars)
+                        : generateModel2PlainText(cricVars);
+
+                    downloadWordDocument(
+                      `${title.replace(/\s+/g, '_')}_${cricVars.referenceEimtOuSuivi}`,
+                      title,
+                      `<h1>${title}</h1><pre style="white-space: pre-wrap; font-family: Segoe UI, Arial, sans-serif; font-size: 11pt; line-height: 1.6;">${content}</pre>`
+                    );
+                    triggerCopied('Fichier Word (.doc/.docx) téléchargé !');
+                  }}
+                  className="px-3.5 py-2 text-xs font-bold bg-blue-700 hover:bg-blue-800 text-white rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
                 >
-                  <Download className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Télécharger PDF (2 Pages)</span>
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>Télécharger Word (.docx)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleTransferToWebmail(currentCricEmailHtml);
+                  }}
+                  className="px-3.5 py-2 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Code HTML Mail Webmail</span>
                 </button>
               </div>
             </div>
 
-            {/* Formulaire de configuration des parties */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs">
-              {/* Client (Employeur) */}
+            {/* FORMULAIRE DES PARTIES AVEC LISTE DÉROULANTE (SELECT DROPDOWN) */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 text-xs">
+              {/* PARTIE 1 : L'EMPLOYEUR (CANADA) */}
               <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
-                <h3 className="font-bold text-sm text-[#0B2545] flex items-center gap-2">
+                <h3 className="font-bold text-sm text-[#0B2545] flex items-center gap-2 border-b pb-2">
                   <Building2 className="w-4 h-4 text-[#0066B3]" />
-                  <span>Partie 1 : L’Employeur (Le Client)</span>
+                  <span>Partie 1 : L'Entreprise Employeuse (Canada)</span>
                 </h3>
-                <div>
-                  <label className="block text-slate-600 font-semibold mb-1">Nom légal de l’entreprise</label>
-                  <input
-                    type="text"
-                    value={prestation.clientNomLegal}
-                    onChange={(e) => setPrestation({ ...prestation, clientNomLegal: e.target.value })}
-                    className="w-full min-h-[38px] px-3 rounded-xl border border-slate-300 bg-white font-bold"
-                  />
+
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex-1">
+                    <label className="block text-slate-600 font-semibold mb-1">Nom de l'entreprise employeuse</label>
+                    <input
+                      type="text"
+                      value={cricVars.nomEntrepriseCanada}
+                      onChange={(e) => setCricVars({ ...cricVars, nomEntrepriseCanada: e.target.value })}
+                      className="w-full px-3 py-1.5 rounded-lg border border-slate-300 bg-white font-bold"
+                    />
+                  </div>
+                  <label className="flex items-center gap-1 text-[11px] text-gray-500 mt-4 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={cricVars.showNomEntrepriseCanada}
+                      onChange={(e) => setCricVars({ ...cricVars, showNomEntrepriseCanada: e.target.checked })}
+                      className="rounded text-[#0066B3]"
+                    />
+                    <span>Afficher</span>
+                  </label>
                 </div>
+
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex-1">
+                    <label className="block text-slate-600 font-semibold mb-1">Province canadienne</label>
+                    <input
+                      type="text"
+                      value={cricVars.provinceCanadienne}
+                      onChange={(e) => setCricVars({ ...cricVars, provinceCanadienne: e.target.value })}
+                      className="w-full px-3 py-1.5 rounded-lg border border-slate-300 bg-white"
+                    />
+                  </div>
+                  <label className="flex items-center gap-1 text-[11px] text-gray-500 mt-4 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={cricVars.showProvinceCanadienne}
+                      onChange={(e) => setCricVars({ ...cricVars, showProvinceCanadienne: e.target.checked })}
+                      className="rounded text-[#0066B3]"
+                    />
+                    <span>Afficher</span>
+                  </label>
+                </div>
+
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex-1">
+                    <label className="block text-slate-600 font-semibold mb-1">Adresse complète au Canada</label>
+                    <input
+                      type="text"
+                      value={cricVars.adresseEntrepriseCanada}
+                      onChange={(e) => setCricVars({ ...cricVars, adresseEntrepriseCanada: e.target.value })}
+                      className="w-full px-3 py-1.5 rounded-lg border border-slate-300 bg-white"
+                    />
+                  </div>
+                  <label className="flex items-center gap-1 text-[11px] text-gray-500 mt-4 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={cricVars.showAdresseEntrepriseCanada}
+                      onChange={(e) => setCricVars({ ...cricVars, showAdresseEntrepriseCanada: e.target.checked })}
+                      className="rounded text-[#0066B3]"
+                    />
+                    <span>Afficher</span>
+                  </label>
+                </div>
+
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-slate-600 font-semibold mb-1">Numéro NE</label>
+                    <label className="block text-slate-600 font-semibold mb-1">Représentant légal</label>
                     <input
                       type="text"
-                      value={prestation.clientNe}
-                      onChange={(e) => setPrestation({ ...prestation, clientNe: e.target.value })}
-                      className="w-full min-h-[38px] px-3 rounded-xl border border-slate-300 bg-white font-mono"
+                      value={cricVars.representantNomEmployeur}
+                      onChange={(e) => setCricVars({ ...cricVars, representantNomEmployeur: e.target.value })}
+                      className="w-full px-3 py-1.5 rounded-lg border border-slate-300 bg-white font-medium"
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-600 font-semibold mb-1">BC Reg #</label>
+                    <label className="block text-slate-600 font-semibold mb-1">Titre / Fonction</label>
                     <input
                       type="text"
-                      value={prestation.clientBcReg}
-                      onChange={(e) => setPrestation({ ...prestation, clientBcReg: e.target.value })}
-                      className="w-full min-h-[38px] px-3 rounded-xl border border-slate-300 bg-white font-mono"
+                      value={cricVars.representantTitreEmployeur}
+                      onChange={(e) => setCricVars({ ...cricVars, representantTitreEmployeur: e.target.value })}
+                      className="w-full px-3 py-1.5 rounded-lg border border-slate-300 bg-white"
                     />
                   </div>
-                </div>
-                <div>
-                  <label className="block text-slate-600 font-semibold mb-1">Siège social complet</label>
-                  <input
-                    type="text"
-                    value={prestation.clientSiegeSocial}
-                    onChange={(e) => setPrestation({ ...prestation, clientSiegeSocial: e.target.value })}
-                    className="w-full min-h-[38px] px-3 rounded-xl border border-slate-300 bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-600 font-semibold mb-1">Représentant &amp; Titre</label>
-                  <input
-                    type="text"
-                    value={prestation.clientRepresentantNom}
-                    onChange={(e) => setPrestation({ ...prestation, clientRepresentantNom: e.target.value })}
-                    className="w-full min-h-[38px] px-3 rounded-xl border border-slate-300 bg-white"
-                  />
                 </div>
               </div>
 
-              {/* Prestataire (CRIC / Mandataire) */}
+              {/* PARTIE 2 : LE PRESTATAIRE (CABINET CRIC) AVEC SELECT DROPDOWN */}
               <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
-                <h3 className="font-bold text-sm text-[#0B2545] flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                  <span>Partie 2 : Le Prestataire (Cabinet CRIC)</span>
+                <h3 className="font-bold text-sm text-[#0B2545] flex items-center justify-between border-b pb-2">
+                  <span className="flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                    <span>Partie 2 : Le Prestataire (Cabinet CRIC Partenaire)</span>
+                  </span>
+                  <span className="text-[10px] text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full font-semibold">
+                    Permis CNESST &amp; CCIC
+                  </span>
                 </h3>
+
+                {/* SELECT DROPDOWN DES PRESTATAIRES AGRÉÉS */}
                 <div>
-                  <label className="block text-slate-600 font-semibold mb-1">Nom légal du Cabinet / Consultant</label>
-                  <input
-                    type="text"
-                    value={prestation.prestataireNomLegal}
-                    onChange={(e) => setPrestation({ ...prestation, prestataireNomLegal: e.target.value })}
-                    className="w-full min-h-[38px] px-3 rounded-xl border border-slate-300 bg-white font-bold"
-                  />
+                  <label className="block text-slate-700 font-bold mb-1 flex items-center gap-1.5">
+                    <span>Sélectionner un Cabinet Partenaire :</span>
+                    <ChevronDown className="w-3.5 h-3.5 text-[#0066B3]" />
+                  </label>
+                  <select
+                    value={cricVars.prestatairePresetId}
+                    onChange={(e) => handleSelectPrestatairePreset(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border-2 border-emerald-500/40 bg-white font-bold text-slate-900 focus:border-emerald-600 cursor-pointer shadow-xs"
+                  >
+                    {PRESTATAIRES_PRESETS.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.nomLegal} — {p.statutJuridique} ({p.permisCnesst})
+                      </option>
+                    ))}
+                    <option value="custom">Autre prestataire (Saisie manuelle personnalisée)...</option>
+                  </select>
                 </div>
+
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex-1">
+                    <label className="block text-slate-600 font-semibold mb-1">Nom légal du cabinet / Consultant</label>
+                    <input
+                      type="text"
+                      value={cricVars.nomPrestataireFrance}
+                      onChange={(e) => setCricVars({ ...cricVars, nomPrestataireFrance: e.target.value })}
+                      className="w-full px-3 py-1.5 rounded-lg border border-slate-300 bg-white font-bold"
+                    />
+                  </div>
+                  <label className="flex items-center gap-1 text-[11px] text-gray-500 mt-4 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={cricVars.showNomPrestataireFrance}
+                      onChange={(e) => setCricVars({ ...cricVars, showNomPrestataireFrance: e.target.checked })}
+                      className="rounded text-[#0066B3]"
+                    />
+                    <span>Afficher</span>
+                  </label>
+                </div>
+
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-slate-600 font-semibold mb-1">Consultant CRIC</label>
+                    <label className="block text-slate-600 font-semibold mb-1">Permis CNESST</label>
                     <input
                       type="text"
-                      value={prestation.prestataireRepresentantNom}
-                      onChange={(e) => setPrestation({ ...prestation, prestataireRepresentantNom: e.target.value })}
-                      className="w-full min-h-[38px] px-3 rounded-xl border border-slate-300 bg-white"
+                      value={cricVars.permisCnesst}
+                      onChange={(e) => setCricVars({ ...cricVars, permisCnesst: e.target.value })}
+                      className="w-full px-3 py-1.5 rounded-lg border border-slate-300 bg-white font-mono text-emerald-800"
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-600 font-semibold mb-1">Numéro permis CCIC</label>
+                    <label className="block text-slate-600 font-semibold mb-1">N° Membre CCIC</label>
                     <input
                       type="text"
-                      value={prestation.prestataireNumeroPermis}
-                      onChange={(e) => setPrestation({ ...prestation, prestataireNumeroPermis: e.target.value })}
-                      className="w-full min-h-[38px] px-3 rounded-xl border border-slate-300 bg-white font-mono text-[#0066B3] font-bold"
+                      value={cricVars.numeroMembreCcic}
+                      onChange={(e) => setCricVars({ ...cricVars, numeroMembreCcic: e.target.value })}
+                      className="w-full px-3 py-1.5 rounded-lg border border-slate-300 bg-white font-mono text-emerald-800"
                     />
                   </div>
                 </div>
-                <div>
-                  <label className="block text-slate-600 font-semibold mb-1">Poste ciblé &amp; Code CNP</label>
-                  <div className="flex gap-2">
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-slate-600 font-semibold mb-1">Mandataire / Signataire</label>
                     <input
                       type="text"
-                      value={prestation.posteCible}
-                      onChange={(e) => setPrestation({ ...prestation, posteCible: e.target.value })}
-                      className="flex-1 min-h-[38px] px-3 rounded-xl border border-slate-300 bg-white font-bold text-[#1D4F88]"
+                      value={cricVars.representantPrestataireNom}
+                      onChange={(e) => setCricVars({ ...cricVars, representantPrestataireNom: e.target.value })}
+                      className="w-full px-3 py-1.5 rounded-lg border border-slate-300 bg-white font-medium"
                     />
+                  </div>
+                  <div>
+                    <label className="block text-slate-600 font-semibold mb-1">Titre</label>
                     <input
                       type="text"
-                      value={prestation.codeCnp}
-                      onChange={(e) => setPrestation({ ...prestation, codeCnp: e.target.value })}
-                      placeholder="CNP 73300"
-                      className="w-24 min-h-[38px] px-2 rounded-xl border border-slate-300 bg-white font-mono text-center font-bold"
+                      value={cricVars.representantPrestataireTitre}
+                      onChange={(e) => setCricVars({ ...cricVars, representantPrestataireTitre: e.target.value })}
+                      className="w-full px-3 py-1.5 rounded-lg border border-slate-300 bg-white"
                     />
                   </div>
                 </div>
+              </div>
+            </div>
+
+            {/* PARTIE 3 : IDENTIFICATION DU POSTE ET DÉMARCHE D'IMMIGRATION */}
+            <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-4">
+              <h3 className="font-bold text-sm text-[#0B2545] flex items-center justify-between border-b pb-2">
+                <span>Identification du Poste &amp; Démarches d'Immigration (LIPR / EIMT)</span>
+                <span className="text-[11px] font-mono text-blue-800 font-bold">
+                  Réf. Gouvernementale : {cricVars.referenceEimtOuSuivi}
+                </span>
+              </h3>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                 <div>
-                  <label className="block text-slate-600 font-semibold mb-1">Code ID Candidature généré pour l&apos;entretien</label>
-                  <input
-                    type="text"
-                    value={prestation.codeIdCandidature}
-                    onChange={(e) => setPrestation({ ...prestation, codeIdCandidature: e.target.value })}
-                    className="w-full min-h-[38px] px-3 rounded-xl border border-slate-300 bg-white font-mono text-[#0066B3] font-bold tracking-wider"
+                  <PosteInputWithAnalyze
+                    label="Intitulé exact du poste"
+                    value={cricVars.intitulePoste}
+                    onChange={(val) => setCricVars({ ...cricVars, intitulePoste: val })}
+                    onAnalyzed={handlePosteAnalyzed}
                   />
                 </div>
+
+                <div>
+                  <label className="block text-slate-600 font-semibold mb-1">Code CNP (5 chiffres au Canada)</label>
+                  <input
+                    type="text"
+                    value={cricVars.codeCnp}
+                    onChange={(e) => setCricVars({ ...cricVars, codeCnp: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 font-mono font-bold text-blue-900"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-600 font-semibold mb-1">Type de démarche d'immigration</label>
+                  <select
+                    value={cricVars.typeDemarche}
+                    onChange={(e) => setCricVars({ ...cricVars, typeDemarche: e.target.value as any })}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white font-medium"
+                  >
+                    <option value="EIMT">EIMT (Étude d'Impact sur le Marché du Travail)</option>
+                    <option value="Volet des talents mondiaux">Volet des talents mondiaux (GTS)</option>
+                    <option value="Dispense">Dispense d'EIMT / Mobilité Francophone</option>
+                  </select>
+                </div>
               </div>
             </div>
 
-            {/* Aperçu du texte contractuel intégral */}
-            <div className="p-5 rounded-2xl bg-white border border-slate-200 space-y-3">
-              <h4 className="font-bold text-xs uppercase tracking-wide text-slate-700">
-                Aperçu du texte contractuel (Articles 1 à 6 conformes au modèle officiel) :
-              </h4>
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 text-xs font-mono leading-relaxed max-h-72 overflow-y-auto whitespace-pre-wrap">
-{`ENTRE LES SOUSSIGNÉS :
-${prestation.clientNomLegal}, société dûment constituée selon les lois de ${prestation.clientProvince}, ayant son siège social au ${prestation.clientSiegeSocial}, représentée par ${prestation.clientRepresentantNom}, agissant en qualité de ${prestation.clientRepresentantTitre}, ci-après désignée « le Client » ou « l'Employeur ».
+            {/* CANEVAS INTERACTIF & PRÉVISUALISATION EN DIRECT DU DOCUMENT CRIC */}
+            <InteractiveDocumentCanvas
+              title={`Aperçu interactif : ${cricModelChoice === 'model1' ? 'Modèle 1 (Attestation de Mandat)' : 'Modèle 2 (Contrat Intégral)'}`}
+              documentTypeLabel="Contrat de Prestation CRIC"
+              assetsConfig={assetsConfig}
+              onChangeAssetsConfig={setAssetsConfig}
+              uploadedAssetUrls={uploadedAssets}
+              htmlEmailContent={currentCricEmailHtml}
+              onDownloadPdf={async () => {
+                if (cricModelChoice === 'model1') {
+                  const { doc, filename } = await generateModel1AttestationPdf(cricVars);
+                  doc.save(filename);
+                } else {
+                  const { doc, filename } = await generateModel2ContratPdf(cricVars);
+                  doc.save(filename);
+                }
+                triggerCopied('PDF téléchargé avec succès !');
+              }}
+              onDownloadWord={() => {
+                const title =
+                  cricModelChoice === 'model1'
+                    ? 'Attestation_Mandat_Recrutement'
+                    : 'Contrat_Prestation_CRIC_Integrale';
+                const text =
+                  cricModelChoice === 'model1'
+                    ? generateModel1PlainText(cricVars)
+                    : generateModel2PlainText(cricVars);
+                downloadWordDocument(`${title}_${cricVars.referenceEimtOuSuivi}`, title, `<pre style="white-space: pre-wrap; font-family: Segoe UI, Arial;">${text}</pre>`);
+                triggerCopied('Word (.docx) téléchargé !');
+              }}
+              onOpenInWebmail={handleTransferToWebmail}
+            >
+              {/* Contenu visuel en mode Document A4 avec ContentEditable */}
+              <div className="space-y-6">
+                <div className="flex items-center justify-between border-b pb-4">
+                  <div className="flex items-center gap-3">
+                    {uploadedAssets.logo ? (
+                      <img src={uploadedAssets.logo} alt="Logo" className="max-h-14 max-w-[200px] object-contain" />
+                    ) : (
+                      <BrandLogo companyName={settings.company_name} size="header" />
+                    )}
+                  </div>
+                  <div className="text-right text-xs">
+                    <span className="font-bold text-[#0B2545] uppercase block">Attestation Officielle de Mandat</span>
+                    <span className="text-slate-500 font-mono">Réf : {cricVars.referenceEimtOuSuivi}</span>
+                  </div>
+                </div>
 
-ET
+                <div
+                  contentEditable
+                  suppressContentEditableWarning
+                  className="font-mono text-xs sm:text-sm text-slate-800 leading-relaxed whitespace-pre-wrap outline-none hover:bg-amber-50/50 p-2 rounded-lg cursor-text transition-colors"
+                >
+                  {cricModelChoice === 'model1' ? generateModel1PlainText(cricVars) : generateModel2PlainText(cricVars)}
+                </div>
 
-${prestation.prestataireNomLegal}, ${prestation.prestataireStatutJuridique}, ayant son siège social au ${prestation.prestataireSiegeSocial}, représentée par ${prestation.prestataireRepresentantNom}, ${prestation.prestataireTitre} portant le permis ${prestation.prestataireNumeroPermis}, ci-après désignée « le Prestataire » ou « le Mandataire ».
+                {/* Double signatures avec tampons superposés */}
+                <div className="grid grid-cols-2 gap-6 pt-6 border-t border-slate-200">
+                  <div className="p-3 rounded-xl border border-slate-200 bg-white relative">
+                    <span className="text-xs font-bold text-[#0B2545] block">Pour l'Employeur :</span>
+                    <span className="text-xs text-slate-700 block">{cricVars.signataireNomEmployeur}</span>
+                    <span className="text-[11px] text-slate-500 block">{cricVars.signataireTitreEmployeur}</span>
+                    <div className="mt-3 flex items-center gap-2">
+                      {uploadedAssets.cachet && (
+                        <img src={uploadedAssets.cachet} alt="Cachet" className="w-16 h-16 object-contain" />
+                      )}
+                      {uploadedAssets.signature && (
+                        <img src={uploadedAssets.signature} alt="Signature" className="h-10 object-contain" />
+                      )}
+                    </div>
+                  </div>
 
-PRÉAMBULE
-Considérant que le Client fait face à des besoins accrus de main-d'œuvre qualifiée et souhaite recruter des travailleurs pour combler le poste de ${prestation.posteCible} (CNP ${prestation.codeCnp}) au Canada ;
-Considérant que le Prestataire possède l'expertise, les licences provinciales et l'accréditation légale requise (CCIC / CRIC) pour piloter les démarches auprès d'Immigration, Réfugiés et Citoyenneté Canada (IRCC) ;
-
-ARTICLE 1 : OBJET DU CONTRAT
-Le présent contrat est un accord de prestation de services professionnels par lequel le Client confie au Prestataire le mandat ${prestation.typeMandat} de :
-1. Sourcer, évaluer et présélectionner des candidats étrangers selon les profils de postes fournis par le Client.
-2. Prendre en charge et piloter les démarches d'immigration temporaire ou permanente requises (EIMT, Permis de travail, Visa, etc.) pour introduire légalement les candidats retenus auprès d'IRCC.
-
-ARTICLE 2 : OBLIGATIONS DES PARTIES
-2.1 Obligations du Prestataire : Agir avec diligence, intégrité et professionnalisme dans le strict respect de la Loi sur l'immigration et la protection des réfugiés (LIPR) du Canada. Vérifier la validité des compétences et antécédents avant présentation.
-2.2 Obligations du Client : Fournir des descriptions de poste conformes aux normes d'emploi locales (salaire médian, conditions, CNP). Assumer les frais gouvernementaux légalement à sa charge.
-
-ARTICLE 3 : CONDITIONS FINANCIÈRES ET HONORAIRES
-${prestation.grilleTarifaire}
-${prestation.modalitesPaiement}
-
-ARTICLE 4 : CONFORMITÉ ET INTERDICTION DE FACTURATION AUX CANDIDATS
-Conformément aux lois canadiennes et provinciales, le Prestataire et le Client s'interdisent formellement de facturer des frais de recrutement ou de placement aux candidats.
-
-ARTICLE 5 : DURÉE ET RÉSILIATION
-Durée de ${prestation.dureeMois} mois. Préavis écrit de ${prestation.preavisJours} jours.
-
-ARTICLE 6 : LOI APPLICABLE ET TRIBUNAL COMPÉTENT
-Lois de la province de ${prestation.provinceDroit} et lois fédérales du Canada. Tribunaux de ${prestation.villeSignature}.`}
+                  <div className="p-3 rounded-xl border border-slate-200 bg-white relative">
+                    <span className="text-xs font-bold text-[#0B2545] block">Pour le Prestataire :</span>
+                    <span className="text-xs text-slate-700 block">{cricVars.representantPrestataireNom}</span>
+                    <span className="text-[11px] text-slate-500 block">{cricVars.representantPrestataireTitre}</span>
+                    <div className="mt-3 flex items-center gap-2">
+                      {uploadedAssets.cachet && (
+                        <img src={uploadedAssets.cachet} alt="Cachet Prestataire" className="w-16 h-16 object-contain" />
+                      )}
+                      {uploadedAssets.signature && (
+                        <img src={uploadedAssets.signature} alt="Signature Prestataire" className="h-10 object-contain" />
+                      )}
+                    </div>
+                  </div>
+                </div>
               </div>
-            </div>
+            </InteractiveDocumentCanvas>
           </div>
         )}
 
         {/* ========================================================================= */}
-        {/* SOUS-MODULE 2 : TICKET D'ENTRETIEN D'EMBAUCHE (COUPON & BARCODE) */}
+        {/* 2. SOUS-MODULE : TICKET D'ENTRETIEN */}
         {/* ========================================================================= */}
         {activeSubTab === 'ticket' && (
-          <div className="space-y-6">
-            <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-              <div className="flex items-center gap-2.5 text-amber-900">
-                <Ticket className="w-5 h-5 text-amber-600 shrink-0" />
-                <div>
-                  <strong>Coupon officiel de convocation avec Stacked Barcode scannable :</strong><br />
-                  Le code unique <span className="font-mono font-bold text-[#0066B3]">{ticket.codeIdCandidature}</span> donne un accès instantané et sécurisé à l&apos;entretien d&apos;embauche en ligne.
-                </div>
+          <div className="space-y-5">
+            <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl flex items-center justify-between">
+              <div>
+                <h4 className="font-bold text-amber-950 text-sm">
+                  Ticket d’Entretien d’Embauche &amp; Stacked Barcode Sécurisé
+                </h4>
+                <p className="text-xs text-amber-800 mt-0.5">
+                  Code ID unique : <span className="font-mono font-bold text-blue-900">{ticket.codeIdCandidature}</span> · Accès scannable immédiat
+                </p>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleDownloadTicketPdf}
-                  disabled={downloadingPdf}
-                  className="px-3.5 py-1.5 rounded-xl bg-[#0B2545] hover:bg-[#134074] text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                >
-                  <Download className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Télécharger Ticket (PDF A4)</span>
-                </button>
-              </div>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  const { doc, filename } = await generateTicketEntretienPdf(ticket, uploadedAssets.logo || settings.logo_url);
+                  doc.save(filename);
+                  triggerCopied('Ticket d’entretien PDF téléchargé !');
+                }}
+                className="px-4 py-2 text-xs font-bold bg-[#0B2545] text-white rounded-xl hover:bg-[#134074] transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
+              >
+                <Download className="w-4 h-4 text-[#D4A017]" />
+                <span>Télécharger Ticket PDF</span>
+              </button>
             </div>
 
             {/* Édition rapide du candidat */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 bg-white border rounded-xl text-xs">
               <div>
-                <label className="block text-slate-600 font-semibold mb-1">Nom du candidat convoqué</label>
+                <label className="block text-gray-600 font-semibold mb-1">Nom du candidat</label>
                 <input
                   type="text"
                   value={ticket.candidatNom}
                   onChange={(e) => setTicket({ ...ticket, candidatNom: e.target.value })}
-                  className="w-full min-h-[38px] px-3 rounded-xl border border-slate-300 bg-white font-bold uppercase text-[#0B2545]"
+                  className="w-full px-3 py-1.5 border rounded-lg font-bold"
                 />
               </div>
               <div>
-                <label className="block text-slate-600 font-semibold mb-1">Poste concerné</label>
+                <label className="block text-gray-600 font-semibold mb-1">Date de l'entretien</label>
                 <input
                   type="text"
-                  value={ticket.posteConcerne}
-                  onChange={(e) => setTicket({ ...ticket, posteConcerne: e.target.value })}
-                  className="w-full min-h-[38px] px-3 rounded-xl border border-slate-300 bg-white font-bold text-[#1D4F88]"
+                  value={ticket.dateEntretien}
+                  onChange={(e) => setTicket({ ...ticket, dateEntretien: e.target.value })}
+                  className="w-full px-3 py-1.5 border rounded-lg"
                 />
               </div>
               <div>
-                <label className="block text-slate-600 font-semibold mb-1">Date &amp; Heure de l’entretien</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={ticket.dateEntretien}
-                    onChange={(e) => setTicket({ ...ticket, dateEntretien: e.target.value })}
-                    className="flex-1 min-h-[38px] px-3 rounded-xl border border-slate-300 bg-white"
-                  />
-                  <input
-                    type="text"
-                    value={ticket.heureEntretien}
-                    onChange={(e) => setTicket({ ...ticket, heureEntretien: e.target.value })}
-                    className="w-20 min-h-[38px] px-2 rounded-xl border border-slate-300 bg-white text-center font-bold"
-                  />
-                </div>
+                <label className="block text-gray-600 font-semibold mb-1">Modalité</label>
+                <input
+                  type="text"
+                  value={ticket.typeEntretien}
+                  onChange={(e) => setTicket({ ...ticket, typeEntretien: e.target.value as any })}
+                  className="w-full px-3 py-1.5 border rounded-lg font-medium"
+                />
               </div>
             </div>
 
-            {/* APERÇU VISUEL DU COUPON DU TICKET */}
-            <div className="max-w-2xl mx-auto p-6 rounded-2xl bg-gradient-to-br from-amber-50/60 to-white border-2 border-dashed border-amber-400/80 shadow-md space-y-4">
-              <div className="flex items-center justify-between border-b border-amber-300 pb-3">
+            {/* Visuel du Ticket */}
+            <div className="border-2 border-dashed border-[#D4A017] rounded-2xl p-6 bg-[#FEFCF6]">
+              <div className="flex items-center justify-between border-b pb-3 mb-4">
                 <div className="flex items-center gap-2">
-                  <Ticket className="w-5 h-5 text-amber-600" />
-                  <span className="font-bold text-sm text-[#0B2545]">TICKET D’ENTRETIEN D’EMBAUCHE</span>
-                </div>
-                <span className="font-mono text-xs font-bold text-amber-800 bg-amber-200/60 px-2.5 py-0.5 rounded-full">
-                  OFFICIEL · ATLANTIC TRANSPORT LTD.
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-                <div>
-                  <div className="text-[10px] uppercase font-bold text-slate-400">Candidat :</div>
-                  <div className="text-base font-extrabold text-[#0B2545]">{ticket.candidatNom.toUpperCase()}</div>
-                  <div className="text-slate-600 mt-1">Poste : <strong>{ticket.posteConcerne}</strong></div>
-                  <div className="text-slate-600">Classification : <strong>CNP {ticket.codeCnp}</strong></div>
-                  <div className="text-slate-600">Date : <strong>{ticket.dateEntretien} à {ticket.heureEntretien}</strong></div>
-                  <div className="text-slate-600">Lieu : <strong>Surrey, BC / En ligne</strong></div>
-                </div>
-
-                <div className="flex flex-col items-center justify-center p-3 rounded-xl bg-white border border-slate-200 text-center">
-                  <div className="text-[10px] text-slate-400 uppercase font-bold mb-1">Code ID Candidature Sécurisé :</div>
-                  <div className="font-mono text-base font-black text-[#0066B3] bg-blue-50 px-3 py-1 rounded-lg border border-blue-200 mb-2">
-                    {ticket.codeIdCandidature}
+                  <BrandLogo companyName={settings.company_name} customLogoUrl={uploadedAssets.logo || settings.logo_url} size="header" />
+                  <div>
+                    <h3 className="font-bold text-gray-900 text-sm">COUPON CONVOCATION ENTRETIEN</h3>
+                    <p className="text-[10px] text-gray-500">Direction des Ressources Humaines</p>
                   </div>
-                  {/* Petit stacked barcode */}
-                  <img
-                    src={generateSmallStackedBarcodeCanvasDataUrl(ticket.codeIdCandidature)}
-                    alt="Stacked Barcode"
-                    className="w-44 h-8 object-contain mb-1"
-                  />
-                  <span className="text-[9px] text-slate-400">Le scan donne un accès direct à l’entretien</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] text-gray-500 block">Code ID Candidature</span>
+                  <span className="font-mono font-bold text-[#0066B3] text-sm">{ticket.codeIdCandidature}</span>
                 </div>
               </div>
 
-              <div className="p-2.5 rounded-xl bg-white/80 border border-amber-200 text-[11px] text-amber-900 flex items-center justify-between">
-                <span>Le code sera automatiquement désactivé une fois l&apos;entretien clôturé.</span>
-                <span className="font-bold text-[#0066B3]">Accès : /entretien</span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div>
+                  <span className="text-gray-500 block text-[11px]">Candidat :</span>
+                  <span className="font-bold text-gray-900">{ticket.candidatNom}</span>
+                </div>
+                <div>
+                  <span className="text-gray-500 block text-[11px]">Poste :</span>
+                  <span className="font-bold text-gray-900">{ticket.posteConcerne} (CNP {ticket.codeCnp})</span>
+                </div>
+                <div>
+                  <span className="text-gray-500 block text-[11px]">Date &amp; Heure :</span>
+                  <span className="font-medium text-gray-900">{ticket.dateEntretien} à {ticket.heureEntretien}</span>
+                </div>
+                <div>
+                  <span className="text-gray-500 block text-[11px]">Modalité :</span>
+                  <span className="font-medium text-gray-900">{ticket.typeEntretien}</span>
+                </div>
               </div>
             </div>
           </div>
         )}
 
         {/* ========================================================================= */}
-        {/* SOUS-MODULE 3 : OFFRES D'EMPLOI & ANNONCE GABARIT CNP */}
+        {/* 3. SOUS-MODULE : OFFRES D'EMPLOI & ANNONCE GABARIT CNP */}
         {/* ========================================================================= */}
         {activeSubTab === 'offre' && (
-          <div className="space-y-6">
-            <div className="bg-emerald-50/70 border border-emerald-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-              <div className="flex items-center gap-2.5 text-emerald-900">
-                <Briefcase className="w-5 h-5 text-emerald-600 shrink-0" />
-                <div>
-                  <strong>Gabarit d’Annonce d’Emploi Officiel (CNP 5 chiffres) pour le site public :</strong><br />
-                  Ce modèle alimente la page &quot;Nos Offres&quot; et génère la fiche de poste PDF avec code-barres scannable.
-                </div>
+          <div className="space-y-5">
+            <div className="bg-white border p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h4 className="font-bold text-gray-900 text-sm">
+                  Offre d’Emploi Officielle (avec Stacked Barcode scannable)
+                </h4>
+                <p className="text-xs text-gray-500">
+                  Réf : {jobOffer.reference} · Code-barres compact sous la référence avec redirection vers l'annonce
+                </p>
               </div>
+
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    const text = formatAnnonceGabaritAsPlainText(annonce);
-                    navigator.clipboard.writeText(text);
-                    triggerCopied('Annonce Gabarit copiée dans le presse-papier !');
+                  onClick={async () => {
+                    await downloadJobOfferPdf(jobOffer, uploadedAssets.logo || settings.logo_url);
+                    triggerCopied('Offre d’emploi PDF téléchargée !');
                   }}
-                  className="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-[#0B2545] border border-slate-300 font-bold text-xs flex items-center gap-1 cursor-pointer"
+                  className="px-3.5 py-2 text-xs font-bold bg-[#0B2545] text-white rounded-xl hover:bg-[#134074] transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
                 >
-                  <Copy className="w-3.5 h-3.5 text-[#0066B3]" />
-                  <span>Copier Annonce</span>
+                  <Download className="w-3.5 h-3.5 text-[#D4A017]" />
+                  <span>Télécharger Offre PDF</span>
                 </button>
+
                 <button
                   type="button"
                   onClick={async () => {
                     await publishJobOffer(jobOffer);
-                    triggerCopied('Offre d’emploi synchronisée et publiée sur la page "Nos Offres" !');
+                    triggerCopied('Offre d’emploi publiée en direct sur la page « Nos Offres » !');
                   }}
-                  className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  className="px-3.5 py-2 text-xs font-bold bg-[#0066B3] text-white rounded-xl hover:bg-[#00508f] transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
                 >
-                  <Globe className="w-3.5 h-3.5" />
-                  <span>Publier sur Nos Offres</span>
+                  <Globe className="w-3.5 h-3.5 text-[#D4A017]" />
+                  <span>Publier sur le site public</span>
                 </button>
               </div>
             </div>
 
-            {/* Gabarit Annonce texte intégral */}
-            <div className="bg-slate-900 text-slate-100 rounded-2xl p-5 font-mono text-xs leading-relaxed overflow-x-auto shadow-md">
-              <pre className="whitespace-pre-wrap">{formatAnnonceGabaritAsPlainText(annonce)}</pre>
+            <div className="bg-slate-50 border rounded-2xl p-5 text-xs space-y-3 leading-relaxed text-gray-700">
+              <h3 className="font-bold text-base text-[#0066B3]">{jobOffer.titrePoste}</h3>
+              <p><strong>Département :</strong> {jobOffer.departement}</p>
+              <p><strong>Rémunération horaire :</strong> {jobOffer.salaireMin.toFixed(2)} $ à {jobOffer.salaireMax.toFixed(2)} $ CAD / h</p>
+              <p><strong>Description de la mission :</strong> {jobOffer.missionPrincipale}</p>
             </div>
           </div>
         )}
 
         {/* ========================================================================= */}
-        {/* SOUS-MODULE 4 : 5 MODÈLES AU CHOIX & IMPORT ENTREPRISE */}
+        {/* 4. SOUS-MODULE : 5 MODÈLES DE DESIGN AU CHOIX */}
         {/* ========================================================================= */}
         {activeSubTab === 'models5' && (
           <div className="space-y-6">
-            <div className="p-4 rounded-2xl bg-purple-50 border border-purple-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-              <div className="flex items-center gap-2.5 text-purple-900">
-                <Sparkles className="w-5 h-5 text-purple-600 shrink-0" />
-                <div>
-                  <strong>Option &quot;5 Modèles au choix&quot; &amp; Mode &quot;Édition pour X entreprise&quot; :</strong><br />
-                  Permet de choisir parmi 5 modèles de contrat/promesse et d&apos;importer des coordonnées et fichiers personnalisés sans altération IA.
+            <div className="bg-purple-50 border border-purple-200 p-5 rounded-2xl">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <Sparkles className="w-5 h-5 text-purple-700" />
+                  <div>
+                    <h4 className="font-bold text-purple-950 text-sm">
+                      5 Modèles de Design Visuel au Choix (Générés à partir de votre Contrat CRIC personnalisé)
+                    </h4>
+                    <p className="text-xs text-purple-800 mt-0.5">
+                      Les 5 modèles ci-dessous reprennent exactement les données saisies sur votre Contrat de Prestation ({cricModelChoice === 'model1' ? 'Modèle 1 Attestation' : 'Modèle 2 Intégral'}) et exploitent fidèlement vos logos, signatures et cachets importés sans régénération IA.
+                    </p>
+                  </div>
                 </div>
+
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-purple-200 text-purple-900">
+                  Modèle actif : {selected5ModelIdx + 1} / 5
+                </span>
               </div>
-              <label className="flex items-center gap-2 font-bold text-purple-950 cursor-pointer bg-white px-3 py-1.5 rounded-xl border border-purple-300">
-                <input
-                  type="checkbox"
-                  checked={enable5Models}
-                  onChange={(e) => setEnable5Models(e.target.checked)}
-                  className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500"
-                />
-                <span>Activer &quot;5 Modèles au choix&quot;</span>
-              </label>
             </div>
 
-            {/* Sélection parmi les 5 modèles */}
-            <div className="space-y-3">
-              <h3 className="font-bold text-sm text-[#0B2545]">Sélectionnez l’un des 5 modèles officiels :</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                {FIVE_MODELS.map((mod, idx) => (
+            {/* Cartes de sélection des 5 designs */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+              {FIVE_DESIGN_MODELS.map((mod, idx) => {
+                const isSelected = selected5ModelIdx === idx;
+                return (
                   <div
                     key={mod.id}
-                    onClick={() => setSelectedModelIdx(idx)}
-                    className={`p-4 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between ${
-                      selectedModelIdx === idx
-                        ? 'bg-blue-50/70 border-[#0B2545] shadow-xs'
-                        : 'bg-white border-slate-200 hover:border-slate-300'
+                    onClick={() => {
+                      setSelected5ModelIdx(idx);
+                      triggerCopied(`Design appliqué : ${mod.titre}`);
+                    }}
+                    className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between relative ${
+                      isSelected
+                        ? 'border-[#0066B3] bg-blue-50/70 shadow-md ring-2 ring-blue-500/20'
+                        : 'border-slate-200 bg-white hover:border-slate-300'
                     }`}
                   >
                     <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-[10px] font-mono font-bold bg-[#0B2545] text-white px-2 py-0.5 rounded">
-                          CNP {mod.cnp}
-                        </span>
-                        <input
-                          type="radio"
-                          name="model_choice"
-                          checked={selectedModelIdx === idx}
-                          onChange={() => setSelectedModelIdx(idx)}
-                          className="w-4 h-4 text-[#0B2545]"
-                        />
-                      </div>
-                      <h4 className="font-bold text-xs text-[#0B2545] leading-snug">{mod.titre}</h4>
-                      <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">{mod.description}</p>
+                      <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 block w-fit mb-2">
+                        {mod.badge}
+                      </span>
+                      <h5 className="font-bold text-xs text-slate-900">{mod.titre}</h5>
+                      <p className="text-[11px] text-slate-600 mt-1 line-clamp-3">{mod.description}</p>
                     </div>
-                    <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] font-semibold text-slate-700">
-                      <span>{mod.typeContrat}</span>
-                      <span className="text-emerald-700">{mod.salaireRef}</span>
+
+                    <div className="mt-3 pt-2 border-t flex items-center justify-between text-[11px] font-bold">
+                      <span style={{ color: mod.primaryColor }}>Activer</span>
+                      {isSelected && <Check className="w-4 h-4 text-[#0066B3]" />}
                     </div>
                   </div>
-                ))}
-              </div>
+                );
+              })}
             </div>
 
-            {/* Option : Inscrire ou Ne pas inscrire le salarié sur le site */}
-            <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
-              <h4 className="font-bold text-xs uppercase tracking-wide text-slate-700">
-                Action d&apos;enregistrement dans la base de données :
-              </h4>
-              <div className="flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => setRegisterAsEmployeeOnSite(true)}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 cursor-pointer transition-colors ${
-                    registerAsEmployeeOnSite
-                      ? 'bg-emerald-600 text-white shadow-xs'
-                      : 'bg-white text-slate-700 border border-slate-300'
-                  }`}
-                >
-                  <UserCheck className="w-4 h-4" />
-                  <span>Inscrire en tant que salarié sur le site (Affiché)</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setRegisterAsEmployeeOnSite(false)}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 cursor-pointer transition-colors ${
-                    !registerAsEmployeeOnSite
-                      ? 'bg-slate-800 text-white shadow-xs'
-                      : 'bg-white text-slate-700 border border-slate-300'
-                  }`}
-                >
-                  <UserX className="w-4 h-4" />
-                  <span>Ne pas inscrire (Génération document uniquement)</span>
-                </button>
-
-                {registerAsEmployeeOnSite && (
-                  <button
-                    type="button"
-                    onClick={handleRegisterEmployeeNow}
-                    className="px-4 py-2 rounded-xl bg-[#0B2545] hover:bg-[#134074] text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs ml-auto"
-                  >
-                    <Check className="w-4 h-4 text-amber-400" />
-                    <span>Inscrire le candidat maintenant</span>
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Mode "Édition pour X entreprise" */}
-            <div className="p-5 rounded-2xl bg-white border border-slate-200 space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="font-bold text-sm text-[#0B2545]">Mode &quot;Édition pour X entreprise&quot;</h3>
-                  <p className="text-xs text-slate-500">Permet d&apos;adapter les mentions contractuelles à une autre filiale ou entreprise cliente.</p>
-                </div>
-                <label className="flex items-center gap-2 text-xs font-bold text-slate-800 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={isCustomCompanyMode}
-                    onChange={(e) => setIsCustomCompanyMode(e.target.checked)}
-                    className="w-4 h-4 rounded text-[#0B2545]"
-                  />
-                  <span>Activer le mode personnalisation X Entreprise</span>
-                </label>
-              </div>
-
-              {isCustomCompanyMode && (
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 text-xs pt-2 border-t border-slate-100">
-                  <div>
-                    <label className="block text-slate-600 font-semibold mb-1">Nom entreprise</label>
-                    <input
-                      type="text"
-                      value={customCompanyName}
-                      onChange={(e) => setCustomCompanyName(e.target.value)}
-                      className="w-full min-h-[38px] px-3 rounded-xl border border-slate-300 font-bold"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-slate-600 font-semibold mb-1">Dirigeant / Signataire</label>
-                    <input
-                      type="text"
-                      value={customDirigeant}
-                      onChange={(e) => setCustomDirigeant(e.target.value)}
-                      className="w-full min-h-[38px] px-3 rounded-xl border border-slate-300"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-slate-600 font-semibold mb-1">Siège social</label>
-                    <input
-                      type="text"
-                      value={customSiege}
-                      onChange={(e) => setCustomSiege(e.target.value)}
-                      className="w-full min-h-[38px] px-3 rounded-xl border border-slate-300"
-                    />
+            {/* Canevas interactif du design sélectionné */}
+            <InteractiveDocumentCanvas
+              title={`Aperçu en direct : ${FIVE_DESIGN_MODELS[selected5ModelIdx].titre}`}
+              documentTypeLabel="Modèle Personnalisé CRIC"
+              assetsConfig={assetsConfig}
+              onChangeAssetsConfig={setAssetsConfig}
+              uploadedAssetUrls={uploadedAssets}
+              htmlEmailContent={generateCricContractResponsiveEmailHtml(cricVars, cricModelChoice, selected5ModelIdx)}
+              onDownloadPdf={async () => {
+                if (cricModelChoice === 'model1') {
+                  const { doc, filename } = await generateModel1AttestationPdf(cricVars);
+                  doc.save(filename);
+                } else {
+                  const { doc, filename } = await generateModel2ContratPdf(cricVars);
+                  doc.save(filename);
+                }
+                triggerCopied('PDF téléchargé avec succès !');
+              }}
+              onDownloadWord={() => {
+                const title = FIVE_DESIGN_MODELS[selected5ModelIdx].titre;
+                const text = cricModelChoice === 'model1' ? generateModel1PlainText(cricVars) : generateModel2PlainText(cricVars);
+                downloadWordDocument(`Modele_${selected5ModelIdx + 1}_${cricVars.referenceEimtOuSuivi}`, title, `<pre style="white-space: pre-wrap; font-family: Segoe UI, Arial;">${text}</pre>`);
+                triggerCopied('Word (.docx) téléchargé !');
+              }}
+              onOpenInWebmail={handleTransferToWebmail}
+            >
+              <div
+                style={{
+                  fontFamily: FIVE_DESIGN_MODELS[selected5ModelIdx].fontStyle
+                }}
+                className="space-y-6"
+              >
+                <div className="border-b-2 pb-4 flex items-center justify-between" style={{ borderColor: FIVE_DESIGN_MODELS[selected5ModelIdx].accentColor }}>
+                  {uploadedAssets.logo ? (
+                    <img src={uploadedAssets.logo} alt="Logo" className="max-h-12 max-w-[190px] object-contain" />
+                  ) : (
+                    <BrandLogo companyName={settings.company_name} size="header" />
+                  )}
+                  <div className="text-right text-xs">
+                    <span className="font-bold uppercase block" style={{ color: FIVE_DESIGN_MODELS[selected5ModelIdx].primaryColor }}>
+                      {FIVE_DESIGN_MODELS[selected5ModelIdx].titre}
+                    </span>
+                    <span className="font-mono text-slate-500">Réf : {cricVars.referenceEimtOuSuivi}</span>
                   </div>
                 </div>
-              )}
-            </div>
+
+                <div
+                  contentEditable
+                  suppressContentEditableWarning
+                  className="text-xs sm:text-sm text-slate-800 leading-relaxed whitespace-pre-wrap outline-none hover:bg-amber-50/40 p-2 rounded-lg cursor-text transition-colors"
+                >
+                  {cricModelChoice === 'model1' ? generateModel1PlainText(cricVars) : generateModel2PlainText(cricVars)}
+                </div>
+
+                {/* Signatures doubles */}
+                <div className="grid grid-cols-2 gap-6 pt-4 border-t border-slate-200">
+                  <div className="p-3 rounded-xl border border-slate-200 bg-white">
+                    <span className="text-xs font-bold block" style={{ color: FIVE_DESIGN_MODELS[selected5ModelIdx].primaryColor }}>
+                      Pour l'Employeur :
+                    </span>
+                    <span className="text-xs text-slate-700 block">{cricVars.signataireNomEmployeur}</span>
+                    <div className="mt-2 flex items-center gap-2">
+                      {uploadedAssets.cachet && (
+                        <img src={uploadedAssets.cachet} alt="Cachet" className="w-14 h-14 object-contain" />
+                      )}
+                      {uploadedAssets.signature && (
+                        <img src={uploadedAssets.signature} alt="Signature" className="h-9 object-contain" />
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="p-3 rounded-xl border border-slate-200 bg-white">
+                    <span className="text-xs font-bold block" style={{ color: FIVE_DESIGN_MODELS[selected5ModelIdx].primaryColor }}>
+                      Pour le Prestataire :
+                    </span>
+                    <span className="text-xs text-slate-700 block">{cricVars.representantPrestataireNom}</span>
+                    <div className="mt-2 flex items-center gap-2">
+                      {uploadedAssets.cachet && (
+                        <img src={uploadedAssets.cachet} alt="Cachet" className="w-14 h-14 object-contain" />
+                      )}
+                      {uploadedAssets.signature && (
+                        <img src={uploadedAssets.signature} alt="Signature" className="h-9 object-contain" />
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </InteractiveDocumentCanvas>
           </div>
         )}
 
         {/* ========================================================================= */}
-        {/* SOUS-MODULE 5 : BUNDLE ASSEMBLÉ MULTI-PAGES (3 DOCUMENTS) */}
+        {/* 5. SOUS-MODULE : BUNDLE ASSEMBLÉ (4 PAGES) */}
         {/* ========================================================================= */}
         {activeSubTab === 'bundle' && (
           <div className="space-y-6">
-            <div className="bg-amber-500/10 border border-amber-400/40 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="bg-gradient-to-r from-[#0B2545] to-[#134074] text-white p-6 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-md">
               <div>
-                <h3 className="font-extrabold text-base text-[#0B2545]">Assemblage Complet du Dossier Candidature &amp; CRIC</h3>
-                <p className="text-xs text-slate-600 mt-1 max-w-2xl leading-relaxed">
-                  Conformément à la consigne, ce module génère le dossier complet assemblé dans l&apos;ordre strict :<br />
-                  <strong>1ère position :</strong> Offre d&apos;emploi officielle (Fiche A4 avec stacked barcode)<br />
-                  <strong>2ème position :</strong> Contrat de prestation avec le cabinet mandataire CRIC<br />
-                  <strong>3ème position :</strong> Ticket d&apos;entretien d&apos;embauche avec code de sécurité et code-barres scannable.
+                <h4 className="font-bold text-lg text-[#D4A017]">
+                  Bundle Complet Assemblé (4 Pages avec Couverture de Livre PDF)
+                </h4>
+                <p className="text-xs text-gray-200 mt-1 max-w-xl">
+                  Page 1 : Couverture de livre d'entreprise avec logo haute fidélité · Page 2 : Offre d'emploi avec stacked barcode · Page 3 : Attestation officielle de mandat · Page 4 : Ticket d'entretien sécurisé.
                 </p>
               </div>
 
@@ -989,31 +1146,41 @@ Lois de la province de ${prestation.provinceDroit} et lois fédérales du Canada
                 type="button"
                 onClick={handleDownloadAssembledBundlePdf}
                 disabled={downloadingPdf}
-                className="px-5 py-3 rounded-xl bg-[#0B2545] hover:bg-[#134074] text-white font-extrabold text-xs sm:text-sm flex items-center gap-2 cursor-pointer shadow-md transition-all shrink-0 disabled:opacity-50"
+                className="px-5 py-3 text-xs sm:text-sm font-bold bg-[#D4A017] hover:bg-[#b88b14] text-gray-950 rounded-xl transition-all shadow-md flex items-center gap-2 cursor-pointer disabled:opacity-50 active:scale-95 whitespace-nowrap"
               >
-                <Download className="w-4 h-4 text-amber-400" />
-                <span>{downloadingPdf ? 'Génération en cours...' : 'Télécharger le Bundle Complet'}</span>
+                {downloadingPdf ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Download className="w-4 h-4 text-gray-950" />
+                )}
+                <span>{downloadingPdf ? 'Assemblage en cours...' : 'Télécharger le Bundle PDF (4 Pages)'}</span>
               </button>
             </div>
 
-            {/* Cartouches des 3 documents composants */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-              <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-2">
-                <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded">Page 1 : 1ère Position</span>
-                <h4 className="font-bold text-slate-900 text-sm">Offre d’Emploi (Fiche Poste)</h4>
-                <p className="text-slate-500 text-[11px]">Réf : {jobOffer.reference} · Code-barres sous la référence redirigeant vers l&apos;annonce.</p>
+            {/* Schéma visuel des 4 pages */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+              <div className="bg-slate-900 text-white p-4 rounded-xl border border-slate-700 shadow-xs">
+                <span className="text-[10px] text-amber-400 font-bold block mb-1">PAGE 1</span>
+                <span className="text-xs font-bold">Couverture de Livre PDF</span>
+                <p className="text-[10px] text-slate-400 mt-1">Design corporate &amp; Logo</p>
               </div>
 
-              <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-2">
-                <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">Page 2 : 2ème Position</span>
-                <h4 className="font-bold text-slate-900 text-sm">Contrat de Prestation CRIC</h4>
-                <p className="text-slate-500 text-[11px]">Réf : {prestation.referenceContrat} · Mandat d&apos;immigration et de recrutement LIPR / IRCC.</p>
+              <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-xs">
+                <span className="text-[10px] text-blue-600 font-bold block mb-1">PAGE 2</span>
+                <span className="text-xs font-bold text-gray-800">Offre &amp; Barcode</span>
+                <p className="text-[10px] text-gray-500 mt-1">Redirection scan vers le site</p>
               </div>
 
-              <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-2">
-                <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">Page 3 : 3ème Position</span>
-                <h4 className="font-bold text-slate-900 text-sm">Ticket d’Entretien d’Embauche</h4>
-                <p className="text-slate-500 text-[11px]">Code ID : {ticket.codeIdCandidature} · Code-barres pour accès direct en ligne.</p>
+              <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-xs">
+                <span className="text-[10px] text-blue-600 font-bold block mb-1">PAGE 3</span>
+                <span className="text-xs font-bold text-gray-800">Attestation de Mandat</span>
+                <p className="text-[10px] text-gray-500 mt-1">Modèle 1 agréé CNESST</p>
+              </div>
+
+              <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-xs">
+                <span className="text-[10px] text-blue-600 font-bold block mb-1">PAGE 4</span>
+                <span className="text-xs font-bold text-gray-800">Ticket d'Entretien</span>
+                <p className="text-[10px] text-gray-500 mt-1">Coupon &amp; Barcode d'accès</p>
               </div>
             </div>
           </div>
