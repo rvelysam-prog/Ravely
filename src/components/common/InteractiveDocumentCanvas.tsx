@@ -29,6 +29,9 @@ export interface InteractiveCanvasProps {
     cachet?: string;
     filigrane?: string;
     arrierePlan?: string;
+    logoPrestataire?: string;
+    signaturePrestataire?: string;
+    cachetPrestataire?: string;
   };
   htmlEmailContent: string;
   onDownloadPdf?: () => void;

@@ -607,9 +607,14 @@ export async function generatePromesseEmbauchePdfDoc(
   doc.setFontSize(10);
   doc.setTextColor(0, 0, 0);
   doc.text('Type de contrat :', 28.5, 170.5);
+  const cleanedTypeContrat = (data.type_contrat || 'Contrat à Durée Déterminée (CDI)')
+    .replace(/\s*\(CDI\)\s+de\s+2\s+ans/gi, ' (CDI)')
+    .replace(/de 2 ans/gi, (match, offset, str) => str.includes('CDI') ? '' : match)
+    .trim();
+
   drawHighlightedValue(
     doc,
-    data.type_contrat || 'Contrat à Durée Déterminée (CDI) de 2 ans',
+    cleanedTypeContrat,
     62.5,
     170.5,
     10,

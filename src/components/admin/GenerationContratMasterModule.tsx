@@ -118,12 +118,35 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
     cachet?: string;
     filigrane?: string;
     arrierePlan?: string;
+    logoPrestataire?: string;
+    signaturePrestataire?: string;
+    cachetPrestataire?: string;
   }>({
     logo: settings.logo_url || CONTRACT_STATIC_ASSETS.logoAtlantic,
     signature: CONTRACT_STATIC_ASSETS.signature,
     cachet: CONTRACT_STATIC_ASSETS.cachet,
     filigrane: '',
-    arrierePlan: ''
+    arrierePlan: '',
+    logoPrestataire: '',
+    signaturePrestataire: '',
+    cachetPrestataire: ''
+  });
+
+  // Réglages de Maquettisme & Design visuel pour le HTML email template
+  const [maquettisme, setMaquettisme] = useState<{
+    customPrimaryColor?: string;
+    customAccentColor?: string;
+    customBgColor?: string;
+    customContainerBgColor?: string;
+    showWatermark: boolean;
+    showBackgroundTexture: boolean;
+  }>({
+    customPrimaryColor: '',
+    customAccentColor: '',
+    customBgColor: '#F1F5F9',
+    customContainerBgColor: '#FFFFFF',
+    showWatermark: true,
+    showBackgroundTexture: true
   });
 
   // Données Ticket d'entretien
@@ -168,7 +191,7 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
     setTimeout(() => setCopiedNotification(null), 3500);
   };
 
-  // Gestion des uploads d'actifs visuels (logo, signature, cachet, filigrane, arrière-plan)
+  // Gestion des uploads d'actifs visuels (logo, signature, cachet, filigrane, arrière-plan, prestataire)
   const handleUploadAsset = (key: AssetTabKey, dataUrl: string) => {
     setUploadedAssets((prev) => ({
       ...prev,
@@ -183,7 +206,33 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
       setCricVars((prev) => ({ ...prev, cachetEmployeurUrl: dataUrl }));
     } else if (key === 'filigrane') {
       setCricVars((prev) => ({ ...prev, filigraneEmployeurUrl: dataUrl }));
+    } else if (key === 'arrierePlan') {
+      setCricVars((prev) => ({ ...prev, arrierePlanUrl: dataUrl }));
+    } else if (key === 'logoPrestataire') {
+      setCricVars((prev) => ({ ...prev, logoPrestataireUrl: dataUrl }));
+    } else if (key === 'signaturePrestataire') {
+      setCricVars((prev) => ({ ...prev, signaturePrestataireUrl: dataUrl }));
+    } else if (key === 'cachetPrestataire') {
+      setCricVars((prev) => ({ ...prev, cachetPrestataireUrl: dataUrl }));
     }
+  };
+
+  // Helper pour upload direct de fichiers dans la section Prestataire
+  const handlePrestataireFileUpload = (
+    key: 'logoPrestataire' | 'signaturePrestataire' | 'cachetPrestataire',
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const dataUrl = evt.target?.result as string;
+      if (dataUrl) {
+        handleUploadAsset(key, dataUrl);
+        triggerCopied(`Fichier ${key} importé pour le Prestataire !`);
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
   // 5 Modèles de design visuel générés à partir du contrat CRIC personnalisé
@@ -301,7 +350,9 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
   const currentCricEmailHtml = generateCricContractResponsiveEmailHtml(
     cricVars,
     cricModelChoice,
-    selected5ModelIdx
+    selected5ModelIdx,
+    assetsConfig,
+    maquettisme
   );
 
   return (
@@ -690,6 +741,118 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
                     />
                   </div>
                 </div>
+
+                {/* FICHIERS OFFICIELS DU PRESTATAIRE (LOGO, SIGNATURE, CACHET) */}
+                <div className="pt-3 border-t border-slate-200 mt-2 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-700 text-xs flex items-center gap-1.5">
+                      <Image className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Fichiers Importés du Prestataire :</span>
+                    </span>
+                    <span className="text-[10px] text-slate-500">Logo, Signature &amp; Cachet</span>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    {/* Logo Prestataire */}
+                    <div className="p-2.5 rounded-xl border border-slate-200 bg-white flex flex-col items-center justify-between min-h-[92px]">
+                      <span className="text-[10px] font-bold text-slate-600">Logo Cabinet</span>
+                      {uploadedAssets.logoPrestataire || cricVars.logoPrestataireUrl ? (
+                        <div className="relative my-1 group">
+                          <img
+                            src={uploadedAssets.logoPrestataire || cricVars.logoPrestataireUrl}
+                            alt="Logo Prestataire"
+                            className="max-h-10 max-w-[80px] object-contain"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleUploadAsset('logoPrestataire', '')}
+                            className="absolute -top-1 -right-1 bg-red-600 text-white rounded-full w-4 h-4 text-[9px] flex items-center justify-center hover:bg-red-700 cursor-pointer"
+                            title="Supprimer"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-slate-400 italic my-auto">Aucun</span>
+                      )}
+                      <label className="w-full py-1 px-1.5 text-[10px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded cursor-pointer transition-colors block">
+                        <span>{uploadedAssets.logoPrestataire ? 'Changer' : '+ Importer'}</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => handlePrestataireFileUpload('logoPrestataire', e)}
+                        />
+                      </label>
+                    </div>
+
+                    {/* Signature Prestataire */}
+                    <div className="p-2.5 rounded-xl border border-slate-200 bg-white flex flex-col items-center justify-between min-h-[92px]">
+                      <span className="text-[10px] font-bold text-slate-600">Signature Mandataire</span>
+                      {uploadedAssets.signaturePrestataire || cricVars.signaturePrestataireUrl ? (
+                        <div className="relative my-1 group">
+                          <img
+                            src={uploadedAssets.signaturePrestataire || cricVars.signaturePrestataireUrl}
+                            alt="Signature Prestataire"
+                            className="max-h-10 max-w-[80px] object-contain"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleUploadAsset('signaturePrestataire', '')}
+                            className="absolute -top-1 -right-1 bg-red-600 text-white rounded-full w-4 h-4 text-[9px] flex items-center justify-center hover:bg-red-700 cursor-pointer"
+                            title="Supprimer"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-slate-400 italic my-auto">Aucune</span>
+                      )}
+                      <label className="w-full py-1 px-1.5 text-[10px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded cursor-pointer transition-colors block">
+                        <span>{uploadedAssets.signaturePrestataire ? 'Changer' : '+ Importer'}</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => handlePrestataireFileUpload('signaturePrestataire', e)}
+                        />
+                      </label>
+                    </div>
+
+                    {/* Cachet Prestataire */}
+                    <div className="p-2.5 rounded-xl border border-slate-200 bg-white flex flex-col items-center justify-between min-h-[92px]">
+                      <span className="text-[10px] font-bold text-slate-600">Cachet Officiel</span>
+                      {uploadedAssets.cachetPrestataire || cricVars.cachetPrestataireUrl ? (
+                        <div className="relative my-1 group">
+                          <img
+                            src={uploadedAssets.cachetPrestataire || cricVars.cachetPrestataireUrl}
+                            alt="Cachet Prestataire"
+                            className="max-h-10 max-w-[80px] object-contain"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleUploadAsset('cachetPrestataire', '')}
+                            className="absolute -top-1 -right-1 bg-red-600 text-white rounded-full w-4 h-4 text-[9px] flex items-center justify-center hover:bg-red-700 cursor-pointer"
+                            title="Supprimer"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-slate-400 italic my-auto">Aucun</span>
+                      )}
+                      <label className="w-full py-1 px-1.5 text-[10px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded cursor-pointer transition-colors block">
+                        <span>{uploadedAssets.cachetPrestataire ? 'Changer' : '+ Importer'}</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => handlePrestataireFileUpload('cachetPrestataire', e)}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -733,6 +896,114 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
                     <option value="Volet des talents mondiaux">Volet des talents mondiaux (GTS)</option>
                     <option value="Dispense">Dispense d'EIMT / Mobilité Francophone</option>
                   </select>
+                </div>
+              </div>
+            </div>
+
+            {/* BARRE D'OUTILS MAQUETTISME & DESIGN EMAIL RESPONSIVE */}
+            <div className="bg-gradient-to-r from-slate-900 to-[#0B2545] text-white p-4 rounded-2xl border border-slate-700 shadow-sm space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/10 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <Palette className="w-4 h-4 text-amber-400" />
+                  <span className="font-bold text-xs uppercase tracking-wider text-amber-300">
+                    Maquettisme &amp; Thème Graphique (Client Mail Responsive)
+                  </span>
+                </div>
+                <span className="text-[11px] text-slate-300">
+                  Personnalisation temps réel du template HTML Email
+                </span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-4 text-xs">
+                {/* Palettes de couleurs préréglées */}
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-400 font-semibold text-[11px]">Palette :</span>
+                  <div className="flex items-center gap-1.5">
+                    {[
+                      { label: 'Exécutif', primary: '#0B2545', accent: '#D4A017' },
+                      { label: 'Moderne', primary: '#0284C7', accent: '#0369A1' },
+                      { label: 'Notarié', primary: '#1E293B', accent: '#94A3B8' },
+                      { label: 'Logistique', primary: '#047857', accent: '#D97706' },
+                      { label: 'Royal', primary: '#7C3AED', accent: '#F59E0B' }
+                    ].map((pal) => (
+                      <button
+                        key={pal.label}
+                        type="button"
+                        onClick={() =>
+                          setMaquettisme((prev) => ({
+                            ...prev,
+                            customPrimaryColor: pal.primary,
+                            customAccentColor: pal.accent
+                          }))
+                        }
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-all flex items-center gap-1 cursor-pointer ${
+                          maquettisme.customPrimaryColor === pal.primary
+                            ? 'bg-white text-slate-950 border-amber-400 shadow-xs ring-2 ring-amber-400/50'
+                            : 'bg-white/10 text-white border-white/10 hover:bg-white/20'
+                        }`}
+                      >
+                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: pal.accent }} />
+                        <span>{pal.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Couleur de fond du document */}
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-400 font-semibold text-[11px]">Fond :</span>
+                  <div className="flex items-center gap-1">
+                    {[
+                      { label: 'Blanc', val: '#FFFFFF' },
+                      { label: 'Nacré', val: '#F8FAFC' },
+                      { label: 'Crème', val: '#FEFCF6' }
+                    ].map((f) => (
+                      <button
+                        key={f.label}
+                        type="button"
+                        onClick={() =>
+                          setMaquettisme((prev) => ({
+                            ...prev,
+                            customContainerBgColor: f.val
+                          }))
+                        }
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-all cursor-pointer ${
+                          maquettisme.customContainerBgColor === f.val
+                            ? 'bg-amber-400 text-slate-950 border-amber-300'
+                            : 'bg-white/10 text-slate-300 border-white/10 hover:bg-white/20'
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Toggles Filigrane & Arrière-plan */}
+                <div className="flex items-center gap-3 ml-auto">
+                  <label className="flex items-center gap-1.5 text-[11px] text-slate-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={maquettisme.showWatermark}
+                      onChange={(e) =>
+                        setMaquettisme((prev) => ({ ...prev, showWatermark: e.target.checked }))
+                      }
+                      className="rounded text-amber-400 focus:ring-amber-400"
+                    />
+                    <span>Filigrane Blason</span>
+                  </label>
+
+                  <label className="flex items-center gap-1.5 text-[11px] text-slate-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={maquettisme.showBackgroundTexture}
+                      onChange={(e) =>
+                        setMaquettisme((prev) => ({ ...prev, showBackgroundTexture: e.target.checked }))
+                      }
+                      className="rounded text-amber-400 focus:ring-amber-400"
+                    />
+                    <span>Texture Arrière-plan</span>
+                  </label>
                 </div>
               </div>
             </div>
@@ -800,11 +1071,27 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
                     <span className="text-xs text-slate-700 block">{cricVars.signataireNomEmployeur}</span>
                     <span className="text-[11px] text-slate-500 block">{cricVars.signataireTitreEmployeur}</span>
                     <div className="mt-3 flex items-center gap-2">
-                      {uploadedAssets.cachet && (
-                        <img src={uploadedAssets.cachet} alt="Cachet" className="w-16 h-16 object-contain" />
+                      {(uploadedAssets.cachet || cricVars.cachetEmployeurUrl) && (
+                        <img
+                          src={uploadedAssets.cachet || cricVars.cachetEmployeurUrl}
+                          alt="Cachet Employeur"
+                          className="w-16 h-16 object-contain"
+                          style={{
+                            opacity: (assetsConfig.cachet?.opacity ?? 100) / 100,
+                            transform: `rotate(${assetsConfig.cachet?.rotation || 0}deg)`
+                          }}
+                        />
                       )}
-                      {uploadedAssets.signature && (
-                        <img src={uploadedAssets.signature} alt="Signature" className="h-10 object-contain" />
+                      {(uploadedAssets.signature || cricVars.signatureEmployeurUrl) && (
+                        <img
+                          src={uploadedAssets.signature || cricVars.signatureEmployeurUrl}
+                          alt="Signature Employeur"
+                          className="h-10 object-contain"
+                          style={{
+                            opacity: (assetsConfig.signature?.opacity ?? 100) / 100,
+                            transform: `rotate(${assetsConfig.signature?.rotation || 0}deg)`
+                          }}
+                        />
                       )}
                     </div>
                   </div>
@@ -814,11 +1101,27 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
                     <span className="text-xs text-slate-700 block">{cricVars.representantPrestataireNom}</span>
                     <span className="text-[11px] text-slate-500 block">{cricVars.representantPrestataireTitre}</span>
                     <div className="mt-3 flex items-center gap-2">
-                      {uploadedAssets.cachet && (
-                        <img src={uploadedAssets.cachet} alt="Cachet Prestataire" className="w-16 h-16 object-contain" />
+                      {(uploadedAssets.cachetPrestataire || cricVars.cachetPrestataireUrl) && (
+                        <img
+                          src={uploadedAssets.cachetPrestataire || cricVars.cachetPrestataireUrl}
+                          alt="Cachet Prestataire"
+                          className="w-16 h-16 object-contain"
+                          style={{
+                            opacity: (assetsConfig.cachetPrestataire?.opacity ?? 100) / 100,
+                            transform: `rotate(${assetsConfig.cachetPrestataire?.rotation || 0}deg)`
+                          }}
+                        />
                       )}
-                      {uploadedAssets.signature && (
-                        <img src={uploadedAssets.signature} alt="Signature Prestataire" className="h-10 object-contain" />
+                      {(uploadedAssets.signaturePrestataire || cricVars.signaturePrestataireUrl) && (
+                        <img
+                          src={uploadedAssets.signaturePrestataire || cricVars.signaturePrestataireUrl}
+                          alt="Signature Prestataire"
+                          className="h-10 object-contain"
+                          style={{
+                            opacity: (assetsConfig.signaturePrestataire?.opacity ?? 100) / 100,
+                            transform: `rotate(${assetsConfig.signaturePrestataire?.rotation || 0}deg)`
+                          }}
+                        />
                       )}
                     </div>
                   </div>
@@ -1043,7 +1346,13 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
               assetsConfig={assetsConfig}
               onChangeAssetsConfig={setAssetsConfig}
               uploadedAssetUrls={uploadedAssets}
-              htmlEmailContent={generateCricContractResponsiveEmailHtml(cricVars, cricModelChoice, selected5ModelIdx)}
+              htmlEmailContent={generateCricContractResponsiveEmailHtml(
+                cricVars,
+                cricModelChoice,
+                selected5ModelIdx,
+                assetsConfig,
+                maquettisme
+              )}
               onDownloadPdf={async () => {
                 if (cricModelChoice === 'model1') {
                   const { doc, filename } = await generateModel1AttestationPdf(cricVars);
@@ -1098,11 +1407,27 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
                     </span>
                     <span className="text-xs text-slate-700 block">{cricVars.signataireNomEmployeur}</span>
                     <div className="mt-2 flex items-center gap-2">
-                      {uploadedAssets.cachet && (
-                        <img src={uploadedAssets.cachet} alt="Cachet" className="w-14 h-14 object-contain" />
+                      {(uploadedAssets.cachet || cricVars.cachetEmployeurUrl) && (
+                        <img
+                          src={uploadedAssets.cachet || cricVars.cachetEmployeurUrl}
+                          alt="Cachet Employeur"
+                          className="w-14 h-14 object-contain"
+                          style={{
+                            opacity: (assetsConfig.cachet?.opacity ?? 100) / 100,
+                            transform: `rotate(${assetsConfig.cachet?.rotation || 0}deg)`
+                          }}
+                        />
                       )}
-                      {uploadedAssets.signature && (
-                        <img src={uploadedAssets.signature} alt="Signature" className="h-9 object-contain" />
+                      {(uploadedAssets.signature || cricVars.signatureEmployeurUrl) && (
+                        <img
+                          src={uploadedAssets.signature || cricVars.signatureEmployeurUrl}
+                          alt="Signature Employeur"
+                          className="h-9 object-contain"
+                          style={{
+                            opacity: (assetsConfig.signature?.opacity ?? 100) / 100,
+                            transform: `rotate(${assetsConfig.signature?.rotation || 0}deg)`
+                          }}
+                        />
                       )}
                     </div>
                   </div>
@@ -1113,11 +1438,27 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
                     </span>
                     <span className="text-xs text-slate-700 block">{cricVars.representantPrestataireNom}</span>
                     <div className="mt-2 flex items-center gap-2">
-                      {uploadedAssets.cachet && (
-                        <img src={uploadedAssets.cachet} alt="Cachet" className="w-14 h-14 object-contain" />
+                      {(uploadedAssets.cachetPrestataire || cricVars.cachetPrestataireUrl) && (
+                        <img
+                          src={uploadedAssets.cachetPrestataire || cricVars.cachetPrestataireUrl}
+                          alt="Cachet Prestataire"
+                          className="w-14 h-14 object-contain"
+                          style={{
+                            opacity: (assetsConfig.cachetPrestataire?.opacity ?? 100) / 100,
+                            transform: `rotate(${assetsConfig.cachetPrestataire?.rotation || 0}deg)`
+                          }}
+                        />
                       )}
-                      {uploadedAssets.signature && (
-                        <img src={uploadedAssets.signature} alt="Signature" className="h-9 object-contain" />
+                      {(uploadedAssets.signaturePrestataire || cricVars.signaturePrestataireUrl) && (
+                        <img
+                          src={uploadedAssets.signaturePrestataire || cricVars.signaturePrestataireUrl}
+                          alt="Signature Prestataire"
+                          className="h-9 object-contain"
+                          style={{
+                            opacity: (assetsConfig.signaturePrestataire?.opacity ?? 100) / 100,
+                            transform: `rotate(${assetsConfig.signaturePrestataire?.rotation || 0}deg)`
+                          }}
+                        />
                       )}
                     </div>
                   </div>

@@ -80,12 +80,16 @@ import {
   getSavedCustomFiligrane,
   getSavedCustomLogo,
   getSavedCustomSignature,
+  getSavedPdfAssetsConfig,
+  normalizePdfAssetsConfig,
+  PdfImportedAssetsConfig,
   sendCandidatureAcceptanceEmailViaFirebase,
   setSavedCustomCachet,
   setSavedCustomFiligrane,
   setSavedCustomLogo,
   setSavedCustomSignature
 } from '../services/departmentsAndEmailService';
+import { PanneauReglagesFichiersImportes } from './common/PanneauReglagesFichiersImportes';
 import { PromesseEmbaucheSection } from './PromesseEmbaucheSection';
 import { EmailLogsSection } from './EmailLogsSection';
 import { sendPromesseEmbaucheViaEmailJs } from '../services/emailjsService';
@@ -267,6 +271,13 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     getSavedCustomLogo() ? 'Logo importé actif' : 'Logo officiel du site'
   );
   const [applyCustomLogoToEmployeeDoc, setApplyCustomLogoToEmployeeDoc] = useState<boolean>(true);
+  const [applyCustomSigToEmployeeDoc, setApplyCustomSigToEmployeeDoc] = useState<boolean>(true);
+  const [applyCustomCachetToEmployeeDoc, setApplyCustomCachetToEmployeeDoc] = useState<boolean>(true);
+  const [applyCustomFiligraneToEmployeeDoc, setApplyCustomFiligraneToEmployeeDoc] = useState<boolean>(true);
+  const [showAssetsSettingsPanelInEmpModal, setShowAssetsSettingsPanelInEmpModal] = useState<boolean>(false);
+  const [modalAssetsConfig, setModalAssetsConfig] = useState<PdfImportedAssetsConfig>(() =>
+    normalizePdfAssetsConfig(getSavedPdfAssetsConfig())
+  );
 
   const [customSigLabel, setCustomSigLabel] = useState<string>(() =>
     getSavedCustomSignature() ? 'Signature personnalisée active' : 'signature.png (Par défaut)'
@@ -666,6 +677,10 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
         responsabilites: getMissionsForPosteOrDepartment(empForm.poste, empForm.departement),
         photo: resolvedPhotoBase64,
         photo_url: resolvedPhotoBase64,
+        logo_url: applyCustomLogoToEmployeeDoc && getSavedCustomLogo() ? getSavedCustomLogo() : '',
+        signature_url: applyCustomSigToEmployeeDoc && getSavedCustomSignature() ? getSavedCustomSignature() : '',
+        cachet_url: applyCustomCachetToEmployeeDoc && getSavedCustomCachet() ? getSavedCustomCachet() : '',
+        filigrane_url: applyCustomFiligraneToEmployeeDoc && getSavedCustomFiligrane() ? getSavedCustomFiligrane() : '',
         contrat_pdf_url: '',
         has_custom_pdf: true,
         must_change_password: editingEmployee ? editingEmployee.must_change_password : false,
@@ -727,7 +742,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             type_contrat:
               savedEmp.type_contrat === 'CDD'
                 ? 'Contrat à Durée Déterminée (CDD) de 2 ans'
-                : 'Contrat à Durée Déterminée (CDI) de 2 ans',
+                : 'Contrat à Durée Déterminée (CDI)',
             date_embauche: savedEmp.date_embauche,
             date_etablissement: savedEmp.date_etablissement || savedEmp.date_signature,
             date_fin: savedEmp.date_fin_cdd,
@@ -3106,17 +3121,92 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                   </label>
                 </div>
 
-                <div className="pt-1 flex items-center gap-2">
-                  <input
-                    id="checkbox-apply-logo-emp"
-                    type="checkbox"
-                    checked={applyCustomLogoToEmployeeDoc}
-                    onChange={(e) => setApplyCustomLogoToEmployeeDoc(e.target.checked)}
-                    className="w-4 h-4 rounded text-[#0B2545] border-slate-300 focus:ring-[#0B2545] cursor-pointer"
-                  />
-                  <label htmlFor="checkbox-apply-logo-emp" className="text-xs font-semibold text-[#0B2545] cursor-pointer select-none">
-                    Afficher le logo importé sur le contrat &amp; documents du salarié
-                  </label>
+                {/* Options d'application sur tous les documents du salarié */}
+                <div className="pt-2 border-t border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={
+                          applyCustomLogoToEmployeeDoc &&
+                          applyCustomSigToEmployeeDoc &&
+                          applyCustomCachetToEmployeeDoc &&
+                          applyCustomFiligraneToEmployeeDoc
+                        }
+                        onChange={(e) => {
+                          const val = e.target.checked;
+                          setApplyCustomLogoToEmployeeDoc(val);
+                          setApplyCustomSigToEmployeeDoc(val);
+                          setApplyCustomCachetToEmployeeDoc(val);
+                          setApplyCustomFiligraneToEmployeeDoc(val);
+                        }}
+                        className="w-4 h-4 rounded text-[#0B2545] border-slate-300 focus:ring-[#0B2545] cursor-pointer"
+                      />
+                      <span className="text-xs font-bold text-[#0B2545]">
+                        Appliquer tous les fichiers importés (Logo, Signature, Cachet, Filigrane) sur le contrat, la promesse &amp; l&apos;espace salarié
+                      </span>
+                    </label>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowAssetsSettingsPanelInEmpModal(!showAssetsSettingsPanelInEmpModal)}
+                      className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                    >
+                      <SparklesIcon className="w-3.5 h-3.5" />
+                      <span>{showAssetsSettingsPanelInEmpModal ? 'Masquer Réglages' : '⚙️ Panneau Réglages Avancés'}</span>
+                    </button>
+                  </div>
+
+                  {/* Sous-options granulaires */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 pl-6">
+                    <label className="flex items-center gap-1.5 text-[11px] text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={applyCustomLogoToEmployeeDoc}
+                        onChange={(e) => setApplyCustomLogoToEmployeeDoc(e.target.checked)}
+                        className="rounded text-[#0B2545]"
+                      />
+                      <span>Logo officiel</span>
+                    </label>
+                    <label className="flex items-center gap-1.5 text-[11px] text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={applyCustomSigToEmployeeDoc}
+                        onChange={(e) => setApplyCustomSigToEmployeeDoc(e.target.checked)}
+                        className="rounded text-[#0B2545]"
+                      />
+                      <span>Signature</span>
+                    </label>
+                    <label className="flex items-center gap-1.5 text-[11px] text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={applyCustomCachetToEmployeeDoc}
+                        onChange={(e) => setApplyCustomCachetToEmployeeDoc(e.target.checked)}
+                        className="rounded text-[#0B2545]"
+                      />
+                      <span>Cachet / Sceau</span>
+                    </label>
+                    <label className="flex items-center gap-1.5 text-[11px] text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={applyCustomFiligraneToEmployeeDoc}
+                        onChange={(e) => setApplyCustomFiligraneToEmployeeDoc(e.target.checked)}
+                        className="rounded text-[#0B2545]"
+                      />
+                      <span>Filigrane blason</span>
+                    </label>
+                  </div>
+
+                  {/* Panneau Réglages Fichiers Importés — Intégré en direct avec sauvegarde Firestore */}
+                  {showAssetsSettingsPanelInEmpModal && (
+                    <div className="pt-2">
+                      <PanneauReglagesFichiersImportes
+                        initialConfig={modalAssetsConfig}
+                        onConfigChange={(newCfg) => setModalAssetsConfig(newCfg)}
+                        moduleTitle="Nouveau Salarié & Contrat"
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
 

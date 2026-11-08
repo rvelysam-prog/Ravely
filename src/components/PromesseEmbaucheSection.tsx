@@ -139,7 +139,7 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
     departement: 'DEPARTEMENT LOGISTIQUE ET ENTREPOSAGE',
     manager: 'ANTOINE FORESTIN',
     matricule: getNextMatricule(employees),
-    type_contrat: 'Contrat à Durée Déterminée (CDI) de 2 ans',
+    type_contrat: 'Contrat à Durée Déterminée (CDI)',
     date_embauche: '2027-01-04',
     date_etablissement: '2026-09-28',
     date_fin: '2029-01-04',
@@ -666,10 +666,11 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
       manager: found.manager || 'ANTOINE FORESTIN',
       matricule: found.matricule,
       type_contrat:
-        found.promesse_type_contrat_label ||
-        (found.type_contrat === 'CDD'
-          ? 'Contrat à Durée Déterminée (CDD) de 2 ans'
-          : 'Contrat à Durée Déterminée (CDI) de 2 ans'),
+        (found.promesse_type_contrat_label && !found.promesse_type_contrat_label.includes('CDI) de 2 ans'))
+          ? found.promesse_type_contrat_label
+          : (found.type_contrat === 'CDD'
+            ? 'Contrat à Durée Déterminée (CDD) de 2 ans'
+            : 'Contrat à Durée Déterminée (CDI)'),
       date_embauche: found.date_embauche || found.date_effet || prev.date_embauche,
       date_etablissement:
         found.date_etablissement || found.date_signature || prev.date_etablissement,
@@ -949,7 +950,10 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
   const salutationPreview =
     previewData.sexe.toLowerCase().startsWith('f') ? 'Madame' : 'Monsieur';
 
-  const activeAssetCfg = assetsConfig[activeAssetTab];
+  const activeAssetCfg: PdfAssetItemSettings =
+    assetsConfig[activeAssetTab] ||
+    DEFAULT_PDF_ASSETS_CONFIG[activeAssetTab] ||
+    DEFAULT_PDF_ASSETS_CONFIG.logo;
 
   // Helper to compute live preview CSS styles for an imported asset
   const getLiveAssetBoxClasses = (cfg: PdfAssetItemSettings): string => {

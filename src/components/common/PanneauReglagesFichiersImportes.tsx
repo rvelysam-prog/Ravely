@@ -4,13 +4,15 @@ import {
   RotateCcw,
   Save,
   Upload,
-  Image,
+  Image as ImageIcon,
   Layers,
   Palette,
   Move,
   Maximize2,
   Check,
-  Eye
+  Eye,
+  Building2,
+  Briefcase
 } from 'lucide-react';
 import {
   PdfImportedAssetsConfig,
@@ -19,11 +21,21 @@ import {
   savePdfAssetsConfigToFirestore
 } from '../../services/departmentsAndEmailService';
 
-export type AssetTabKey = 'logo' | 'signature' | 'cachet' | 'filigrane' | 'arrierePlan';
+export type AssetTabKey =
+  | 'logo'
+  | 'signature'
+  | 'cachet'
+  | 'filigrane'
+  | 'arrierePlan'
+  | 'logoPrestataire'
+  | 'signaturePrestataire'
+  | 'cachetPrestataire';
 
 interface PanneauReglagesFichiersImportesProps {
-  assetsConfig: PdfImportedAssetsConfig;
-  onChangeConfig: (newConfig: PdfImportedAssetsConfig) => void;
+  assetsConfig?: PdfImportedAssetsConfig;
+  initialConfig?: PdfImportedAssetsConfig;
+  onChangeConfig?: (newConfig: PdfImportedAssetsConfig) => void;
+  onConfigChange?: (newConfig: PdfImportedAssetsConfig) => void;
   onUploadAsset?: (key: AssetTabKey, dataUrl: string, filename: string) => void;
   uploadedAssetUrls?: {
     logo?: string;
@@ -31,44 +43,69 @@ interface PanneauReglagesFichiersImportesProps {
     cachet?: string;
     filigrane?: string;
     arrierePlan?: string;
+    logoPrestataire?: string;
+    signaturePrestataire?: string;
+    cachetPrestataire?: string;
   };
   title?: string;
+  moduleTitle?: string;
 }
 
 export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersImportesProps> = ({
-  assetsConfig,
+  assetsConfig: propAssetsConfig,
+  initialConfig,
   onChangeConfig,
+  onConfigChange,
   onUploadAsset,
   uploadedAssetUrls = {},
-  title = "Panneau Réglages Fichiers Importés — Prévisualisation en direct & Sauvegarde Firestore"
+  title,
+  moduleTitle
 }) => {
+  const effectiveConfig = propAssetsConfig || initialConfig || DEFAULT_PDF_ASSETS_CONFIG;
+  const notifyChange = onChangeConfig || onConfigChange || (() => {});
+  const displayTitle =
+    title ||
+    moduleTitle ||
+    "Panneau Réglages Fichiers Importés — Prévisualisation en direct & Sauvegarde Firestore";
+
+  const [activeScope, setActiveScope] = useState<'employeur' | 'prestataire'>('employeur');
   const [activeTab, setActiveTab] = useState<AssetTabKey>('logo');
   const [isSaving, setIsSaving] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
 
-  const tabs: { key: AssetTabKey; label: string; badge: string }[] = [
+  const employeurTabs: { key: AssetTabKey; label: string; badge: string }[] = [
     { key: 'logo', label: '1. Logo Officiel', badge: 'En-tête / Badge' },
-    { key: 'signature', label: '2. Signature', badge: 'Zone Paraphes' },
-    { key: 'cachet', label: '3. Cachet / Sceau', badge: 'Tampon Officiel' },
+    { key: 'signature', label: '2. Signature Employeur', badge: 'Zone Paraphes' },
+    { key: 'cachet', label: '3. Cachet Employeur', badge: 'Tampon Officiel' },
     { key: 'filigrane', label: '4. Filigrane', badge: 'Blason / Watermark' },
     { key: 'arrierePlan', label: '5. Arrière-Plan', badge: 'Fond de page' }
   ];
 
-  const currentCfg: PdfAssetItemSettings = assetsConfig[activeTab] || DEFAULT_PDF_ASSETS_CONFIG[activeTab] || {
-    widthValue: 100,
-    widthUnit: 'px',
-    heightValue: 100,
-    heightUnit: 'px',
-    opacity: 100,
-    tintEnabled: false,
-    tintColor: '#0B2545',
-    offsetX: 0,
-    offsetY: 0,
-    alignX: 'center',
-    alignY: 'middle',
-    rotation: 0,
-    zIndex: 10
-  };
+  const prestataireTabs: { key: AssetTabKey; label: string; badge: string }[] = [
+    { key: 'logoPrestataire', label: '1. Logo Prestataire', badge: 'Cabinet Mandaté' },
+    { key: 'signaturePrestataire', label: '2. Signature Prestataire', badge: 'Signataire Mandataire' },
+    { key: 'cachetPrestataire', label: '3. Cachet Prestataire', badge: 'Sceau / Tampon Mandat' }
+  ];
+
+  const currentTabs = activeScope === 'employeur' ? employeurTabs : prestataireTabs;
+
+  const currentCfg: PdfAssetItemSettings =
+    effectiveConfig[activeTab] ||
+    DEFAULT_PDF_ASSETS_CONFIG[activeTab] || {
+      widthValue: 100,
+      widthUnit: 'px',
+      heightValue: 100,
+      heightUnit: 'px',
+      opacity: 100,
+      tintEnabled: false,
+      tintColor: '#0B2545',
+      offsetX: 0,
+      offsetY: 0,
+      alignX: 'center',
+      alignY: 'middle',
+      rotation: 0,
+      zIndex: 10
+    };
 
   const updateSetting = <K extends keyof PdfAssetItemSettings>(
     field: K,
@@ -79,30 +116,31 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
       [field]: val
     };
     const next: PdfImportedAssetsConfig = {
-      ...assetsConfig,
+      ...effectiveConfig,
       [activeTab]: updatedItem,
       updated_at: new Date().toISOString()
     };
-    onChangeConfig(next);
+    notifyChange(next);
   };
 
   const handleResetSingle = () => {
     const defaultItem = DEFAULT_PDF_ASSETS_CONFIG[activeTab] || currentCfg;
     const next: PdfImportedAssetsConfig = {
-      ...assetsConfig,
+      ...effectiveConfig,
       [activeTab]: defaultItem,
       updated_at: new Date().toISOString()
     };
-    onChangeConfig(next);
+    notifyChange(next);
     setFeedback(`Réglages de « ${activeTab} » réinitialisés`);
     setTimeout(() => setFeedback(null), 3000);
   };
 
   const handleResetAll = () => {
-    onChangeConfig({
+    const next = {
       ...DEFAULT_PDF_ASSETS_CONFIG,
       updated_at: new Date().toISOString()
-    });
+    };
+    notifyChange(next);
     setFeedback('Tous les réglages ont été réinitialisés aux valeurs d’origine');
     setTimeout(() => setFeedback(null), 3000);
   };
@@ -110,7 +148,7 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
   const handleSaveFirestore = async () => {
     setIsSaving(true);
     try {
-      await savePdfAssetsConfigToFirestore(assetsConfig);
+      await savePdfAssetsConfigToFirestore(effectiveConfig);
       setFeedback('Réglages sauvegardés dans Firestore et synchronisés avec succès !');
     } catch {
       setFeedback('Enregistré localement (sauvegarde Firestore hors ligne)');
@@ -141,9 +179,9 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
         <div className="flex items-center gap-2.5">
           <Sliders className="w-5 h-5 text-[#0B2545] shrink-0" />
           <div>
-            <h5 className="text-sm font-bold text-[#0B2545]">{title}</h5>
+            <h5 className="text-sm font-bold text-[#0B2545]">{displayTitle}</h5>
             <p className="text-[11px] text-slate-600">
-              Ajustez largeur, hauteur, opacité, position X/Y, rotation, couleur/teinte et superposition pour tous vos documents officiels.
+              Ajustez largeur, hauteur, opacité, position X/Y, rotation, couleur/teinte et superposition pour tous vos documents officiels (Employeur &amp; Prestataire CRIC).
             </p>
           </div>
         </div>
@@ -159,7 +197,7 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
           <button
             type="button"
             onClick={handleResetSingle}
-            className="min-h-[36px] px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-700 inline-flex items-center gap-1.5"
+            className="min-h-[36px] px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-700 inline-flex items-center gap-1.5 cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
             <span>Réinitialiser</span>
@@ -168,7 +206,7 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
           <button
             type="button"
             onClick={handleResetAll}
-            className="min-h-[36px] px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-600"
+            className="min-h-[36px] px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-600 cursor-pointer"
           >
             Tout réinitialiser
           </button>
@@ -177,312 +215,354 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
             type="button"
             onClick={handleSaveFirestore}
             disabled={isSaving}
-            className="min-h-[36px] px-4 py-1.5 rounded-xl bg-[#0B2545] hover:bg-[#134074] text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-xs disabled:opacity-60"
+            className="min-h-[36px] px-4 py-1.5 rounded-xl bg-[#0B2545] hover:bg-[#134074] text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-xs disabled:opacity-60 cursor-pointer"
           >
             <Save className="w-3.5 h-3.5 text-amber-400" />
-            <span>{isSaving ? 'Sauvegarde...' : 'Sauvegarder dans Firestore'}</span>
+            <span>{isSaving ? 'Enregistrement...' : 'Sauvegarder dans Firestore'}</span>
           </button>
         </div>
       </div>
 
-      {/* Onglets de sélection du fichier à régler */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-        {tabs.map((tab) => {
-          const isSelected = activeTab === tab.key;
-          const hasCustom = Boolean(uploadedAssetUrls[tab.key]);
-          return (
-            <button
-              key={tab.key}
-              type="button"
-              onClick={() => setActiveTab(tab.key)}
-              className={`p-2.5 rounded-xl border text-left transition-all relative ${
-                isSelected
-                  ? 'bg-[#0B2545] text-white border-[#0B2545] shadow-xs'
-                  : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+      {/* SÉLECTEUR DE SCOPE : EMPLOYEUR CANADA VS PRESTATAIRE CRIC */}
+      <div className="flex items-center gap-2 p-1 bg-slate-200/70 rounded-xl w-fit">
+        <button
+          type="button"
+          onClick={() => {
+            setActiveScope('employeur');
+            setActiveTab('logo');
+          }}
+          className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeScope === 'employeur'
+              ? 'bg-[#0B2545] text-white shadow-xs'
+              : 'text-slate-700 hover:text-slate-900'
+          }`}
+        >
+          <Building2 className="w-3.5 h-3.5 text-amber-400" />
+          <span>🏢 Entreprise Employeur (Canada)</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setActiveScope('prestataire');
+            setActiveTab('signaturePrestataire');
+          }}
+          className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeScope === 'prestataire'
+              ? 'bg-[#0066B3] text-white shadow-xs'
+              : 'text-slate-700 hover:text-slate-900'
+          }`}
+        >
+          <Briefcase className="w-3.5 h-3.5 text-amber-300" />
+          <span>🤝 Cabinet Prestataire CRIC</span>
+        </button>
+      </div>
+
+      {/* Onglets de sélection du fichier ciblé */}
+      <div className="flex items-center gap-2 overflow-x-auto pb-1">
+        {currentTabs.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setActiveTab(t.key)}
+            className={`min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border transition-all cursor-pointer shrink-0 ${
+              activeTab === t.key
+                ? 'bg-white border-[#0B2545] text-[#0B2545] shadow-xs ring-2 ring-[#0B2545]/15'
+                : 'bg-white/60 border-slate-200 text-slate-700 hover:bg-white'
+            }`}
+          >
+            <span>{t.label}</span>
+            <span
+              className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-medium ${
+                activeTab === t.key
+                  ? 'bg-[#0B2545] text-white'
+                  : 'bg-slate-200 text-slate-600'
               }`}
             >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold truncate">{tab.label}</span>
-                {hasCustom && (
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" title="Fichier importé personnalisé actif" />
-                )}
-              </div>
-              <div
-                className={`text-[10px] font-mono mt-0.5 ${
-                  isSelected ? 'text-amber-300' : 'text-slate-500'
-                }`}
-              >
-                {tab.badge}
-              </div>
-            </button>
-          );
-        })}
+              {t.badge}
+            </span>
+          </button>
+        ))}
       </div>
 
-      {/* Barre d'importation dédiée pour l'onglet actif */}
-      <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-white rounded-xl border border-slate-200">
-        <div className="flex items-center gap-2.5">
-          <Upload className="w-4 h-4 text-[#0B2545]" />
-          <span className="text-xs font-semibold text-slate-800">
-            Importer un fichier pour « {tabs.find((t) => t.key === activeTab)?.label} » :
-          </span>
-          {uploadedAssetUrls[activeTab] ? (
-            <span className="text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-              Actif &amp; visible en direct
-            </span>
-          ) : (
-            <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
-              Fichier standard du site
-            </span>
-          )}
-        </div>
-
-        <label className="cursor-pointer min-h-[34px] px-3.5 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-300 text-xs font-bold text-[#0B2545] inline-flex items-center gap-1.5 transition-colors">
-          <Upload className="w-3.5 h-3.5 text-amber-600" />
-          <span>Charger une image (PNG / JPG / WebP)</span>
-          <input
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            onChange={handleFileInput}
-            className="hidden"
-          />
-        </label>
-      </div>
-
-      {/* Contrôles détaillés pour l'élément sélectionné */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 bg-white p-4 rounded-xl border border-slate-200">
-        {/* 1. Largeur */}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-slate-700">
-              Largeur ({currentCfg.widthUnit})
-            </label>
-            <div className="inline-flex rounded-lg border border-slate-300 overflow-hidden text-[11px] font-mono">
-              {(['px', '%'] as const).map((u) => (
-                <button
-                  key={u}
-                  type="button"
-                  onClick={() => updateSetting('widthUnit', u)}
-                  className={`px-2 py-0.5 font-bold ${
-                    currentCfg.widthUnit === u
-                      ? 'bg-[#0B2545] text-white'
-                      : 'bg-slate-50 text-slate-600'
-                  }`}
-                >
-                  {u}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              type="range"
-              min={currentCfg.widthUnit === '%' ? 10 : 20}
-              max={currentCfg.widthUnit === '%' ? 100 : 700}
-              value={currentCfg.widthValue}
-              onChange={(e) => updateSetting('widthValue', Number(e.target.value))}
-              className="w-full accent-[#0B2545]"
-            />
-            <span className="font-mono text-xs font-bold text-slate-800 w-12 text-right">
-              {currentCfg.widthValue}
-              {currentCfg.widthUnit}
-            </span>
-          </div>
-        </div>
-
-        {/* 2. Hauteur */}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-slate-700">
-              Hauteur ({currentCfg.heightUnit})
-            </label>
-            <div className="inline-flex rounded-lg border border-slate-300 overflow-hidden text-[11px] font-mono">
-              {(['px', '%'] as const).map((u) => (
-                <button
-                  key={u}
-                  type="button"
-                  onClick={() => updateSetting('heightUnit', u)}
-                  className={`px-2 py-0.5 font-bold ${
-                    currentCfg.heightUnit === u
-                      ? 'bg-[#0B2545] text-white'
-                      : 'bg-slate-50 text-slate-600'
-                  }`}
-                >
-                  {u}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              type="range"
-              min={currentCfg.heightUnit === '%' ? 10 : 15}
-              max={currentCfg.heightUnit === '%' ? 100 : 500}
-              value={currentCfg.heightValue}
-              onChange={(e) => updateSetting('heightValue', Number(e.target.value))}
-              className="w-full accent-[#0B2545]"
-            />
-            <span className="font-mono text-xs font-bold text-slate-800 w-12 text-right">
-              {currentCfg.heightValue}
-              {currentCfg.heightUnit}
-            </span>
-          </div>
-        </div>
-
-        {/* 3. Opacité */}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-slate-700">Opacité (%)</label>
-            <span className="text-[10px] text-slate-500 font-mono">0-100%</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              type="range"
-              min={5}
-              max={100}
-              value={currentCfg.opacity}
-              onChange={(e) => updateSetting('opacity', Number(e.target.value))}
-              className="w-full accent-[#0B2545]"
-            />
-            <span className="font-mono text-xs font-bold text-slate-800 w-12 text-right">
-              {currentCfg.opacity}%
-            </span>
-          </div>
-        </div>
-
-        {/* 4. Rotation */}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-slate-700">Rotation (°)</label>
-            <button
-              type="button"
-              onClick={() => updateSetting('rotation', 0)}
-              className="text-[10px] text-[#0066B3] hover:underline"
-            >
-              0°
-            </button>
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              type="range"
-              min={-90}
-              max={90}
-              value={currentCfg.rotation}
-              onChange={(e) => updateSetting('rotation', Number(e.target.value))}
-              className="w-full accent-[#0B2545]"
-            />
-            <span className="font-mono text-xs font-bold text-slate-800 w-12 text-right">
-              {currentCfg.rotation}°
-            </span>
-          </div>
-        </div>
-
-        {/* 5. Décalage X (px) */}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-slate-700">Position X (px)</label>
-            <button
-              type="button"
-              onClick={() => updateSetting('offsetX', 0)}
-              className="text-[10px] text-[#0066B3] hover:underline"
-            >
-              Centre
-            </button>
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              type="range"
-              min={-200}
-              max={200}
-              value={currentCfg.offsetX}
-              onChange={(e) => updateSetting('offsetX', Number(e.target.value))}
-              className="w-full accent-[#0B2545]"
-            />
-            <span className="font-mono text-xs font-bold text-slate-800 w-12 text-right">
-              {currentCfg.offsetX > 0 ? `+${currentCfg.offsetX}` : currentCfg.offsetX}px
-            </span>
-          </div>
-        </div>
-
-        {/* 6. Décalage Y (px) */}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-slate-700">Position Y (px)</label>
-            <button
-              type="button"
-              onClick={() => updateSetting('offsetY', 0)}
-              className="text-[10px] text-[#0066B3] hover:underline"
-            >
-              Centre
-            </button>
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              type="range"
-              min={-200}
-              max={200}
-              value={currentCfg.offsetY}
-              onChange={(e) => updateSetting('offsetY', Number(e.target.value))}
-              className="w-full accent-[#0B2545]"
-            />
-            <span className="font-mono text-xs font-bold text-slate-800 w-12 text-right">
-              {currentCfg.offsetY > 0 ? `+${currentCfg.offsetY}` : currentCfg.offsetY}px
-            </span>
-          </div>
-        </div>
-
-        {/* 7. Alignement horizontal */}
-        <div className="space-y-1.5">
-          <label className="text-xs font-bold text-slate-700 block">Alignement</label>
-          <div className="grid grid-cols-3 gap-1">
-            {(['left', 'center', 'right'] as const).map((a) => (
-              <button
-                key={a}
-                type="button"
-                onClick={() => updateSetting('alignX', a)}
-                className={`py-1.5 px-2 rounded-lg text-xs font-bold uppercase transition-all ${
-                  currentCfg.alignX === a
-                    ? 'bg-[#0B2545] text-white shadow-xs'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                }`}
-              >
-                {a === 'left' ? 'Gauche' : a === 'center' ? 'Centré' : 'Droite'}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* 8. Teinte / Filtre couleur */}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-slate-700">Couleur / Teinte</label>
-            <label className="inline-flex items-center gap-1 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={currentCfg.tintEnabled}
-                onChange={(e) => updateSetting('tintEnabled', e.target.checked)}
-                className="w-3.5 h-3.5 rounded text-[#0B2545] accent-[#0B2545]"
+      {/* Zone de téléversement direct si activée */}
+      {onUploadAsset && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl bg-white border border-slate-200">
+          <div className="flex items-center gap-3">
+            {uploadedAssetUrls[activeTab] ? (
+              <img
+                src={uploadedAssetUrls[activeTab]}
+                alt={activeTab}
+                className="w-12 h-12 object-contain rounded-lg border border-slate-200 bg-slate-50 p-1 shrink-0"
               />
-              <span className="text-[10px] font-semibold text-slate-600">Activer</span>
-            </label>
+            ) : (
+              <div className="w-12 h-12 rounded-lg bg-slate-100 border border-dashed border-slate-300 flex items-center justify-center text-slate-400 shrink-0">
+                <ImageIcon className="w-5 h-5" />
+              </div>
+            )}
+            <div>
+              <span className="text-xs font-bold text-slate-800 block">
+                Fichier source actif pour {activeTab}
+              </span>
+              <span className="text-[11px] text-slate-500 font-mono">
+                {uploadedAssetUrls[activeTab] ? 'Fichier personnalisé chargé' : 'Utilise le fichier système par défaut'}
+              </span>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
+
+          <label className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-white border border-slate-300 hover:border-[#0B2545] text-xs font-semibold text-slate-700 flex items-center gap-2 cursor-pointer shadow-2xs hover:bg-slate-50 transition-colors shrink-0">
+            <Upload className="w-4 h-4 text-[#0B2545]" />
+            <span>Remplacer ce fichier (PNG/JPG)</span>
             <input
-              type="color"
-              value={currentCfg.tintColor}
-              disabled={!currentCfg.tintEnabled}
-              onChange={(e) => updateSetting('tintColor', e.target.value)}
-              className="w-8 h-8 rounded-lg border border-slate-300 cursor-pointer disabled:opacity-40"
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              onChange={handleFileInput}
+              className="hidden"
             />
+          </label>
+        </div>
+      )}
+
+      {/* Grille de contrôles ergonomiques */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 bg-white p-4 rounded-xl border border-slate-200">
+        
+        {/* Colonne 1 : Dimensions (Largeur & Hauteur) */}
+        <div className="space-y-3">
+          <div className="flex items-center gap-1.5 text-xs font-bold text-[#0B2545]">
+            <Maximize2 className="w-4 h-4 text-amber-600" />
+            <span>Dimensions</span>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between text-xs text-slate-600 mb-1">
+              <span>Largeur</span>
+              <span className="font-mono font-bold text-slate-900">
+                {currentCfg.widthValue} {currentCfg.widthUnit}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range"
+                min="10"
+                max={currentCfg.widthUnit === '%' ? 100 : 700}
+                step="1"
+                value={currentCfg.widthValue}
+                onChange={(e) => updateSetting('widthValue', parseFloat(e.target.value))}
+                className="w-full accent-[#0B2545] cursor-pointer"
+              />
+              <select
+                value={currentCfg.widthUnit}
+                onChange={(e) => updateSetting('widthUnit', e.target.value as 'px' | '%')}
+                className="min-h-[30px] px-1.5 py-0.5 rounded-lg border border-slate-300 text-xs font-mono bg-white"
+              >
+                <option value="px">px</option>
+                <option value="%">%</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between text-xs text-slate-600 mb-1">
+              <span>Hauteur</span>
+              <span className="font-mono font-bold text-slate-900">
+                {currentCfg.heightValue} {currentCfg.heightUnit}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range"
+                min="10"
+                max={currentCfg.heightUnit === '%' ? 100 : 600}
+                step="1"
+                value={currentCfg.heightValue}
+                onChange={(e) => updateSetting('heightValue', parseFloat(e.target.value))}
+                className="w-full accent-[#0B2545] cursor-pointer"
+              />
+              <select
+                value={currentCfg.heightUnit}
+                onChange={(e) => updateSetting('heightUnit', e.target.value as 'px' | '%')}
+                className="min-h-[30px] px-1.5 py-0.5 rounded-lg border border-slate-300 text-xs font-mono bg-white"
+              >
+                <option value="px">px</option>
+                <option value="%">%</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Colonne 2 : Opacité & Rotation */}
+        <div className="space-y-3">
+          <div className="flex items-center gap-1.5 text-xs font-bold text-[#0B2545]">
+            <Eye className="w-4 h-4 text-blue-600" />
+            <span>Opacité &amp; Rotation</span>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between text-xs text-slate-600 mb-1">
+              <span>Opacité globale</span>
+              <span className="font-mono font-bold text-slate-900">{currentCfg.opacity} %</span>
+            </div>
             <input
-              type="text"
-              value={currentCfg.tintColor}
-              disabled={!currentCfg.tintEnabled}
-              onChange={(e) => updateSetting('tintColor', e.target.value)}
-              className="w-full h-8 px-2 rounded-lg border border-slate-300 text-xs font-mono font-bold disabled:bg-slate-100"
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value={currentCfg.opacity}
+              onChange={(e) => updateSetting('opacity', parseInt(e.target.value, 10))}
+              className="w-full accent-blue-600 cursor-pointer"
+            />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between text-xs text-slate-600 mb-1">
+              <span>Rotation</span>
+              <span className="font-mono font-bold text-slate-900">{currentCfg.rotation} °</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range"
+                min="-180"
+                max="180"
+                step="1"
+                value={currentCfg.rotation}
+                onChange={(e) => updateSetting('rotation', parseInt(e.target.value, 10))}
+                className="w-full accent-blue-600 cursor-pointer"
+              />
+              <button
+                type="button"
+                onClick={() => updateSetting('rotation', 0)}
+                className="text-[11px] px-1.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 cursor-pointer font-mono"
+                title="Remettre à 0°"
+              >
+                0°
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Colonne 3 : Décalages Position X/Y */}
+        <div className="space-y-3">
+          <div className="flex items-center gap-1.5 text-xs font-bold text-[#0B2545]">
+            <Move className="w-4 h-4 text-emerald-600" />
+            <span>Position X / Y (Décalage)</span>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between text-xs text-slate-600 mb-1">
+              <span>Position X (Horizontal)</span>
+              <span className="font-mono font-bold text-slate-900">{currentCfg.offsetX} px</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range"
+                min="-250"
+                max="250"
+                step="1"
+                value={currentCfg.offsetX}
+                onChange={(e) => updateSetting('offsetX', parseInt(e.target.value, 10))}
+                className="w-full accent-emerald-600 cursor-pointer"
+              />
+              <button
+                type="button"
+                onClick={() => updateSetting('offsetX', 0)}
+                className="text-[11px] px-1.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 cursor-pointer font-mono"
+              >
+                0
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between text-xs text-slate-600 mb-1">
+              <span>Position Y (Vertical)</span>
+              <span className="font-mono font-bold text-slate-900">{currentCfg.offsetY} px</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range"
+                min="-250"
+                max="250"
+                step="1"
+                value={currentCfg.offsetY}
+                onChange={(e) => updateSetting('offsetY', parseInt(e.target.value, 10))}
+                className="w-full accent-emerald-600 cursor-pointer"
+              />
+              <button
+                type="button"
+                onClick={() => updateSetting('offsetY', 0)}
+                className="text-[11px] px-1.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 cursor-pointer font-mono"
+              >
+                0
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Colonne 4 : Teinte Couleur & Superposition (Z-Index) */}
+        <div className="space-y-3">
+          <div className="flex items-center gap-1.5 text-xs font-bold text-[#0B2545]">
+            <Palette className="w-4 h-4 text-purple-600" />
+            <span>Filtre Couleur &amp; Superposition</span>
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-xs text-slate-600 flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={currentCfg.tintEnabled}
+                  onChange={(e) => updateSetting('tintEnabled', e.target.checked)}
+                  className="rounded text-[#0B2545] focus:ring-[#0B2545]"
+                />
+                <span>Appliquer teinte</span>
+              </label>
+              <span className="text-[11px] font-mono font-bold text-slate-700">
+                {currentCfg.tintColor}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={currentCfg.tintColor}
+                disabled={!currentCfg.tintEnabled}
+                onChange={(e) => updateSetting('tintColor', e.target.value)}
+                className="w-9 h-8 rounded border border-slate-300 p-0.5 cursor-pointer disabled:opacity-40"
+              />
+              <div className="flex items-center gap-1">
+                {['#0B2545', '#0066B3', '#D4A017', '#1E293B', '#166534'].map((col) => (
+                  <button
+                    key={col}
+                    type="button"
+                    disabled={!currentCfg.tintEnabled}
+                    onClick={() => updateSetting('tintColor', col)}
+                    style={{ backgroundColor: col }}
+                    className="w-5 h-5 rounded-full border border-white shadow-2xs cursor-pointer disabled:opacity-30"
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between text-xs text-slate-600 mb-1">
+              <span className="flex items-center gap-1">
+                <Layers className="w-3.5 h-3.5 text-slate-400" />
+                <span>Plan / Z-Index</span>
+              </span>
+              <span className="font-mono font-bold text-slate-900">{currentCfg.zIndex}</span>
+            </div>
+            <input
+              type="range"
+              min="-5"
+              max="30"
+              step="1"
+              value={currentCfg.zIndex}
+              onChange={(e) => updateSetting('zIndex', parseInt(e.target.value, 10))}
+              className="w-full accent-purple-600 cursor-pointer"
             />
           </div>
         </div>
+
       </div>
     </div>
   );

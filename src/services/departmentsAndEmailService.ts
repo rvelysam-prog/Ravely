@@ -1447,7 +1447,15 @@ const LS_LOCAL_MAIL_LOGS_KEY = 'atlantic_local_mail_logs_cache_v1';
 export type AssetUnit = 'px' | '%';
 export type HorizontalAlign = 'left' | 'center' | 'right';
 export type VerticalAlign = 'top' | 'middle' | 'bottom';
-export type ImportedAssetKey = 'logo' | 'signature' | 'cachet' | 'filigrane';
+export type ImportedAssetKey =
+  | 'logo'
+  | 'signature'
+  | 'cachet'
+  | 'filigrane'
+  | 'arrierePlan'
+  | 'logoPrestataire'
+  | 'signaturePrestataire'
+  | 'cachetPrestataire';
 
 export interface PdfAssetItemSettings {
   widthValue: number;
@@ -1463,6 +1471,7 @@ export interface PdfAssetItemSettings {
   alignY: VerticalAlign;
   rotation: number;
   zIndex: number;
+  dataUrl?: string;
 }
 
 export interface PdfImportedAssetsConfig {
@@ -1471,6 +1480,9 @@ export interface PdfImportedAssetsConfig {
   cachet: PdfAssetItemSettings;
   filigrane: PdfAssetItemSettings;
   arrierePlan?: PdfAssetItemSettings;
+  logoPrestataire?: PdfAssetItemSettings;
+  signaturePrestataire?: PdfAssetItemSettings;
+  cachetPrestataire?: PdfAssetItemSettings;
   updated_at?: string;
 }
 
@@ -1549,6 +1561,51 @@ export const DEFAULT_PDF_ASSETS_CONFIG: PdfImportedAssetsConfig = {
     alignY: 'middle',
     rotation: 0,
     zIndex: 0
+  },
+  logoPrestataire: {
+    widthValue: 170,
+    widthUnit: 'px',
+    heightValue: 55,
+    heightUnit: 'px',
+    opacity: 100,
+    tintEnabled: false,
+    tintColor: '#0C2366',
+    offsetX: 0,
+    offsetY: 0,
+    alignX: 'left',
+    alignY: 'top',
+    rotation: 0,
+    zIndex: 10
+  },
+  signaturePrestataire: {
+    widthValue: 130,
+    widthUnit: 'px',
+    heightValue: 68,
+    heightUnit: 'px',
+    opacity: 100,
+    tintEnabled: false,
+    tintColor: '#0C2366',
+    offsetX: 0,
+    offsetY: 0,
+    alignX: 'center',
+    alignY: 'middle',
+    rotation: 0,
+    zIndex: 12
+  },
+  cachetPrestataire: {
+    widthValue: 155,
+    widthUnit: 'px',
+    heightValue: 84,
+    heightUnit: 'px',
+    opacity: 100,
+    tintEnabled: false,
+    tintColor: '#1E3A8A',
+    offsetX: 0,
+    offsetY: 0,
+    alignX: 'center',
+    alignY: 'middle',
+    rotation: 0,
+    zIndex: 11
   }
 };
 
@@ -1614,6 +1671,9 @@ export function normalizePdfAssetsConfig(
     cachet: sanitizeAssetItem(raw?.cachet, DEFAULT_PDF_ASSETS_CONFIG.cachet),
     filigrane: sanitizeAssetItem(raw?.filigrane, DEFAULT_PDF_ASSETS_CONFIG.filigrane),
     arrierePlan: sanitizeAssetItem(raw?.arrierePlan, DEFAULT_PDF_ASSETS_CONFIG.arrierePlan || DEFAULT_PDF_ASSETS_CONFIG.filigrane),
+    logoPrestataire: sanitizeAssetItem(raw?.logoPrestataire, DEFAULT_PDF_ASSETS_CONFIG.logoPrestataire || DEFAULT_PDF_ASSETS_CONFIG.logo),
+    signaturePrestataire: sanitizeAssetItem(raw?.signaturePrestataire, DEFAULT_PDF_ASSETS_CONFIG.signaturePrestataire || DEFAULT_PDF_ASSETS_CONFIG.signature),
+    cachetPrestataire: sanitizeAssetItem(raw?.cachetPrestataire, DEFAULT_PDF_ASSETS_CONFIG.cachetPrestataire || DEFAULT_PDF_ASSETS_CONFIG.cachet),
     updated_at: raw?.updated_at || new Date().toISOString()
   };
 }

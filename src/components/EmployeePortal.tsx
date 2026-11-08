@@ -31,6 +31,15 @@ import {
   formatSalaryContract,
   generateEmployeeQrDataUrl
 } from '../services/contractPdfGenerator';
+import {
+  getSavedCustomCachet,
+  getSavedCustomFiligrane,
+  getSavedCustomLogo,
+  getSavedCustomSignature,
+  getSavedPdfAssetsConfig,
+  normalizePdfAssetsConfig,
+  PdfImportedAssetsConfig
+} from '../services/departmentsAndEmailService';
 
 interface EmployeePortalProps {
   settings: SiteSettings;
@@ -450,6 +459,13 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
   const displayPhoto = activeEmployee.photo || activeEmployee.photo_url;
   const point2HebergementText = buildHebergementPoint2Text(activeEmployee);
 
+  const assetsConfig: PdfImportedAssetsConfig = normalizePdfAssetsConfig(getSavedPdfAssetsConfig());
+  const effectiveLogo = activeEmployee.logo_url || getSavedCustomLogo() || CONTRACT_STATIC_ASSETS.logoAtlantic;
+  const effectiveSignature = activeEmployee.signature_url || getSavedCustomSignature() || CONTRACT_STATIC_ASSETS.signature;
+  const effectiveCachet = activeEmployee.cachet_url || getSavedCustomCachet() || CONTRACT_STATIC_ASSETS.cachet;
+  const effectiveFiligrane = activeEmployee.filigrane_url || getSavedCustomFiligrane() || CONTRACT_STATIC_ASSETS.blasonOriginal;
+  const effectiveArrierePlan = assetsConfig.arrierePlan?.dataUrl || '';
+
   return (
     <div
       className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 space-y-8 protected-contract-viewer no-print-contract"
@@ -673,6 +689,40 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
                 style={{ fontSize: `${zoomLevel}%` }}
                 className="max-w-[794px] mx-auto bg-white text-black shadow-2xl border border-slate-300 relative overflow-hidden"
               >
+                {/* Arrière-plan importé personnalisé */}
+                {effectiveArrierePlan && (
+                  <div
+                    aria-hidden="true"
+                    className="absolute inset-0 pointer-events-none select-none z-0"
+                    style={{
+                      backgroundImage: `url(${effectiveArrierePlan})`,
+                      backgroundSize: 'cover',
+                      backgroundPosition: 'center',
+                      opacity: (assetsConfig.arrierePlan?.opacity ?? 20) / 100
+                    }}
+                  />
+                )}
+
+                {/* Filigrane / Blason personnalisé au centre */}
+                {effectiveFiligrane && (
+                  <div
+                    aria-hidden="true"
+                    className="absolute inset-0 pointer-events-none flex items-center justify-center select-none z-0"
+                    style={{
+                      transform: `translate(${assetsConfig.filigrane?.offsetX || 0}px, ${assetsConfig.filigrane?.offsetY || 0}px) rotate(${assetsConfig.filigrane?.rotation || 0}deg)`
+                    }}
+                  >
+                    <img
+                      src={effectiveFiligrane}
+                      alt="Filigrane officiel"
+                      className="max-w-[420px] max-h-[520px] object-contain"
+                      style={{
+                        opacity: (assetsConfig.filigrane?.opacity ?? 15) / 100
+                      }}
+                    />
+                  </div>
+                )}
+
                 {/* Rule 1: Quasi-invisible watermark "ATLANTICLAND TRANSPORT LTD" on white background */}
                 <div
                   aria-hidden="true"
@@ -690,14 +740,18 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
 
                 {/* Main A4 Content Layer with strict 20mm horizontal margins (Rule 4) */}
                 <div className="relative z-10 px-6 sm:px-[20mm] pt-6 pb-16 space-y-6 break-words">
-                  {/* Rule 2: Top Header using ONLY logo-atlantic.png (left), logo-canada.png (right), and blason original.png */}
+                  {/* Rule 2: Top Header using Logo officiel (left), logo-canada.png (right), and blason */}
                   <div className="grid grid-cols-1 sm:grid-cols-12 items-end gap-3 pb-3 border-b-2 border-black">
                     <div className="sm:col-span-4 flex flex-col items-start">
                       <img
-                        src={CONTRACT_STATIC_ASSETS.logoAtlantic}
+                        src={effectiveLogo}
                         alt="Atlantic Transport Logo"
                         referrerPolicy="no-referrer"
                         className="h-14 w-auto object-contain mb-1"
+                        style={{
+                          opacity: (assetsConfig.logo?.opacity ?? 100) / 100,
+                          transform: `translate(${assetsConfig.logo?.offsetX || 0}px, ${assetsConfig.logo?.offsetY || 0}px) rotate(${assetsConfig.logo?.rotation || 0}deg)`
+                        }}
                         draggable={false}
                       />
                       <div className="text-[11.5px] leading-snug font-serif text-[#2E7D32]">
@@ -724,7 +778,7 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
                         draggable={false}
                       />
                       <img
-                        src={CONTRACT_STATIC_ASSETS.blasonOriginal}
+                        src={effectiveFiligrane}
                         alt="Blason officiel"
                         referrerPolicy="no-referrer"
                         className="h-11 sm:h-12 w-auto object-contain"
@@ -1084,17 +1138,25 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
                             </span>
                           </div>
                           <img
-                            src={CONTRACT_STATIC_ASSETS.cachet}
+                            src={effectiveCachet}
                             alt="Cachet officiel"
                             referrerPolicy="no-referrer"
                             className="absolute top-0 right-2 w-36 h-36 object-contain select-none pointer-events-none"
+                            style={{
+                              opacity: (assetsConfig.cachet?.opacity ?? 90) / 100,
+                              transform: `translate(${assetsConfig.cachet?.offsetX || 0}px, ${assetsConfig.cachet?.offsetY || 0}px) rotate(${assetsConfig.cachet?.rotation || 0}deg)`
+                            }}
                             draggable={false}
                           />
                           <img
-                            src={CONTRACT_STATIC_ASSETS.signature}
+                            src={effectiveSignature}
                             alt="Signature Directeur"
                             referrerPolicy="no-referrer"
                             className="absolute top-3 left-2 w-44 h-32 object-contain select-none pointer-events-none"
+                            style={{
+                              opacity: (assetsConfig.signature?.opacity ?? 100) / 100,
+                              transform: `translate(${assetsConfig.signature?.offsetX || 0}px, ${assetsConfig.signature?.offsetY || 0}px) rotate(${assetsConfig.signature?.rotation || 0}deg)`
+                            }}
                             draggable={false}
                           />
                         </div>
@@ -1102,13 +1164,17 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
                     </div>
                   </div>
 
-                  {/* Bottom-Right logo-atlantic.png just above black footer bar */}
+                  {/* Bottom-Right Logo officiel just above black footer bar */}
                   <div className="flex justify-end pt-2">
                     <img
-                      src={CONTRACT_STATIC_ASSETS.logoAtlantic}
+                      src={effectiveLogo}
                       alt="Atlantic Transport"
                       referrerPolicy="no-referrer"
                       className="h-12 w-auto object-contain"
+                      style={{
+                        opacity: (assetsConfig.logo?.opacity ?? 100) / 100,
+                        transform: `translate(${assetsConfig.logo?.offsetX || 0}px, ${assetsConfig.logo?.offsetY || 0}px) rotate(${assetsConfig.logo?.rotation || 0}deg)`
+                      }}
                       draggable={false}
                     />
                   </div>

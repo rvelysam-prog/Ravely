@@ -134,9 +134,20 @@ export const PosteInputWithAnalyze: React.FC<PosteInputWithAnalyzeProps> = ({
               </span>
             </div>
             <p className="mt-0.5 text-[10px] text-gray-700">
-              Département : <span className="font-semibold">{analysisResult.poste.departement}</span> · 6 missions générées · Rémunération :{' '}
-              <span className="font-semibold">{analysisResult.poste.salaireHoraireDefaut.toFixed(2)} $ CAD/h</span> ({analysisResult.poste.salaireMensuelDefaut.toLocaleString('fr-CA')} $ CAD/mois)
+              Département : <span className="font-semibold text-[#0B2545]">{analysisResult.poste.departement}</span>
             </p>
+            <p className="mt-0.5 text-[10px] text-gray-700">
+              Fourchette salariale identifiée :{' '}
+              <span className="font-bold text-emerald-800">
+                {analysisResult.poste.fourchetteTexte ||
+                  `${analysisResult.poste.salaireHoraireDefaut.toFixed(2)} $ CAD/h (${analysisResult.poste.salaireMensuelDefaut.toLocaleString('fr-CA')} $ CAD/mois)`}
+              </span>
+            </p>
+            {analysisResult.poste.periodeReference && (
+              <p className="mt-0.5 text-[9px] text-slate-500 font-mono">
+                {analysisResult.poste.periodeReference} · 6 missions opérationnelles strictes
+              </p>
+            )}
           </div>
         </div>
       )}

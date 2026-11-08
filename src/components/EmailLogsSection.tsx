@@ -127,7 +127,7 @@ export const EmailLogsSection: React.FC = () => {
         departement: OFFICIAL_DEPARTMENTS[1].name,
         manager: 'ANTOINE FORESTIN',
         matricule: testMatricule,
-        type_contrat: 'Contrat à Durée Déterminée (CDI) de 2 ans',
+        type_contrat: 'Contrat à Durée Déterminée (CDI)',
         date_embauche: '2027-01-04',
         date_etablissement: todayIso,
         salaire_horaire: '22',

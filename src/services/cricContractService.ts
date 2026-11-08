@@ -1,7 +1,11 @@
 import { jsPDF } from 'jspdf';
 import { SiteSettings } from '../types';
 import { loadStaticImageAsPngDataUrl, CONTRACT_STATIC_ASSETS } from './contractPdfGenerator';
-import { getSavedCustomCachet, getSavedCustomSignature } from './departmentsAndEmailService';
+import {
+  getSavedCustomCachet,
+  getSavedCustomSignature,
+  PdfImportedAssetsConfig
+} from './departmentsAndEmailService';
 
 /**
  * Liste officielle des Prestataires / Cabinets CRIC partenaires pré-configurés
@@ -184,6 +188,7 @@ export interface CricContractVariables {
   signatureEmployeurUrl?: string;
   cachetEmployeurUrl?: string;
   filigraneEmployeurUrl?: string;
+  arrierePlanUrl?: string;
 
   logoPrestataireUrl?: string;
   signaturePrestataireUrl?: string;
@@ -1068,10 +1073,21 @@ export async function generateModel2ContratPdf(
  * Génère le template e-mail HTML 100% responsive compatible Gmail, Outlook et Kit CMS
  * avec préservation absolue des visuels importés (logos, signatures, cachets, filigranes)
  */
+export interface CricMaquettismeOptions {
+  customPrimaryColor?: string;
+  customAccentColor?: string;
+  customBgColor?: string;
+  customContainerBgColor?: string;
+  showWatermark?: boolean;
+  showBackgroundTexture?: boolean;
+}
+
 export function generateCricContractResponsiveEmailHtml(
   v: CricContractVariables,
   modelChoice: 'model1' | 'model2',
-  designVariation = 0
+  designVariation = 0,
+  assetsConfig?: PdfImportedAssetsConfig,
+  maquettisme?: CricMaquettismeOptions
 ): string {
   const isModel1 = modelChoice === 'model1';
   const title = isModel1
@@ -1081,6 +1097,7 @@ export function generateCricContractResponsiveEmailHtml(
   const logoUrl = v.logoEmployeurUrl || CONTRACT_STATIC_ASSETS.logoAtlantic;
   const sigEmpUrl = v.signatureEmployeurUrl || CONTRACT_STATIC_ASSETS.signature;
   const cachetEmpUrl = v.cachetEmployeurUrl || CONTRACT_STATIC_ASSETS.cachet;
+  const logoPrestUrl = v.logoPrestataireUrl || '';
   const sigPrestUrl = v.signaturePrestataireUrl || '';
   const cachetPrestUrl = v.cachetPrestataireUrl || '';
 
@@ -1110,6 +1127,38 @@ export function generateCricContractResponsiveEmailHtml(
   ];
   const p = palettes[designVariation % palettes.length];
 
+  const primaryCol = maquettisme?.customPrimaryColor || p.primary;
+  const accentCol = maquettisme?.customAccentColor || p.accent;
+  const outerBg = maquettisme?.customBgColor || '#F1F5F9';
+  const containerBg = maquettisme?.customContainerBgColor || '#FFFFFF';
+
+  // Arrière-plan importé
+  const bgDataUrl = assetsConfig?.arrierePlan?.dataUrl || v.arrierePlanUrl;
+  const bgOpacity = (assetsConfig?.arrierePlan?.opacity ?? 20) / 100;
+  const hasBgTexture = Boolean(bgDataUrl && maquettisme?.showBackgroundTexture !== false);
+
+  // Filigrane importé
+  const filigraneDataUrl = assetsConfig?.filigrane?.dataUrl || v.filigraneEmployeurUrl;
+  const filigraneOpacity = (assetsConfig?.filigrane?.opacity ?? 15) / 100;
+  const hasWatermark = Boolean(filigraneDataUrl && maquettisme?.showWatermark !== false);
+
+  // Dimensions & superpositions
+  const cachetEmpW = assetsConfig?.cachet?.widthValue || 90;
+  const cachetEmpH = assetsConfig?.cachet?.heightValue || 52;
+  const cachetEmpOpacity = (assetsConfig?.cachet?.opacity ?? 100) / 100;
+
+  const sigEmpW = assetsConfig?.signature?.widthValue || 110;
+  const sigEmpH = assetsConfig?.signature?.heightValue || 48;
+  const sigEmpOpacity = (assetsConfig?.signature?.opacity ?? 100) / 100;
+
+  const cachetPrestW = assetsConfig?.cachetPrestataire?.widthValue || 90;
+  const cachetPrestH = assetsConfig?.cachetPrestataire?.heightValue || 52;
+  const cachetPrestOpacity = (assetsConfig?.cachetPrestataire?.opacity ?? 100) / 100;
+
+  const sigPrestW = assetsConfig?.signaturePrestataire?.widthValue || 110;
+  const sigPrestH = assetsConfig?.signaturePrestataire?.heightValue || 48;
+  const sigPrestOpacity = (assetsConfig?.signaturePrestataire?.opacity ?? 100) / 100;
+
   return `<!DOCTYPE html>
 <html lang="fr" xmlns="http://www.w3.org/1999/xhtml">
 <head>
@@ -1117,28 +1166,28 @@ export function generateCricContractResponsiveEmailHtml(
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title}</title>
   <style>
-    body { margin: 0; padding: 0; background-color: #F1F5F9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+    body { margin: 0; padding: 0; background-color: ${outerBg}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
     table { border-collapse: collapse; }
-    .email-container { max-width: 680px; margin: 0 auto; background-color: #FFFFFF; border-radius: 12px; overflow: hidden; border: 1px solid ${p.border}; box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+    .email-container { max-width: 680px; margin: 0 auto; background-color: ${containerBg}; border-radius: 12px; overflow: hidden; border: 1px solid ${p.border}; box-shadow: 0 4px 12px rgba(0,0,0,0.06); position: relative; }
     @media only screen and (max-width: 600px) {
       .email-container { width: 100% !important; border-radius: 0 !important; }
       .col-half { display: block !important; width: 100% !important; margin-bottom: 16px !important; }
     }
   </style>
 </head>
-<body style="margin: 0; padding: 20px 0; background-color: #F1F5F9;">
+<body style="margin: 0; padding: 20px 0; background-color: ${outerBg};">
   <center>
-    <table role="presentation" class="email-container" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width: 680px; background-color: #FFFFFF;">
-      <!-- EN-TÊTE OFFICIEL -->
+    <table role="presentation" class="email-container" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width: 680px; background-color: ${containerBg}; ${hasBgTexture ? `background-image: url('${bgDataUrl}'); background-size: cover; background-position: center;` : ''}">
+      <!-- EN-TÊTE OFFICIEL PERSONNALISÉ -->
       <tr>
-        <td style="padding: 24px 30px; background-color: ${p.primary}; border-bottom: 3px solid ${p.accent};">
+        <td style="padding: 24px 30px; background-color: ${primaryCol}; border-bottom: 3px solid ${accentCol};">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
             <tr>
               <td align="left" valign="middle" style="width: 50%;">
                 ${logoUrl ? `<img src="${logoUrl}" alt="${empNom}" style="max-height: 48px; max-width: 190px; height: auto; display: block;" border="0">` : `<span style="font-size: 18px; font-weight: bold; color: #FFFFFF;">${empNom}</span>`}
               </td>
               <td align="right" valign="middle" style="width: 50%; color: #FFFFFF; font-size: 11px;">
-                <span style="display: block; font-weight: bold; color: ${p.accent}; text-transform: uppercase; letter-spacing: 0.5px;">Accréditation Officielle</span>
+                <span style="display: block; font-weight: bold; color: ${accentCol}; text-transform: uppercase; letter-spacing: 0.5px;">Accréditation Officielle</span>
                 <span style="display: block; color: #E2E8F0; font-family: monospace;">Réf : ${ref}</span>
                 <span style="display: block; color: #94A3B8;">Émis le : ${date}</span>
               </td>
@@ -1150,29 +1199,32 @@ export function generateCricContractResponsiveEmailHtml(
       <!-- TITRE DU DOCUMENT -->
       <tr>
         <td style="padding: 28px 30px 10px 30px;">
-          <h1 style="margin: 0 0 8px 0; font-size: 18px; font-weight: 800; color: ${p.primary}; text-transform: uppercase; letter-spacing: -0.2px; text-align: center;">
+          <h1 style="margin: 0 0 8px 0; font-size: 18px; font-weight: 800; color: ${primaryCol}; text-transform: uppercase; letter-spacing: -0.2px; text-align: center;">
             ${title}
           </h1>
-          <div style="width: 60px; height: 3px; background-color: ${p.accent}; margin: 0 auto 20px auto; border-radius: 2px;"></div>
+          <div style="width: 60px; height: 3px; background-color: ${accentCol}; margin: 0 auto 20px auto; border-radius: 2px;"></div>
           <p style="margin: 0 0 16px 0; font-size: 13px; line-height: 1.6; color: #475569; text-align: justify;">
             <strong>À l'attention du candidat et des autorités compétentes :</strong> La présente atteste des dispositions juridiques et des mandats professionnels officiellement conférés dans le cadre du recrutement international de travailleurs étrangers au Canada.
           </p>
         </td>
       </tr>
 
-      <!-- CARTOUCHE DES PARTIES -->
+      <!-- CARTOUCHE DES PARTIES (AVEC LOGO PRESTATAIRE SI FOURNI) -->
       <tr>
         <td style="padding: 0 30px 20px 30px;">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: ${p.bg}; border: 1px solid ${p.border}; border-radius: 8px; padding: 14px;">
             <tr>
               <td class="col-half" valign="top" style="width: 50%; padding: 8px;">
-                <span style="font-size: 10px; font-weight: bold; color: ${p.primary}; text-transform: uppercase; display: block; margin-bottom: 4px;">1. L'Employeur (Canada)</span>
+                <span style="font-size: 10px; font-weight: bold; color: ${primaryCol}; text-transform: uppercase; display: block; margin-bottom: 4px;">1. L'Employeur (Canada)</span>
                 <span style="font-size: 13px; font-weight: bold; color: #0F172A; display: block;">${empNom}</span>
                 <span style="font-size: 11px; color: #64748B; display: block;">${empAdresse}</span>
                 <span style="font-size: 11px; color: #334155; display: block; margin-top: 4px;">Représentant : <strong>${empRep}</strong> (${empTitre})</span>
               </td>
               <td class="col-half" valign="top" style="width: 50%; padding: 8px;">
-                <span style="font-size: 10px; font-weight: bold; color: ${p.primary}; text-transform: uppercase; display: block; margin-bottom: 4px;">2. Le Prestataire (Cabinet Mandaté)</span>
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                  <span style="font-size: 10px; font-weight: bold; color: ${primaryCol}; text-transform: uppercase; display: block; margin-bottom: 4px;">2. Le Prestataire (Cabinet Mandaté)</span>
+                  ${logoPrestUrl ? `<img src="${logoPrestUrl}" alt="Logo Prestataire" style="max-height: 28px; max-width: 90px; object-contain;" border="0">` : ''}
+                </div>
                 <span style="font-size: 13px; font-weight: bold; color: #0F172A; display: block;">${prestNom}</span>
                 <span style="font-size: 11px; color: #64748B; display: block;">${prestAdresse}</span>
                 <span style="font-size: 11px; color: #334155; display: block; margin-top: 4px;">Mandataire : <strong>${prestRep}</strong> (${prestTitre})</span>
@@ -1187,14 +1239,14 @@ export function generateCricContractResponsiveEmailHtml(
         <td style="padding: 0 30px 20px 30px;">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border: 1px solid #E2E8F0; border-radius: 8px;">
             <tr style="background-color: #F8FAFC;">
-              <td style="padding: 10px 14px; font-size: 12px; font-weight: bold; color: ${p.primary}; border-bottom: 1px solid #E2E8F0;">
+              <td style="padding: 10px 14px; font-size: 12px; font-weight: bold; color: ${primaryCol}; border-bottom: 1px solid #E2E8F0;">
                 DÉTAILS DU POSTE VISÉ &amp; ENCADREMENT
               </td>
             </tr>
             <tr>
               <td style="padding: 14px; font-size: 12px; line-height: 1.7; color: #334155;">
                 • <strong>Intitulé officiel :</strong> ${poste}<br>
-                • <strong>Code CNP (Canada) :</strong> <span style="font-family: monospace; font-weight: bold; color: ${p.primary};">${cnp}</span><br>
+                • <strong>Code CNP (Canada) :</strong> <span style="font-family: monospace; font-weight: bold; color: ${primaryCol};">${cnp}</span><br>
                 • <strong>Cadre réglementaire :</strong> Recrutement direct sans aucuns frais à la charge du candidat (Principe de conformité OIT &amp; LIPR Canada).
               </td>
             </tr>
@@ -1202,7 +1254,7 @@ export function generateCricContractResponsiveEmailHtml(
         </td>
       </tr>
 
-      <!-- DOUBLE SECTION SIGNATURES ET CACHETS OFFICIELS -->
+      <!-- DOUBLE SECTION SIGNATURES ET CACHETS OFFICIELS (EMPLOYEUR & PRESTATAIRE) -->
       <tr>
         <td style="padding: 10px 30px 30px 30px;">
           <p style="font-size: 11px; color: #64748B; margin-bottom: 16px;">
@@ -1213,12 +1265,12 @@ export function generateCricContractResponsiveEmailHtml(
               <!-- Colonne Employeur -->
               <td class="col-half" valign="top" style="width: 50%; padding-right: 12px;">
                 <div style="border: 1px solid #E2E8F0; border-radius: 8px; padding: 14px; background-color: #FFFFFF;">
-                  <span style="font-size: 11px; font-weight: bold; color: ${p.primary}; text-transform: uppercase; display: block;">Pour l'Employeur :</span>
+                  <span style="font-size: 11px; font-weight: bold; color: ${primaryCol}; text-transform: uppercase; display: block;">Pour l'Employeur :</span>
                   <span style="font-size: 12px; font-weight: bold; color: #1E293B; display: block; margin-top: 2px;">${v.signataireNomEmployeur || empRep}</span>
                   <span style="font-size: 10px; color: #64748B; display: block;">${v.signataireTitreEmployeur || empTitre}</span>
                   <div style="margin-top: 10px; min-height: 55px;">
-                    ${cachetEmpUrl ? `<img src="${cachetEmpUrl}" alt="Cachet Employeur" style="max-height: 52px; max-width: 90px; vertical-align: middle; margin-right: 6px;" border="0">` : ''}
-                    ${sigEmpUrl ? `<img src="${sigEmpUrl}" alt="Signature Employeur" style="max-height: 48px; max-width: 110px; vertical-align: middle;" border="0">` : ''}
+                    ${cachetEmpUrl ? `<img src="${cachetEmpUrl}" alt="Cachet Employeur" style="max-height: ${cachetEmpH}px; max-width: ${cachetEmpW}px; opacity: ${cachetEmpOpacity}; vertical-align: middle; margin-right: 6px;" border="0">` : ''}
+                    ${sigEmpUrl ? `<img src="${sigEmpUrl}" alt="Signature Employeur" style="max-height: ${sigEmpH}px; max-width: ${sigEmpW}px; opacity: ${sigEmpOpacity}; vertical-align: middle;" border="0">` : ''}
                   </div>
                 </div>
               </td>
@@ -1226,12 +1278,12 @@ export function generateCricContractResponsiveEmailHtml(
               <!-- Colonne Prestataire -->
               <td class="col-half" valign="top" style="width: 50%; padding-left: 12px;">
                 <div style="border: 1px solid #E2E8F0; border-radius: 8px; padding: 14px; background-color: #FFFFFF;">
-                  <span style="font-size: 11px; font-weight: bold; color: ${p.primary}; text-transform: uppercase; display: block;">Pour le Prestataire :</span>
+                  <span style="font-size: 11px; font-weight: bold; color: ${primaryCol}; text-transform: uppercase; display: block;">Pour le Prestataire :</span>
                   <span style="font-size: 12px; font-weight: bold; color: #1E293B; display: block; margin-top: 2px;">${prestRep}</span>
                   <span style="font-size: 10px; color: #64748B; display: block;">${prestTitre}</span>
                   <div style="margin-top: 10px; min-height: 55px;">
-                    ${cachetPrestUrl ? `<img src="${cachetPrestUrl}" alt="Cachet Prestataire" style="max-height: 52px; max-width: 90px; vertical-align: middle; margin-right: 6px;" border="0">` : ''}
-                    ${sigPrestUrl ? `<img src="${sigPrestUrl}" alt="Signature Prestataire" style="max-height: 48px; max-width: 110px; vertical-align: middle;" border="0">` : ''}
+                    ${cachetPrestUrl ? `<img src="${cachetPrestUrl}" alt="Cachet Prestataire" style="max-height: ${cachetPrestH}px; max-width: ${cachetPrestW}px; opacity: ${cachetPrestOpacity}; vertical-align: middle; margin-right: 6px;" border="0">` : ''}
+                    ${sigPrestUrl ? `<img src="${sigPrestUrl}" alt="Signature Prestataire" style="max-height: ${sigPrestH}px; max-width: ${sigPrestW}px; opacity: ${sigPrestOpacity}; vertical-align: middle;" border="0">` : ''}
                   </div>
                 </div>
               </td>
