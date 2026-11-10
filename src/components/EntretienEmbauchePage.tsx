@@ -16,13 +16,17 @@ import {
   Check,
   Sparkles,
   QrCode,
-  FileCheck
+  FileCheck,
+  ArrowLeft,
+  Download,
+  FileText
 } from 'lucide-react';
 import { SiteSettings, PublicPage } from '../types';
 import {
   TicketEntretienData,
   getInterviewSessionByCode,
-  markInterviewCompleted
+  markInterviewCompleted,
+  generateTicketEntretienPdf
 } from '../services/contractGenerationService';
 import { BrandLogo } from './BrandLogo';
 
@@ -206,9 +210,19 @@ export const EntretienEmbauchePage: React.FC<EntretienEmbauchePageProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 text-xs text-slate-300">
-            <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <span>Connexion cryptée SSL · Système RH Conforme</span>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => onNavigate('accueil')}
+              className="min-h-[40px] px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer border border-white/20"
+            >
+              <ArrowLeft className="w-4 h-4 text-amber-400" />
+              <span>← Retour à l&apos;accueil</span>
+            </button>
+            <div className="hidden sm:flex items-center gap-2 text-xs text-slate-300">
+              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+              <span>Connexion cryptée SSL · Système RH Conforme</span>
+            </div>
           </div>
         </div>
       </div>
@@ -357,6 +371,21 @@ export const EntretienEmbauchePage: React.FC<EntretienEmbauchePageProps> = ({
                     ✓ Entretien d&apos;embauche clôturé
                   </div>
                 )}
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await generateTicketEntretienPdf(session);
+                    } catch (err) {
+                      console.error('Erreur téléchargement ticket:', err);
+                    }
+                  }}
+                  className="w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-[#0B2545] hover:bg-[#134074] text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                >
+                  <Download className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Télécharger mon Ticket (PDF)</span>
+                </button>
               </div>
             </div>
 

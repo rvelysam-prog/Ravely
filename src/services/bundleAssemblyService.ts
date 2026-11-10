@@ -2,9 +2,9 @@ import { jsPDF } from 'jspdf';
 import { SiteSettings } from '../types';
 import { loadStaticImageAsPngDataUrl, CONTRACT_STATIC_ASSETS } from './contractPdfGenerator';
 import { getSavedCustomCachet, getSavedCustomSignature } from './departmentsAndEmailService';
-import { JobOfferData, generateJobOfferPdf } from './jobOfferService';
-import { CricContractVariables, generateModel1AttestationPdf } from './cricContractService';
-import { TicketEntretienData, generateTicketEntretienPdf } from './contractGenerationService';
+import { JobOfferData } from './jobOfferService';
+import { CricContractVariables } from './cricContractService';
+import { TicketEntretienData, generateSmallStackedBarcodeCanvasDataUrl } from './contractGenerationService';
 
 export interface BundleAssemblyData {
   titreDossier: string;
@@ -18,14 +18,25 @@ export interface BundleAssemblyData {
   ticketData: TicketEntretienData;
   logoUrl?: string;
   companyName?: string;
+  selectedStampUrl?: string;
 }
 
+export const STANDARD_BC_BENEFITS = [
+  "Assurance collective santé, soins dentaires, optique & télémédecine payée par l'employeur",
+  "Régime Enregistré d'Épargne-Retraite (REER collectif) avec abondement employeur jusqu'à 5%",
+  "3 semaines de congés payés dès la 1ère année + jours fériés provinciaux et fédéraux rémunérés",
+  "Prime de sécurité routière, performance opérationnelle et assiduité versée chaque semestre",
+  "Allocation annuelle pour bottes de sécurité homologuées CSA et Équipements de Protection Individuelle (EPI)",
+  "Programme d'Aide aux Employés et à leur Famille (PAEF) confidentiel disponible 24/7",
+  "Prise en charge intégrale des formations continues et du renouvellement des permis & cartes professionnelles."
+];
+
 /**
- * Génère le Bundle Assemblé complet au format PDF :
+ * Génère le Bundle Assemblé complet au format PDF de manière 100% vectorielle et structurée :
  * 1. Page de garde stylisée comme une couverture de livre officiel avec le logo employeur
- * 2. Offre d'emploi avec stacked barcode sous la référence
+ * 2. Offre d'emploi avec stacked barcode sous la référence et avantages BC structurés
  * 3. Modèle 1 : Attestation de Mandat de Recrutement International
- * 4. Ticket d'Entretien d'Embauche avec stacked barcode scannable
+ * 4. Ticket d'Entretien d'Embauche avec stacked barcode scannable et tampon d'attestation
  */
 export async function generateAssembledBookBundlePdf(
   bundleData: BundleAssemblyData,
@@ -49,8 +60,12 @@ export async function generateAssembledBookBundlePdf(
   try {
     const rawLogo = bundleData.logoUrl || settings?.logo_url || CONTRACT_STATIC_ASSETS.logoAtlantic;
     logoDataUrl = await loadStaticImageAsPngDataUrl(rawLogo);
-    cachetDataUrl = await loadStaticImageAsPngDataUrl(bundleData.cricVariables.cachetEmployeurUrl || getSavedCustomCachet() || CONTRACT_STATIC_ASSETS.cachet);
-    signatureDataUrl = await loadStaticImageAsPngDataUrl(bundleData.cricVariables.signatureEmployeurUrl || getSavedCustomSignature() || CONTRACT_STATIC_ASSETS.signature);
+    cachetDataUrl = await loadStaticImageAsPngDataUrl(
+      bundleData.selectedStampUrl || bundleData.cricVariables.cachetEmployeurUrl || getSavedCustomCachet() || CONTRACT_STATIC_ASSETS.cachet
+    );
+    signatureDataUrl = await loadStaticImageAsPngDataUrl(
+      bundleData.cricVariables.signatureEmployeurUrl || getSavedCustomSignature() || CONTRACT_STATIC_ASSETS.signature
+    );
   } catch {
     // Ignore error
   }
@@ -58,8 +73,6 @@ export async function generateAssembledBookBundlePdf(
   // =========================================================================
   // PAGE 1 : PAGE DE GARDE / COUVERTURE DE LIVRE PDF
   // =========================================================================
-
-  // Fond bleu marine profond #0B2545
   doc.setFillColor(11, 37, 69);
   doc.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, 'F');
 
@@ -223,42 +236,22 @@ export async function generateAssembledBookBundlePdf(
   );
 
   // =========================================================================
-  // PAGE 2 : OFFRE D’EMPLOI (avec stacked barcode sous référence)
+  // PAGE 2 : OFFRE D’EMPLOI (avec stacked barcode et avantages BC détaillés)
   // =========================================================================
-  const { doc: offerDoc } = await generateJobOfferPdf(bundleData.jobOffer, bundleData.logoUrl);
-  // Transférer la page de l'offre
   doc.addPage();
-  const offerPageCount = offerDoc.getNumberOfPages();
-  for (let p = 1; p <= offerPageCount; p++) {
-    if (p > 1) doc.addPage();
-    // On dessine l'offre sur la page courante
-    // Dans jsPDF, un moyen robuste est de générer les pages via leur méthode respective
-  }
+  await drawJobOfferPageDirect(doc, bundleData.jobOffer, bundleData.logoUrl);
 
   // =========================================================================
   // PAGE 3 : MODÈLE 1 - ATTESTATION DE MANDAT DE RECRUTEMENT INTERNATIONAL
   // =========================================================================
-  const { doc: attestationDoc } = await generateModel1AttestationPdf(bundleData.cricVariables);
+  doc.addPage();
+  await drawAttestationPageDirect(doc, bundleData.cricVariables, bundleData.logoUrl, cachetDataUrl, signatureDataUrl);
 
   // =========================================================================
-  // PAGE 4 : TICKET D'ENTRETIEN D'EMBAUCHE (avec stacked barcode scannable)
+  // PAGE 4 : TICKET D'ENTRETIEN D'EMBAUCHE (avec barcode scannable et tampon)
   // =========================================================================
-  const { doc: ticketDoc } = await generateTicketEntretienPdf(bundleData.ticketData, bundleData.logoUrl);
-
-  // Assemblage propre des flux PDF individuels dans le document final
-  // Pour garantir un rendu vectoriel 100% net de chaque page, nous regénérons chaque page séquentiellement :
-  // Page 2 : Offre
-  doc.setPage(2);
-  // Redessiner le contenu de l'offre sur page 2
-  await drawJobOfferPageDirect(doc, bundleData.jobOffer, bundleData.logoUrl);
-
-  // Page 3 : Attestation
   doc.addPage();
-  await drawAttestationPageDirect(doc, bundleData.cricVariables, bundleData.logoUrl);
-
-  // Page 4 : Ticket
-  doc.addPage();
-  await drawTicketPageDirect(doc, bundleData.ticketData, bundleData.logoUrl);
+  await drawTicketPageDirect(doc, bundleData.ticketData, bundleData.logoUrl, cachetDataUrl);
 
   const cleanCandidat = bundleData.nomCandidat.replace(/[^\w\d]/gi, '_').slice(0, 30);
   const filename = `Bundle_Complet_${cleanCandidat}_${bundleData.referenceDossier}.pdf`;
@@ -268,211 +261,10 @@ export async function generateAssembledBookBundlePdf(
 }
 
 /**
- * Fonctions de dessin direct sur le document unifié
+ * PAGE 2 : OFFRE D'EMPLOI
+ * Remplissage harmonieux et aéré de la page A4 avec les avantages BC complets
  */
 async function drawJobOfferPageDirect(doc: jsPDF, offer: JobOfferData, customLogoUrl?: string) {
-  const PAGE_WIDTH = 210;
-  const PAGE_HEIGHT = 297;
-  const MARGIN_LEFT = 22;
-  const MARGIN_RIGHT = 22;
-  const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT;
-
-  let logoDataUrl = '';
-  try {
-    logoDataUrl = await loadStaticImageAsPngDataUrl(customLogoUrl || CONTRACT_STATIC_ASSETS.logoAtlantic);
-  } catch {}
-
-  doc.setFillColor(255, 255, 255);
-  doc.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, 'F');
-
-  let currentY = 16;
-  if (logoDataUrl) {
-    try {
-      doc.addImage(logoDataUrl, 'PNG', MARGIN_LEFT, currentY, 44, 18);
-    } catch {
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(14);
-      doc.text(offer.companyName, MARGIN_LEFT, currentY + 10);
-    }
-  }
-
-  // Réf & Date
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.setTextColor(100, 116, 139);
-  doc.text(`Réf : ${offer.reference}`, PAGE_WIDTH - MARGIN_RIGHT, currentY + 5, { align: 'right' });
-  doc.text(`Date : ${offer.datePublication}`, PAGE_WIDTH - MARGIN_RIGHT, currentY + 9.5, { align: 'right' });
-
-  currentY += 28;
-
-  // Titre
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(20);
-  doc.setTextColor(0, 102, 179);
-  doc.text('OFFRE D’EMPLOI', PAGE_WIDTH / 2, currentY, { align: 'center' });
-
-  currentY += 10;
-  doc.setFontSize(14);
-  doc.setTextColor(29, 79, 136);
-  doc.text(offer.titrePoste, MARGIN_LEFT, currentY);
-
-  currentY += 4;
-  doc.setDrawColor(203, 213, 225);
-  doc.line(MARGIN_LEFT, currentY, PAGE_WIDTH - MARGIN_RIGHT, currentY);
-
-  currentY += 7;
-
-  // Présentation
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  doc.setTextColor(0, 102, 179);
-  doc.text('Présentation de la société', MARGIN_LEFT, currentY);
-  currentY += 5;
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  doc.setTextColor(30, 41, 59);
-  const pLines = doc.splitTextToSize(offer.presentationSociete, CONTENT_WIDTH);
-  doc.text(pLines, MARGIN_LEFT, currentY);
-  currentY += pLines.length * 4.4 + 5;
-
-  // Description
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  doc.setTextColor(0, 102, 179);
-  doc.text('Description du poste', MARGIN_LEFT, currentY);
-  currentY += 5;
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.8);
-  doc.text(`Mission : ${offer.missionPrincipale}`, MARGIN_LEFT, currentY);
-  currentY += 5;
-
-  for (const m of offer.missionsDetaillees.slice(0, 5)) {
-    doc.text(`• ${m}`, MARGIN_LEFT + 4, currentY);
-    currentY += 4.5;
-  }
-
-  currentY += 3;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  doc.setTextColor(0, 102, 179);
-  doc.text('Rémunération & Normes canadiennes', MARGIN_LEFT, currentY);
-  currentY += 5;
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.8);
-  doc.setTextColor(30, 41, 59);
-  const rLines = doc.splitTextToSize(offer.remuneration, CONTENT_WIDTH);
-  doc.text(rLines, MARGIN_LEFT, currentY);
-
-  // Bas de page
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7.5);
-  doc.setTextColor(148, 163, 184);
-  doc.text(`${offer.companyName} · Page 2 · Offre d’Emploi Réf ${offer.reference}`, MARGIN_LEFT, PAGE_HEIGHT - 8);
-}
-
-async function drawAttestationPageDirect(doc: jsPDF, v: CricContractVariables, customLogoUrl?: string) {
-  const PAGE_WIDTH = 210;
-  const PAGE_HEIGHT = 297;
-  const MARGIN_LEFT = 22;
-  const MARGIN_RIGHT = 22;
-  const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT;
-
-  let logoDataUrl = '';
-  let cachetDataUrl = '';
-  let signatureDataUrl = '';
-  try {
-    logoDataUrl = await loadStaticImageAsPngDataUrl(customLogoUrl || CONTRACT_STATIC_ASSETS.logoAtlantic);
-    cachetDataUrl = await loadStaticImageAsPngDataUrl(v.cachetEmployeurUrl || getSavedCustomCachet() || CONTRACT_STATIC_ASSETS.cachet);
-    signatureDataUrl = await loadStaticImageAsPngDataUrl(v.signatureEmployeurUrl || getSavedCustomSignature() || CONTRACT_STATIC_ASSETS.signature);
-  } catch {}
-
-  doc.setFillColor(255, 255, 255);
-  doc.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, 'F');
-
-  let y = 18;
-  if (logoDataUrl) {
-    try {
-      doc.addImage(logoDataUrl, 'PNG', MARGIN_LEFT, y, 42, 17);
-    } catch {}
-  }
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.setTextColor(11, 37, 69);
-  doc.text('ATTESTATION DE MANDAT OFFICIEL', PAGE_WIDTH - MARGIN_RIGHT, y + 5, { align: 'right' });
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7.5);
-  doc.setTextColor(100, 116, 139);
-  doc.text(`Réf : ${v.referenceEimtOuSuivi}`, PAGE_WIDTH - MARGIN_RIGHT, y + 10, { align: 'right' });
-
-  y += 24;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
-  doc.setTextColor(0, 102, 179);
-  doc.text('ATTESTATION DE MANDAT DE RECRUTEMENT INTERNATIONAL', PAGE_WIDTH / 2, y, { align: 'center' });
-  y += 4;
-  doc.setDrawColor(0, 102, 179);
-  doc.line(MARGIN_LEFT, y, PAGE_WIDTH - MARGIN_RIGHT, y);
-  y += 6;
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.setTextColor(30, 41, 59);
-
-  const intro = `Nous soussignés, ${v.nomEntrepriseCanada}, société constituée selon les lois de ${v.provinceCanadienne}, représentée par ${v.representantNomEmployeur}, ${v.representantTitreEmployeur}, attestons avoir confié un mandat officiel de recrutement au prestataire : ${v.nomPrestataireFrance} (Permis CNESST ${v.permisCnesst}).`;
-  const iLines = doc.splitTextToSize(intro, CONTENT_WIDTH);
-  doc.text(iLines, MARGIN_LEFT, y);
-  y += iLines.length * 4.2 + 6;
-
-  const printSection = (num: string, title: string, text: string) => {
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.setTextColor(0, 102, 179);
-    doc.text(`${num}. ${title}`, MARGIN_LEFT, y);
-    y += 4.5;
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8.3);
-    doc.setTextColor(30, 41, 59);
-    const lines = doc.splitTextToSize(text, CONTENT_WIDTH);
-    doc.text(lines, MARGIN_LEFT, y);
-    y += lines.length * 4 + 4;
-  };
-
-  printSection('1', 'CADRE DU MANDAT & POSTE', `Mandat confié pour le poste de ${v.intitulePoste} (CNP ${v.codeCnp}). Démarche : ${v.typeDemarche} enregistrée sous le numéro ${v.referenceEimtOuSuivi}.`);
-  printSection('2', 'PROTECTION ET RECRUTEMENT ÉTHIQUE', `Démarche 100% gratuite pour le candidat. Aucun frais de recrutement exigible. Supervision légale assurée par ${v.nomProfessionnelImmigration} (CCIC ${v.numeroMembreCcic}).`);
-
-  y += 6;
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.text(`Fait à ${v.villeSignature}, le ${v.dateJour}.`, MARGIN_LEFT, y);
-  y += 6;
-
-  doc.setFont('helvetica', 'bold');
-  doc.text("Pour l'Employeur :", MARGIN_LEFT, y);
-  doc.setFont('helvetica', 'normal');
-  doc.text(`${v.signataireNomEmployeur} - ${v.signataireTitreEmployeur}`, MARGIN_LEFT, y + 4.5);
-
-  if (cachetDataUrl) {
-    try {
-      doc.addImage(cachetDataUrl, 'PNG', MARGIN_LEFT + 60, y - 2, 24, 24);
-    } catch {}
-  }
-  if (signatureDataUrl) {
-    try {
-      doc.addImage(signatureDataUrl, 'PNG', MARGIN_LEFT + 86, y, 32, 16);
-    } catch {}
-  }
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7.5);
-  doc.setTextColor(148, 163, 184);
-  doc.text(`${v.nomEntrepriseCanada} · Page 3 · Attestation officielle de mandat`, MARGIN_LEFT, PAGE_HEIGHT - 8);
-}
-
-async function drawTicketPageDirect(doc: jsPDF, ticket: TicketEntretienData, customLogoUrl?: string) {
   const PAGE_WIDTH = 210;
   const PAGE_HEIGHT = 297;
   const MARGIN_LEFT = 20;
@@ -487,7 +279,296 @@ async function drawTicketPageDirect(doc: jsPDF, ticket: TicketEntretienData, cus
   doc.setFillColor(255, 255, 255);
   doc.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, 'F');
 
-  let y = 20;
+  let currentY = 16;
+  if (logoDataUrl) {
+    try {
+      doc.addImage(logoDataUrl, 'PNG', MARGIN_LEFT, currentY, 46, 19);
+    } catch {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(14);
+      doc.text(offer.companyName, MARGIN_LEFT, currentY + 10);
+    }
+  }
+
+  // Réf & Date & Stacked Barcode à droite
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Réf : ${offer.reference}`, PAGE_WIDTH - MARGIN_RIGHT, currentY + 4, { align: 'right' });
+  doc.text(`Date : ${offer.datePublication}${offer.heurePublication ? ` à ${offer.heurePublication}` : ''}`, PAGE_WIDTH - MARGIN_RIGHT, currentY + 8.5, { align: 'right' });
+
+  // Stacked barcode compact
+  try {
+    const barcodeUrl = await generateSmallStackedBarcodeCanvasDataUrl(offer.reference);
+    if (barcodeUrl) {
+      doc.addImage(barcodeUrl, 'PNG', PAGE_WIDTH - MARGIN_RIGHT - 36, currentY + 11, 36, 10);
+    }
+  } catch {}
+
+  currentY += 26;
+
+  // Titre OFFRE D'EMPLOI
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(18);
+  doc.setTextColor(0, 102, 179);
+  doc.text('OFFRE D’EMPLOI', PAGE_WIDTH / 2, currentY, { align: 'center' });
+
+  currentY += 8;
+  doc.setFontSize(13);
+  doc.setTextColor(29, 79, 136);
+  doc.text(offer.titrePoste, MARGIN_LEFT, currentY);
+
+  currentY += 4;
+  doc.setDrawColor(0, 102, 179);
+  doc.setLineWidth(0.6);
+  doc.line(MARGIN_LEFT, currentY, PAGE_WIDTH - MARGIN_RIGHT, currentY);
+
+  currentY += 8;
+
+  // Présentation de la société
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  doc.setTextColor(0, 102, 179);
+  doc.text('Présentation de la société', MARGIN_LEFT, currentY);
+  currentY += 5;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(30, 41, 59);
+  const pLines = doc.splitTextToSize(offer.presentationSociete, CONTENT_WIDTH);
+  doc.text(pLines, MARGIN_LEFT, currentY);
+  currentY += pLines.length * 4.4 + 6;
+
+  // Description du poste & missions
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  doc.setTextColor(0, 102, 179);
+  doc.text('Description du poste', MARGIN_LEFT, currentY);
+  currentY += 5;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.8);
+  doc.text(`Mission principale : ${offer.missionPrincipale}`, MARGIN_LEFT, currentY);
+  currentY += 5;
+
+  const missions = offer.missionsDetaillees && offer.missionsDetaillees.length > 0
+    ? offer.missionsDetaillees.slice(0, 5)
+    : [
+        "Organiser l'activité quotidienne selon le planning transmis par la direction opérationnelle.",
+        "Respecter scrupuleusement les consignes de sécurité, les procédures internes et la réglementation.",
+        "Assurer le suivi qualitatif des prestations et veiller à l'intégrité du matériel confié.",
+        "Communiquer régulièrement avec la hiérarchie et signaler immédiatement toute anomalie.",
+        "Participer activement à la démarche d'amélioration continue et à la satisfaction client."
+      ];
+
+  for (const m of missions) {
+    doc.text(`• ${m}`, MARGIN_LEFT + 4, currentY);
+    currentY += 4.5;
+  }
+
+  currentY += 4;
+
+  // Section Avantages sociaux & Normes de Colombie-Britannique
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  doc.setTextColor(0, 102, 179);
+  doc.text('Avantages sociaux & Normes de Colombie-Britannique', MARGIN_LEFT, currentY);
+  currentY += 5;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(30, 41, 59);
+
+  const remunSummary = offer.remuneration ||
+    "Rémunération horaire : 28.50 $ à 35.00 $ CAD / heure selon profil et expérience (paie bimensuelle aux deux semaines). Heures supplémentaires majorées à 150% (1,5x) au-delà de 8h/jour ou 40h/semaine (Loi sur les normes d'emploi de la Colombie-Britannique). Avantages sociaux complets : assurance santé & dentaire payée par l'employeur, REER collectif abondé jusqu'à 5%, 3 semaines de congés payés, primes et allocation EPI.";
+
+  const rLines = doc.splitTextToSize(remunSummary, CONTENT_WIDTH);
+  doc.text(rLines, MARGIN_LEFT, currentY);
+  currentY += rLines.length * 4.2 + 5;
+
+  // Les 7 avantages formatés avec coches
+  const benefitsToPrint = STANDARD_BC_BENEFITS;
+  for (const b of benefitsToPrint) {
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(21, 128, 61); // Vert coche
+    doc.text('✓', MARGIN_LEFT + 2, currentY);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(30, 41, 59);
+    doc.setFontSize(8.2);
+    const bLines = doc.splitTextToSize(b, CONTENT_WIDTH - 10);
+    doc.text(bLines, MARGIN_LEFT + 7, currentY);
+    currentY += bLines.length * 4.1 + 1.2;
+  }
+
+  // Bas de page
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(148, 163, 184);
+  doc.text(`${offer.companyName} · Page 2 sur 4 · Offre d’Emploi Réf ${offer.reference}`, MARGIN_LEFT, PAGE_HEIGHT - 8);
+}
+
+/**
+ * PAGE 3 : ATTESTATION DE MANDAT DE RECRUTEMENT INTERNATIONAL
+ */
+async function drawAttestationPageDirect(
+  doc: jsPDF,
+  v: CricContractVariables,
+  customLogoUrl?: string,
+  cachetDataUrl?: string,
+  signatureDataUrl?: string
+) {
+  const PAGE_WIDTH = 210;
+  const PAGE_HEIGHT = 297;
+  const MARGIN_LEFT = 20;
+  const MARGIN_RIGHT = 20;
+  const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT;
+
+  let logoDataUrl = '';
+  try {
+    logoDataUrl = await loadStaticImageAsPngDataUrl(customLogoUrl || CONTRACT_STATIC_ASSETS.logoAtlantic);
+  } catch {}
+
+  doc.setFillColor(255, 255, 255);
+  doc.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, 'F');
+
+  let y = 18;
+  if (logoDataUrl) {
+    try {
+      doc.addImage(logoDataUrl, 'PNG', MARGIN_LEFT, y, 44, 18);
+    } catch {}
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(11, 37, 69);
+  doc.text('ATTESTATION DE MANDAT OFFICIEL', PAGE_WIDTH - MARGIN_RIGHT, y + 5, { align: 'right' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Réf Gouvernementale : ${v.referenceEimtOuSuivi}`, PAGE_WIDTH - MARGIN_RIGHT, y + 10, { align: 'right' });
+
+  y += 26;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.setTextColor(0, 102, 179);
+  doc.text('ATTESTATION DE MANDAT DE RECRUTEMENT INTERNATIONAL', PAGE_WIDTH / 2, y, { align: 'center' });
+  y += 4;
+  doc.setDrawColor(0, 102, 179);
+  doc.setLineWidth(0.6);
+  doc.line(MARGIN_LEFT, y, PAGE_WIDTH - MARGIN_RIGHT, y);
+  y += 8;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(30, 41, 59);
+
+  const intro = `Nous soussignés, ${v.nomEntrepriseCanada}, société constituée selon les lois de ${v.provinceCanadienne}, ayant son siège social au ${v.adresseEntrepriseCanada}, représentée par ${v.representantNomEmployeur}, en sa qualité de ${v.representantTitreEmployeur}, ci-après désignée "l'Employeur",\n\nATTESTONS PAR LA PRÉSENTE :`;
+  const iLines = doc.splitTextToSize(intro, CONTENT_WIDTH);
+  doc.text(iLines, MARGIN_LEFT, y);
+  y += iLines.length * 4.6 + 6;
+
+  const printSection = (num: string, title: string, text: string) => {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.5);
+    doc.setTextColor(0, 102, 179);
+    doc.text(`${num}. ${title}`, MARGIN_LEFT, y);
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(30, 41, 59);
+    const lines = doc.splitTextToSize(text, CONTENT_WIDTH);
+    doc.text(lines, MARGIN_LEFT, y);
+    y += lines.length * 4.2 + 6;
+  };
+
+  printSection(
+    '1',
+    'CADRE DU MANDAT OFFICIEL & IDENTIFICATION DU POSTE',
+    `L'Employeur a officiellement confié un mandat de sourcing et d'assistance au recrutement international au cabinet partenaire ${v.nomPrestataireFrance} (Permis CNESST ${v.permisCnesst}), pour le poste qualifié de ${v.intitulePoste} (Code CNP ${v.codeCnp}). Démarche d'immigration engagée sous le volet : ${v.typeDemarche} (Réf : ${v.referenceEimtOuSuivi}).`
+  );
+
+  printSection(
+    '2',
+    'ENGAGEMENT DE GRATUITÉ POUR LE TRAVAILLEUR ÉTRANGER',
+    `Conformément aux dispositions impératives de la Loi sur l'immigration et la protection des réfugiés (LIPR) et aux normes provinciales du travail au Canada, l'ensemble des frais de recrutement est intégralement et exclusivement pris en charge par l'Employeur. Aucun honoraire ni frais direct ou indirect n'est exigible auprès du candidat.`
+  );
+
+  printSection(
+    '3',
+    'CONFORMITÉ JURIDIQUE & SUPERVISION PROFESSIONNELLE',
+    `La gestion procédurale et la conformité administrative sont encadrées sous la supervision directe du consultant réglementé ou professionnel d'immigration ${v.nomProfessionnelImmigration} (Titulaire du N° Membre CCIC ${v.numeroMembreCcic}).`
+  );
+
+  y += 4;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(`Fait à ${v.villeSignature}, le ${v.dateJour}.`, MARGIN_LEFT, y);
+  y += 8;
+
+  // Blocs de signature
+  doc.setFillColor(248, 250, 252);
+  doc.roundedRect(MARGIN_LEFT, y, 78, 44, 3, 3, 'FD');
+  doc.roundedRect(MARGIN_LEFT + 86, y, 78, 44, 3, 3, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(11, 37, 69);
+  doc.text("Pour l'Employeur (Canada) :", MARGIN_LEFT + 4, y + 6);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.text(`${v.signataireNomEmployeur}`, MARGIN_LEFT + 4, y + 11);
+  doc.text(`${v.signataireTitreEmployeur}`, MARGIN_LEFT + 4, y + 15);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text("Pour le Prestataire (Mandataire) :", MARGIN_LEFT + 90, y + 6);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.text(`${v.representantPrestataireNom}`, MARGIN_LEFT + 90, y + 11);
+  doc.text(`${v.representantPrestataireTitre}`, MARGIN_LEFT + 90, y + 15);
+
+  if (cachetDataUrl) {
+    try {
+      doc.addImage(cachetDataUrl, 'PNG', MARGIN_LEFT + 40, y + 14, 28, 28);
+    } catch {}
+  }
+  if (signatureDataUrl) {
+    try {
+      doc.addImage(signatureDataUrl, 'PNG', MARGIN_LEFT + 6, y + 18, 36, 18);
+    } catch {}
+  }
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(148, 163, 184);
+  doc.text(`${v.nomEntrepriseCanada} · Page 3 sur 4 · Attestation officielle de mandat`, MARGIN_LEFT, PAGE_HEIGHT - 8);
+}
+
+/**
+ * PAGE 4 : TICKET D'ENTRETIEN D'EMBAUCHE
+ */
+async function drawTicketPageDirect(
+  doc: jsPDF,
+  ticket: TicketEntretienData,
+  customLogoUrl?: string,
+  cachetDataUrl?: string
+) {
+  const PAGE_WIDTH = 210;
+  const PAGE_HEIGHT = 297;
+  const MARGIN_LEFT = 20;
+  const MARGIN_RIGHT = 20;
+  const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT;
+
+  let logoDataUrl = '';
+  try {
+    logoDataUrl = await loadStaticImageAsPngDataUrl(customLogoUrl || CONTRACT_STATIC_ASSETS.logoAtlantic);
+  } catch {}
+
+  doc.setFillColor(255, 255, 255);
+  doc.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, 'F');
+
+  let y = 18;
   if (logoDataUrl) {
     try {
       doc.addImage(logoDataUrl, 'PNG', MARGIN_LEFT, y, 44, 18);
@@ -503,26 +584,29 @@ async function drawTicketPageDirect(doc: jsPDF, ticket: TicketEntretienData, cus
   doc.setTextColor(100, 116, 139);
   doc.text(`Réf Candidat : ${ticket.codeIdCandidature}`, PAGE_WIDTH - MARGIN_RIGHT, y + 11, { align: 'right' });
 
-  y += 26;
+  y += 28;
 
-  // Coupon
+  // Coupon encadré d'or
   doc.setDrawColor(212, 160, 23);
   doc.setLineWidth(0.8);
   doc.setFillColor(254, 252, 246);
-  doc.roundedRect(MARGIN_LEFT, y, CONTENT_WIDTH, 120, 4, 4, 'FD');
+  doc.roundedRect(MARGIN_LEFT, y, CONTENT_WIDTH, 140, 4, 4, 'FD');
 
+  // Bandeau bleu en-tête du ticket
   doc.setFillColor(11, 37, 69);
-  doc.roundedRect(MARGIN_LEFT, y, CONTENT_WIDTH, 16, 4, 4, 'F');
-  doc.rect(MARGIN_LEFT, y + 8, CONTENT_WIDTH, 8, 'F');
+  doc.roundedRect(MARGIN_LEFT, y, CONTENT_WIDTH, 18, 4, 4, 'F');
+  doc.rect(MARGIN_LEFT, y + 10, CONTENT_WIDTH, 8, 'F');
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
+  doc.setFontSize(12);
   doc.setTextColor(255, 255, 255);
-  doc.text('TICKET D’ENTRETIEN D’EMBAUCHE OFFICIEL', MARGIN_LEFT + 8, y + 11);
+  doc.text('TICKET D’ENTRETIEN D’EMBAUCHE OFFICIEL', MARGIN_LEFT + 8, y + 12);
 
-  y += 24;
+  y += 26;
+
+  // Détails candidat
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
+  doc.setFontSize(8.5);
   doc.setTextColor(100, 116, 139);
   doc.text('CANDIDAT :', MARGIN_LEFT + 8, y);
   doc.setFontSize(13);
@@ -530,7 +614,7 @@ async function drawTicketPageDirect(doc: jsPDF, ticket: TicketEntretienData, cus
   doc.text(ticket.candidatNom.toUpperCase(), MARGIN_LEFT + 8, y + 6);
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
+  doc.setFontSize(8.5);
   doc.setTextColor(100, 116, 139);
   doc.text('CODE ID CANDIDATURE SÉCURISÉ :', MARGIN_LEFT + 85, y);
   doc.setFontSize(13);
@@ -539,15 +623,48 @@ async function drawTicketPageDirect(doc: jsPDF, ticket: TicketEntretienData, cus
 
   y += 18;
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
+  doc.setFontSize(9);
   doc.setTextColor(51, 65, 85);
-  doc.text(`Poste : ${ticket.posteConcerne} (CNP ${ticket.codeCnp})`, MARGIN_LEFT + 8, y);
-  doc.text(`Modalité : ${ticket.typeEntretien}`, MARGIN_LEFT + 8, y + 5);
-  doc.text(`Date & Heure : ${ticket.dateEntretien} à ${ticket.heureEntretien}`, MARGIN_LEFT + 8, y + 10);
-  doc.text(`Interlocuteur RH : ${ticket.recruteurNom}`, MARGIN_LEFT + 8, y + 15);
+  doc.text(`Poste ciblé : ${ticket.posteConcerne} (Code CNP ${ticket.codeCnp})`, MARGIN_LEFT + 8, y);
+  doc.text(`Département : ${ticket.departement}`, MARGIN_LEFT + 8, y + 6);
+  doc.text(`Modalité retenue : ${ticket.typeEntretien}`, MARGIN_LEFT + 8, y + 12);
+  doc.text(`Date & Heure : ${ticket.dateEntretien} à ${ticket.heureEntretien} (${ticket.fuseauHoraire || 'Heure du Pacifique'})`, MARGIN_LEFT + 8, y + 18);
+  doc.text(`Interlocuteur RH : ${ticket.recruteurNom}`, MARGIN_LEFT + 8, y + 24);
+
+  // Stacked barcode sous les infos
+  try {
+    const barcodeUrl = await generateSmallStackedBarcodeCanvasDataUrl(ticket.codeIdCandidature);
+    if (barcodeUrl) {
+      doc.addImage(barcodeUrl, 'PNG', MARGIN_LEFT + 8, y + 30, 48, 14);
+    }
+  } catch {}
+
+  // Tampon officiel attestant la recevabilité du dossier candidat
+  if (cachetDataUrl) {
+    try {
+      doc.addImage(cachetDataUrl, 'PNG', MARGIN_LEFT + 105, y + 24, 38, 38);
+    } catch {}
+  }
+
+  y += 54;
+
+  // Instructions importantes pour le candidat
+  doc.setFillColor(241, 245, 249);
+  doc.roundedRect(MARGIN_LEFT + 8, y, CONTENT_WIDTH - 16, 26, 3, 3, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(11, 37, 69);
+  doc.text('CONSIGNES D’ENTRETIEN ET D’ACCÈS :', MARGIN_LEFT + 12, y + 6);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.8);
+  doc.setTextColor(71, 85, 105);
+  doc.text('• Veuillez vous munir d’une pièce d’identité valide ainsi que de vos attestations et permis professionnels.', MARGIN_LEFT + 12, y + 12);
+  doc.text('• Ce coupon certifie la recevabilité formelle de votre dossier auprès de la Direction des Ressources Humaines.', MARGIN_LEFT + 12, y + 17);
+  doc.text('• La réussite de cet entretien valide définitivement l’engagement de la procédure de mobilité au Canada.', MARGIN_LEFT + 12, y + 22);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
   doc.setTextColor(148, 163, 184);
-  doc.text(`${ticket.entrepriseNom} · Page 4 · Ticket d’Entretien d’Embauche`, MARGIN_LEFT, PAGE_HEIGHT - 8);
+  doc.text(`${ticket.entrepriseNom} · Page 4 sur 4 · Ticket d’Entretien d’Embauche`, MARGIN_LEFT, PAGE_HEIGHT - 8);
 }

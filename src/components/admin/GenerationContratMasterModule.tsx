@@ -61,7 +61,10 @@ import {
   downloadJobOfferPdf,
   publishJobOffer,
   unpublishJobOffer,
-  getAllAvailablePostes
+  getAllAvailablePostes,
+  generateRandomReference,
+  formatIsoToFrenchDate,
+  CANADIAN_STANDARD_BENEFITS
 } from '../../services/jobOfferService';
 import {
   generateAssembledBookBundlePdf,
@@ -75,12 +78,15 @@ import {
   AssetTabKey
 } from '../common/PanneauReglagesFichiersImportes';
 import { InteractiveDocumentCanvas } from '../common/InteractiveDocumentCanvas';
-import {
-  getSavedPdfAssetsConfig,
-  PdfImportedAssetsConfig,
-  loadPdfAssetsConfigFromFirestore
-} from '../../services/departmentsAndEmailService';
+import { getSavedPdfAssetsConfig, PdfImportedAssetsConfig, loadPdfAssetsConfigFromFirestore } from '../../services/departmentsAndEmailService';
 import { CONTRACT_STATIC_ASSETS } from '../../services/contractPdfGenerator';
+import { ForcusWordEditor } from './ForcusWordEditor';
+import { OfficialStampGeneratorModal } from './OfficialStampGeneratorModal';
+import {
+  CANDIDATE_TICKET_STAMP_PRESETS,
+  OfficialStampConfig,
+  generateStampPngDataUrl
+} from '../../services/stampGeneratorService';
 
 interface GenerationContratMasterModuleProps {
   settings: SiteSettings;
@@ -93,10 +99,17 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
   onOpenInWebmail,
   onEmployeeCreated
 }) => {
-  // Onglets du module maître :
+  // Onglets du module maître (avec 0.1 Éditeur FORCUS Word 2013 en première position) :
   const [activeSubTab, setActiveSubTab] = useState<
-    'prestation' | 'ticket' | 'offre' | 'models5' | 'bundle'
-  >('prestation');
+    'forcus' | 'prestation' | 'ticket' | 'offre' | 'models5' | 'bundle'
+  >('forcus');
+
+  // Modal du générateur de tampon / sceau officiel
+  const [isStampModalOpen, setIsStampModalOpen] = useState(false);
+  const [stampTarget, setStampTarget] = useState<'ticket' | 'employeur' | 'prestataire'>('ticket');
+
+  // Tampon sélectionné pour le ticket candidat
+  const [selectedTicketStampPresetId, setSelectedTicketStampPresetId] = useState<string>('recevable');
 
   // Choix du modèle CRIC : Modèle 1 (Attestation) ou Modèle 2 (Contrat Intégral 8 Articles)
   const [cricModelChoice, setCricModelChoice] = useState<'model1' | 'model2'>('model1');
@@ -404,9 +417,10 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
         </div>
       )}
 
-      {/* NAVIGATION ENTRE LES 5 SOUS-MODULES */}
+      {/* NAVIGATION ENTRE LES 6 MODULES (AVEC 0.1 FORCUS EN PREMIÈRE POSITION) */}
       <div className="bg-slate-100 border-b border-slate-200 px-6 pt-3 flex gap-2 overflow-x-auto">
         {[
+          { id: 'forcus', label: '0.1 Éditeur FORCUS Word 2013', icon: FileText, highlight: true },
           { id: 'prestation', label: '1. Contrat de Prestation CRIC', icon: ShieldCheck },
           { id: 'ticket', label: '2. Ticket d’Entretien (Barcode)', icon: Ticket },
           { id: 'offre', label: '3. Offres d’Emploi & Annonce CNP', icon: Briefcase },
@@ -423,10 +437,12 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
               className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded-t-xl transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
                 isActive
                   ? 'bg-white text-[#0B2545] border-t-2 border-[#0B2545] shadow-xs'
+                  : tab.highlight
+                  ? 'bg-blue-50/80 text-[#2B579A] border-t-2 border-[#2B579A]/40 hover:bg-blue-100/70'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
               }`}
             >
-              <Icon className="w-4 h-4 text-[#0066B3]" />
+              <Icon className={`w-4 h-4 ${tab.highlight ? 'text-[#2B579A]' : 'text-[#0066B3]'}`} />
               <span>{tab.label}</span>
             </button>
           );
@@ -436,25 +452,39 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
       {/* CONTENU PRINCIPAL */}
       <div className="p-6 space-y-6">
         {/* ========================================================================= */}
-        {/* PANNEAU DE RÉGLAGES DES FICHIERS IMPORTÉS (COMMUN À TOUS LES SOUS-MODULES) */}
+        {/* 0.1 SOUS-MODULE : ÉDITEUR DOCUMENTAIRE PROFESSIONNEL FORCUS WORD 2013     */}
         {/* ========================================================================= */}
-        <PanneauReglagesFichiersImportes
-          assetsConfig={assetsConfig}
-          onChangeConfig={setAssetsConfig}
-          onUploadAsset={handleUploadAsset}
-          uploadedAssetUrls={uploadedAssets}
-          title={`Panneau Réglages Fichiers Importés — ${
-            activeSubTab === 'prestation'
-              ? 'Contrat de Prestation CRIC'
-              : activeSubTab === 'ticket'
-              ? 'Ticket d’Entretien'
-              : activeSubTab === 'offre'
-              ? 'Offre d’Emploi CNP'
-              : activeSubTab === 'models5'
-              ? '5 Modèles de Design'
-              : 'Bundle Assemblé'
-          }`}
-        />
+        {activeSubTab === 'forcus' && (
+          <div className="space-y-4">
+            <ForcusWordEditor
+              settings={settings}
+              onOpenInWebmail={handleTransferToWebmail}
+            />
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* PANNEAU DE RÉGLAGES DES FICHIERS IMPORTÉS (COMMUN AUX SOUS-MODULES 1 À 5) */}
+        {/* ========================================================================= */}
+        {activeSubTab !== 'forcus' && (
+          <PanneauReglagesFichiersImportes
+            assetsConfig={assetsConfig}
+            onChangeConfig={setAssetsConfig}
+            onUploadAsset={handleUploadAsset}
+            uploadedAssetUrls={uploadedAssets}
+            title={`Panneau Réglages Fichiers Importés — ${
+              activeSubTab === 'prestation'
+                ? 'Contrat de Prestation CRIC'
+                : activeSubTab === 'ticket'
+                ? 'Ticket d’Entretien'
+                : activeSubTab === 'offre'
+                ? 'Offre d’Emploi CNP'
+                : activeSubTab === 'models5'
+                ? '5 Modèles de Design'
+                : 'Bundle Assemblé'
+            }`}
+          />
+        )}
 
         {/* ========================================================================= */}
         {/* 1. SOUS-MODULE : CONTRAT DE PRESTATION CRIC */}
@@ -1039,6 +1069,7 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
                 triggerCopied('Word (.docx) téléchargé !');
               }}
               onOpenInWebmail={handleTransferToWebmail}
+              onOpenForcusEditor={() => setActiveSubTab('forcus')}
             >
               {/* Contenu visuel en mode Document A4 avec ContentEditable */}
               <div className="space-y-6">
@@ -1135,33 +1166,128 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
         {/* 2. SOUS-MODULE : TICKET D'ENTRETIEN */}
         {/* ========================================================================= */}
         {activeSubTab === 'ticket' && (
-          <div className="space-y-5">
-            <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl flex items-center justify-between">
+          <div className="space-y-6">
+            <div className="bg-amber-50/80 border border-amber-200 p-5 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div>
-                <h4 className="font-bold text-amber-950 text-sm">
-                  Ticket d’Entretien d’Embauche &amp; Stacked Barcode Sécurisé
-                </h4>
-                <p className="text-xs text-amber-800 mt-0.5">
-                  Code ID unique : <span className="font-mono font-bold text-blue-900">{ticket.codeIdCandidature}</span> · Accès scannable immédiat
+                <div className="flex items-center gap-2">
+                  <Ticket className="w-5 h-5 text-amber-700" />
+                  <h4 className="font-bold text-amber-950 text-sm">
+                    Ticket d’Entretien d’Embauche, Stacked Barcode &amp; Sceau Officiel
+                  </h4>
+                </div>
+                <p className="text-xs text-amber-800 mt-1">
+                  Code ID unique : <span className="font-mono font-bold text-blue-900 bg-white px-2 py-0.5 rounded border border-amber-300">{ticket.codeIdCandidature}</span> · Format coupon détachable avec code-barres empilé &amp; tampon d'attestation
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={async () => {
-                  const { doc, filename } = await generateTicketEntretienPdf(ticket, uploadedAssets.logo || settings.logo_url);
-                  doc.save(filename);
-                  triggerCopied('Ticket d’entretien PDF téléchargé !');
-                }}
-                className="px-4 py-2 text-xs font-bold bg-[#0B2545] text-white rounded-xl hover:bg-[#134074] transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
-              >
-                <Download className="w-4 h-4 text-[#D4A017]" />
-                <span>Télécharger Ticket PDF</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStampTarget('ticket');
+                    setIsStampModalOpen(true);
+                  }}
+                  className="px-3.5 py-2 text-xs font-bold bg-white text-slate-800 border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4 text-purple-600" />
+                  <span>Générateur Sceau / Tampon</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const { doc, filename } = await generateTicketEntretienPdf(ticket, uploadedAssets.logo || settings.logo_url);
+                    doc.save(filename);
+                    triggerCopied('Ticket d’entretien PDF téléchargé avec succès !');
+                  }}
+                  className="px-4 py-2 text-xs font-bold bg-[#0B2545] text-white rounded-xl hover:bg-[#134074] transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
+                >
+                  <Download className="w-4 h-4 text-[#D4A017]" />
+                  <span>Télécharger Ticket PDF</span>
+                </button>
+              </div>
+            </div>
+
+            {/* SÉLECTEUR DE TAMPON D'ATTESTATION CANDIDAT (4 MODÈLES) */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h5 className="font-bold text-xs text-slate-900 uppercase tracking-wide">
+                    Modèle de Tampon / Cachet Candidat pour l'Entretien :
+                  </h5>
+                  <p className="text-[11px] text-slate-500">
+                    Sélectionnez un modèle certifié pour marquer immédiatement le statut du candidat sur son coupon
+                  </p>
+                </div>
+                {ticket.tamponDataUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setTicket((prev) => ({ ...prev, tamponDataUrl: undefined }))}
+                    className="text-[10px] text-red-600 hover:underline cursor-pointer"
+                  >
+                    Effacer le tampon
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                {CANDIDATE_TICKET_STAMP_PRESETS.map((preset) => {
+                  const isSelected = selectedTicketStampPresetId === preset.id && Boolean(ticket.tamponDataUrl);
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={async () => {
+                        setSelectedTicketStampPresetId(preset.id);
+                        try {
+                          const dataUrl = await generateStampPngDataUrl({
+                            shape: preset.shape,
+                            inkColor: preset.inkColor,
+                            companyName: settings.company_name || 'ATLANTIC TRANSPORT LTD.',
+                            centerMention: preset.centerMention,
+                            subtitle: preset.subtitle,
+                            emblemType: preset.emblemType,
+                            dateText: new Date().toLocaleDateString('fr-CA', { day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase(),
+                            weatheredEffect: true,
+                            rotation: -3
+                          });
+                          setTicket((prev) => ({
+                            ...prev,
+                            tamponDataUrl: dataUrl
+                          }));
+                          triggerCopied(`Tampon « ${preset.label} » appliqué !`);
+                        } catch (err) {
+                          console.error(err);
+                        }
+                      }}
+                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                        isSelected
+                          ? 'border-[#0066B3] bg-blue-50/80 shadow-xs ring-2 ring-blue-500/20'
+                          : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/50'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span
+                            className="w-3 h-3 rounded-full border border-black/20"
+                            style={{ backgroundColor: preset.inkColor }}
+                          />
+                          {isSelected && <Check className="w-3.5 h-3.5 text-[#0066B3]" />}
+                        </div>
+                        <span className="font-bold text-xs text-slate-900 block">{preset.label}</span>
+                        <span className="text-[10px] text-slate-500 mt-0.5 block">{preset.centerMention}</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-slate-400 mt-2 block">
+                        {preset.shape.toUpperCase()} · {preset.centerMention}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Édition rapide du candidat */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 bg-white border rounded-xl text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 p-4 bg-white border border-slate-200 rounded-xl text-xs">
               <div>
                 <label className="block text-gray-600 font-semibold mb-1">Nom du candidat</label>
                 <input
@@ -1181,48 +1307,120 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
                 />
               </div>
               <div>
-                <label className="block text-gray-600 font-semibold mb-1">Modalité</label>
+                <label className="block text-gray-600 font-semibold mb-1">Heure de l'entretien</label>
                 <input
                   type="text"
+                  value={ticket.heureEntretien}
+                  onChange={(e) => setTicket({ ...ticket, heureEntretien: e.target.value })}
+                  className="w-full px-3 py-1.5 border rounded-lg font-mono"
+                  placeholder="ex: 14:30"
+                />
+              </div>
+              <div>
+                <label className="block text-gray-600 font-semibold mb-1">Modalité</label>
+                <select
                   value={ticket.typeEntretien}
                   onChange={(e) => setTicket({ ...ticket, typeEntretien: e.target.value as any })}
-                  className="w-full px-3 py-1.5 border rounded-lg font-medium"
-                />
+                  className="w-full px-3 py-1.5 border rounded-lg font-medium bg-white"
+                >
+                  <option value="Visioconférence Teams Sécurisée">Visioconférence Teams Sécurisée</option>
+                  <option value="Entretien Présentiel Siège Canada">Entretien Présentiel Siège Canada</option>
+                  <option value="Session Mixte Siège & Visio">Session Mixte Siège &amp; Visio</option>
+                </select>
               </div>
             </div>
 
-            {/* Visuel du Ticket */}
-            <div className="border-2 border-dashed border-[#D4A017] rounded-2xl p-6 bg-[#FEFCF6]">
-              <div className="flex items-center justify-between border-b pb-3 mb-4">
-                <div className="flex items-center gap-2">
+            {/* Visuel du Ticket A4 avec Stacked Barcode & Tampon */}
+            <div className="border-2 border-dashed border-[#D4A017] rounded-2xl p-6 bg-[#FEFCF6] relative overflow-hidden shadow-xs">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between border-b pb-4 mb-4 gap-3">
+                <div className="flex items-center gap-3">
                   <BrandLogo companyName={settings.company_name} customLogoUrl={uploadedAssets.logo || settings.logo_url} size="header" />
                   <div>
-                    <h3 className="font-bold text-gray-900 text-sm">COUPON CONVOCATION ENTRETIEN</h3>
-                    <p className="text-[10px] text-gray-500">Direction des Ressources Humaines</p>
+                    <h3 className="font-bold text-gray-900 text-sm tracking-wide">COUPON CONVOCATION ENTRETIEN</h3>
+                    <p className="text-[11px] text-gray-500">Direction des Ressources Humaines &amp; Mobilité Internationale</p>
                   </div>
                 </div>
                 <div className="text-right">
-                  <span className="text-[10px] text-gray-500 block">Code ID Candidature</span>
-                  <span className="font-mono font-bold text-[#0066B3] text-sm">{ticket.codeIdCandidature}</span>
+                  <span className="text-[10px] text-gray-500 block uppercase font-semibold">Code ID Candidature</span>
+                  <span className="font-mono font-bold text-[#0066B3] text-base">{ticket.codeIdCandidature}</span>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                <div>
-                  <span className="text-gray-500 block text-[11px]">Candidat :</span>
-                  <span className="font-bold text-gray-900">{ticket.candidatNom}</span>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                <div className="space-y-2">
+                  <div>
+                    <span className="text-gray-500 block text-[11px]">Candidat :</span>
+                    <span className="font-bold text-gray-900 text-sm">{ticket.candidatNom}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500 block text-[11px]">Poste visé :</span>
+                    <span className="font-bold text-gray-900">{ticket.posteConcerne} (CNP {ticket.codeCnp})</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500 block text-[11px]">Département :</span>
+                    <span className="font-medium text-gray-800">{ticket.departement}</span>
+                  </div>
                 </div>
-                <div>
-                  <span className="text-gray-500 block text-[11px]">Poste :</span>
-                  <span className="font-bold text-gray-900">{ticket.posteConcerne} (CNP {ticket.codeCnp})</span>
+
+                <div className="space-y-2">
+                  <div>
+                    <span className="text-gray-500 block text-[11px]">Date &amp; Heure :</span>
+                    <span className="font-bold text-gray-900">{ticket.dateEntretien} à {ticket.heureEntretien}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500 block text-[11px]">Modalité :</span>
+                    <span className="font-medium text-gray-900">{ticket.typeEntretien}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500 block text-[11px]">Lieu / Lien d'accès :</span>
+                    <span className="text-slate-600">{ticket.lieuOuLien}</span>
+                  </div>
                 </div>
-                <div>
-                  <span className="text-gray-500 block text-[11px]">Date &amp; Heure :</span>
-                  <span className="font-medium text-gray-900">{ticket.dateEntretien} à {ticket.heureEntretien}</span>
+              </div>
+
+              {/* Zone inférieure : Tampon officiel et Barcode */}
+              <div className="mt-6 pt-4 border-t border-dashed border-amber-300 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  {ticket.tamponDataUrl ? (
+                    <div className="relative group">
+                      <img
+                        src={ticket.tamponDataUrl}
+                        alt="Tampon Candidat"
+                        className="max-h-24 max-w-[140px] object-contain drop-shadow-xs"
+                      />
+                      <span className="text-[9px] text-emerald-700 font-bold block text-center mt-0.5">
+                        Tampon Candidat Apposé
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="w-28 h-20 rounded-xl border border-dashed border-slate-300 flex flex-col items-center justify-center text-center p-2 text-[10px] text-slate-400">
+                      <span>Aucun tampon</span>
+                      <span className="text-[9px] text-blue-600 font-semibold">Choisir ci-dessus</span>
+                    </div>
+                  )}
+
+                  {(uploadedAssets.signature || cricVars.signatureEmployeurUrl) && (
+                    <div className="text-center">
+                      <img
+                        src={uploadedAssets.signature || cricVars.signatureEmployeurUrl}
+                        alt="Signature RH"
+                        className="max-h-12 max-w-[100px] object-contain"
+                      />
+                      <span className="text-[9px] text-slate-500 block">Signature RH</span>
+                    </div>
+                  )}
                 </div>
-                <div>
-                  <span className="text-gray-500 block text-[11px]">Modalité :</span>
-                  <span className="font-medium text-gray-900">{ticket.typeEntretien}</span>
+
+                <div className="bg-white p-2.5 rounded-xl border border-slate-200 text-center">
+                  <div className="font-mono text-[9px] font-bold text-slate-800 tracking-wider mb-1">
+                    ||||| | |||| ||| ||||| || |||
+                  </div>
+                  <span className="font-mono text-[10px] text-slate-500 block">
+                    *{ticket.codeIdCandidature}*
+                  </span>
+                  <span className="text-[9px] text-emerald-700 font-bold block mt-0.5">
+                    ✓ Barcode Scannable EIMT-RH
+                  </span>
                 </div>
               </div>
             </div>
@@ -1233,18 +1431,35 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
         {/* 3. SOUS-MODULE : OFFRES D'EMPLOI & ANNONCE GABARIT CNP */}
         {/* ========================================================================= */}
         {activeSubTab === 'offre' && (
-          <div className="space-y-5">
-            <div className="bg-white border p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-6">
+            <div className="bg-white border border-slate-200 p-5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-2xs">
               <div>
-                <h4 className="font-bold text-gray-900 text-sm">
-                  Offre d’Emploi Officielle (avec Stacked Barcode scannable)
-                </h4>
-                <p className="text-xs text-gray-500">
-                  Réf : {jobOffer.reference} · Code-barres compact sous la référence avec redirection vers l'annonce
+                <div className="flex items-center gap-2">
+                  <Briefcase className="w-5 h-5 text-[#0066B3]" />
+                  <h4 className="font-bold text-gray-900 text-sm">
+                    Offre d’Emploi Officielle &amp; Annonce Normes Colombie-Britannique
+                  </h4>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Réf : <span className="font-mono font-bold text-slate-800">{jobOffer.reference}</span> · Publication avec code-barres scannable et redirection vers le poste
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const newRef = generateRandomReference(jobOffer.departement);
+                    setJobOffer((prev) => ({ ...prev, reference: newRef }));
+                    triggerCopied(`Nouveau N° de référence généré : ${newRef}`);
+                  }}
+                  className="px-3 py-2 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                  title="Générer un numéro de référence aléatoire réaliste selon les standards canadiens"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-[#0066B3]" />
+                  <span>Réf. Aléatoire</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={async () => {
@@ -1263,19 +1478,145 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
                     await publishJobOffer(jobOffer);
                     triggerCopied('Offre d’emploi publiée en direct sur la page « Nos Offres » !');
                   }}
-                  className="px-3.5 py-2 text-xs font-bold bg-[#0066B3] text-white rounded-xl hover:bg-[#00508f] transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  className="px-4 py-2 text-xs font-bold bg-[#0066B3] text-white rounded-xl hover:bg-[#00508f] transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
                 >
                   <Globe className="w-3.5 h-3.5 text-[#D4A017]" />
-                  <span>Publier sur le site public</span>
+                  <span>Publier sur « Nos Offres »</span>
                 </button>
               </div>
             </div>
 
-            <div className="bg-slate-50 border rounded-2xl p-5 text-xs space-y-3 leading-relaxed text-gray-700">
-              <h3 className="font-bold text-base text-[#0066B3]">{jobOffer.titrePoste}</h3>
-              <p><strong>Département :</strong> {jobOffer.departement}</p>
-              <p><strong>Rémunération horaire :</strong> {jobOffer.salaireMin.toFixed(2)} $ à {jobOffer.salaireMax.toFixed(2)} $ CAD / h</p>
-              <p><strong>Description de la mission :</strong> {jobOffer.missionPrincipale}</p>
+            {/* FORMULAIRE COMPLET D'ÉDITION DE L'OFFRE */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-4">
+              <h5 className="font-bold text-xs text-slate-800 uppercase tracking-wide border-b pb-2">
+                Paramètres de publication, Dates &amp; Rémunération selon les normes du Canada
+              </h5>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                {/* Réf & Date */}
+                <div>
+                  <label className="block text-slate-600 font-semibold mb-1">Numéro de référence</label>
+                  <input
+                    type="text"
+                    value={jobOffer.reference}
+                    onChange={(e) => setJobOffer({ ...jobOffer, reference: e.target.value })}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg font-mono font-bold bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-600 font-semibold mb-1">Date de publication</label>
+                  <input
+                    type="date"
+                    value={jobOffer.datePublicationIso || '2026-11-06'}
+                    onChange={(e) => {
+                      const iso = e.target.value;
+                      const formatted = formatIsoToFrenchDate(iso);
+                      setJobOffer({ ...jobOffer, datePublicationIso: iso, datePublication: formatted });
+                    }}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg bg-white"
+                  />
+                </div>
+
+                {/* Salaires horaire */}
+                <div>
+                  <label className="block text-slate-600 font-semibold mb-1">Salaire horaire Min ($ CAD/h)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    value={jobOffer.salaireMin}
+                    onChange={(e) => {
+                      const min = parseFloat(e.target.value) || 0;
+                      setJobOffer({
+                        ...jobOffer,
+                        salaireMin: min,
+                        remuneration: `${min.toFixed(2)} $ à ${jobOffer.salaireMax.toFixed(2)} $ CAD / heure`
+                      });
+                    }}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg font-bold bg-white text-emerald-800"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-600 font-semibold mb-1">Salaire horaire Max ($ CAD/h)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    value={jobOffer.salaireMax}
+                    onChange={(e) => {
+                      const max = parseFloat(e.target.value) || 0;
+                      setJobOffer({
+                        ...jobOffer,
+                        salaireMax: max,
+                        remuneration: `${jobOffer.salaireMin.toFixed(2)} $ à ${max.toFixed(2)} $ CAD / heure`
+                      });
+                    }}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg font-bold bg-white text-emerald-800"
+                  />
+                </div>
+              </div>
+
+              {/* Rémunération mensuelle calculée */}
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between text-xs text-emerald-950 gap-2">
+                <div>
+                  <span className="font-bold">Équivalent Mensuel Estimé (base standard 37.5 h / semaine) : </span>
+                  <span className="font-bold font-mono text-emerald-800">
+                    {Math.round(jobOffer.salaireMin * 162.5).toLocaleString('fr-CA')} $ à{' '}
+                    {Math.round(jobOffer.salaireMax * 162.5).toLocaleString('fr-CA')} $ CAD / mois
+                  </span>
+                </div>
+                <span className="text-[11px] text-emerald-700 bg-emerald-100/70 px-2 py-0.5 rounded font-semibold">
+                  Normes de l'Emploi Colombie-Britannique
+                </span>
+              </div>
+
+              {/* Intitulé & Missions */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div>
+                  <label className="block text-slate-600 font-semibold mb-1">Intitulé officiel du poste</label>
+                  <input
+                    type="text"
+                    value={jobOffer.titrePoste}
+                    onChange={(e) => setJobOffer({ ...jobOffer, titrePoste: e.target.value })}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg font-bold bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-600 font-semibold mb-1">Département assigné</label>
+                  <input
+                    type="text"
+                    value={jobOffer.departement}
+                    onChange={(e) => setJobOffer({ ...jobOffer, departement: e.target.value })}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg bg-white"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-600 font-semibold mb-1 text-xs">Description de la mission principale</label>
+                <textarea
+                  rows={3}
+                  value={jobOffer.missionPrincipale}
+                  onChange={(e) => setJobOffer({ ...jobOffer, missionPrincipale: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs leading-relaxed bg-white"
+                />
+              </div>
+
+              {/* 7 AVANTAGES SOCIAUX CONFORMES COLOMBIE-BRITANNIQUE AVEC CHECKMARKS VERTS */}
+              <div className="pt-3 border-t border-slate-200">
+                <h6 className="font-bold text-xs text-slate-800 mb-2 flex items-center gap-1.5">
+                  <Check className="w-4 h-4 text-emerald-600" />
+                  <span>7 Avantages Sociaux &amp; Normes Légales de Colombie-Britannique :</span>
+                </h6>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                  {CANADIAN_STANDARD_BENEFITS.map((benefit, bIdx) => (
+                    <div key={bIdx} className="flex items-start gap-2 p-2 rounded-lg bg-white border border-slate-200">
+                      <span className="text-emerald-600 font-bold shrink-0 mt-0.5">✓</span>
+                      <span className="text-slate-700 leading-snug">{benefit}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -1370,6 +1711,7 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
                 triggerCopied('Word (.docx) téléchargé !');
               }}
               onOpenInWebmail={handleTransferToWebmail}
+              onOpenForcusEditor={() => setActiveSubTab('forcus')}
             >
               <div
                 style={{
@@ -1527,6 +1869,29 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
           </div>
         )}
       </div>
+
+      {/* MODAL DU GÉNÉRATEUR DE TAMPON & SCEAU OFFICIEL */}
+      <OfficialStampGeneratorModal
+        isOpen={isStampModalOpen}
+        onClose={() => setIsStampModalOpen(false)}
+        settings={settings}
+        initialPresetId={selectedTicketStampPresetId}
+        onApplyStamp={(stampDataUrl) => {
+          if (stampTarget === 'ticket') {
+            setTicket((prev) => ({ ...prev, tamponDataUrl: stampDataUrl }));
+            triggerCopied('Tampon officiel appliqué au Ticket d’entretien !');
+          } else if (stampTarget === 'employeur') {
+            setUploadedAssets((prev) => ({ ...prev, cachet: stampDataUrl }));
+            setCricVars((prev) => ({ ...prev, cachetEmployeurUrl: stampDataUrl }));
+            triggerCopied('Tampon Employeur mis à jour !');
+          } else {
+            setUploadedAssets((prev) => ({ ...prev, cachetPrestataire: stampDataUrl }));
+            setCricVars((prev) => ({ ...prev, cachetPrestataireUrl: stampDataUrl }));
+            triggerCopied('Tampon Prestataire mis à jour !');
+          }
+          setIsStampModalOpen(false);
+        }}
+      />
     </div>
   );
 };

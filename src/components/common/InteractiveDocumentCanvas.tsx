@@ -17,6 +17,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { PdfImportedAssetsConfig, PdfAssetItemSettings } from '../../services/departmentsAndEmailService';
+import { ForcusWordEditor } from '../admin/ForcusWordEditor';
 
 export interface InteractiveCanvasProps {
   title: string;
@@ -37,6 +38,8 @@ export interface InteractiveCanvasProps {
   onDownloadPdf?: () => void;
   onDownloadWord?: () => void;
   onOpenInWebmail?: (html: string) => void;
+  onOpenForcusEditor?: () => void;
+  onTextEdited?: (editedText: string) => void;
   children: React.ReactNode;
 }
 
@@ -50,16 +53,22 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
   onDownloadPdf,
   onDownloadWord,
   onOpenInWebmail,
+  onOpenForcusEditor,
+  onTextEdited,
   children
 }) => {
   // Mode de rendu : 'pdf' (Moteur 2 : PDF Original Layout A4) vs 'email' (Moteur 1 : HTML Email Responsive)
   const [renderEngine, setRenderEngine] = useState<'pdf' | 'email'>('pdf');
+  const [isInPlaceForcusOpen, setIsInPlaceForcusOpen] = useState(false);
 
   // En mode client mail : sélection de la largeur d'écran
   const [emailViewport, setEmailViewport] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
 
   // État de copie du code HTML
   const [copiedHtml, setCopiedHtml] = useState(false);
+
+  // Menu contextuel d'insertion flottant sur double-clic
+  const [floatingMenu, setFloatingMenu] = useState<{ x: number; y: number } | null>(null);
 
   // État de drag pour repositionnement direct à la souris
   const [draggingAssetKey, setDraggingAssetKey] = useState<
@@ -207,6 +216,18 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
 
           {/* Actions de téléchargement et d'envoi */}
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setIsInPlaceForcusOpen(true);
+              }}
+              className="min-h-[34px] px-3 py-1.5 rounded-xl bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-600 hover:to-indigo-600 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
+              title="Ouvrir l'éditeur complet FORCUS Word 2013 directement sur ce document sans quitter le module"
+            >
+              <Edit3 className="w-3.5 h-3.5 text-amber-300" />
+              <span>Éditer avec FORCUS</span>
+            </button>
+
             {onDownloadPdf && (
               <button
                 type="button"
@@ -258,11 +279,68 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
         /* MOTEUR 2 : RENDU VECTORIEL FORMAT PAGE A4 */
         <div className="bg-slate-200/70 p-4 sm:p-8 rounded-2xl flex justify-center overflow-x-auto">
           <div
+            onDoubleClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              setFloatingMenu({
+                x: Math.round(e.clientX - rect.left),
+                y: Math.round(e.clientY - rect.top)
+              });
+            }}
+            onClick={() => {
+              if (floatingMenu) setFloatingMenu(null);
+            }}
             className="w-full max-w-[850px] min-h-[1120px] bg-white text-slate-900 shadow-2xl rounded-sm p-8 sm:p-14 relative border border-slate-300 selection:bg-amber-100"
             style={{
               fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif'
             }}
           >
+            {/* Menu contextuel flottant suite à double-clic sur l'aperçu */}
+            {floatingMenu && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: `${floatingMenu.x}px`,
+                  top: `${floatingMenu.y}px`
+                }}
+                className="bg-slate-900 text-white rounded-xl p-3 shadow-2xl border border-amber-400 z-50 text-xs flex flex-col gap-1.5 min-w-[210px] animate-scale-in"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between border-b border-white/10 pb-1.5 mb-1">
+                  <span className="font-bold text-amber-300">Options d'insertion ici :</span>
+                  <button
+                    type="button"
+                    onClick={() => setFloatingMenu(null)}
+                    className="text-slate-400 hover:text-white"
+                  >
+                    ✕
+                  </button>
+                </div>
+                {onOpenForcusEditor && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFloatingMenu(null);
+                      onOpenForcusEditor();
+                    }}
+                    className="p-1.5 hover:bg-white/10 rounded flex items-center gap-2 text-left"
+                  >
+                    <Edit3 className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Ouvrir dans FORCUS Word</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFloatingMenu(null);
+                    document.execCommand('insertText', false, ' [Texte inséré] ');
+                  }}
+                  className="p-1.5 hover:bg-white/10 rounded flex items-center gap-2 text-left"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Insérer paragraphe ici</span>
+                </button>
+              </div>
+            )}
             {/* Arrière-plan importé / Filigrane blason */}
             {uploadedAssetUrls.arrierePlan && (
               <div
@@ -294,8 +372,18 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
               </div>
             )}
 
-            {/* Contenu principal du document rendu */}
-            <div className="relative z-10">{children}</div>
+            {/* Contenu principal du document rendu avec capture des modifications visuelles */}
+            <div
+              className="relative z-10 outline-none"
+              onInput={(e) => {
+                const target = e.target as HTMLElement;
+                if (onTextEdited) {
+                  onTextEdited(target.innerText || target.innerHTML);
+                }
+              }}
+            >
+              {children}
+            </div>
           </div>
         </div>
       ) : (
@@ -340,6 +428,25 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
                 sandbox="allow-same-origin"
               />
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modale d'édition FORCUS In-Situ (sans quitter le module de travail) */}
+      {isInPlaceForcusOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 animate-fade-in">
+          <div className="w-full max-w-7xl h-[94vh] bg-white rounded-2xl overflow-hidden shadow-2xl flex flex-col border border-slate-700">
+            <ForcusWordEditor
+              isEmbeddedModal={true}
+              initialTitle={title}
+              initialHtmlContent={htmlEmailContent}
+              onApplyToDocument={(newHtml) => {
+                if (onTextEdited) onTextEdited(newHtml);
+                setIsInPlaceForcusOpen(false);
+              }}
+              onClose={() => setIsInPlaceForcusOpen(false)}
+              onOpenInWebmail={onOpenInWebmail}
+            />
           </div>
         </div>
       )}

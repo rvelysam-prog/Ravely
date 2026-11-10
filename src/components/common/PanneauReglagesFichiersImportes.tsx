@@ -12,7 +12,8 @@ import {
   Check,
   Eye,
   Building2,
-  Briefcase
+  Briefcase,
+  Sparkles
 } from 'lucide-react';
 import {
   PdfImportedAssetsConfig,
@@ -20,6 +21,7 @@ import {
   DEFAULT_PDF_ASSETS_CONFIG,
   savePdfAssetsConfigToFirestore
 } from '../../services/departmentsAndEmailService';
+import { removeImageBackground } from '../../services/imageTransparencyService';
 
 export type AssetTabKey =
   | 'logo'
@@ -172,6 +174,25 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
     reader.readAsDataURL(file);
   };
 
+  const handleMakeTransparent = async () => {
+    const src = uploadedAssetUrls[activeTab];
+    if (!src || !onUploadAsset) {
+      setFeedback('Veuillez d’abord importer un fichier pour cet élément.');
+      setTimeout(() => setFeedback(null), 3000);
+      return;
+    }
+    try {
+      setFeedback('Suppression du fond blanc/clair en cours...');
+      const transparentDataUrl = await removeImageBackground(src, { tolerance: 35 });
+      onUploadAsset(activeTab, transparentDataUrl, `${activeTab}_transparent.png`);
+      setFeedback('Fond transparent appliqué avec succès !');
+      setTimeout(() => setFeedback(null), 3500);
+    } catch {
+      setFeedback('Erreur lors du traitement de transparence.');
+      setTimeout(() => setFeedback(null), 3500);
+    }
+  };
+
   return (
     <div className="rounded-2xl border border-slate-300 bg-slate-50 p-4 sm:p-5 space-y-4 shadow-xs">
       {/* Header du panneau */}
@@ -310,16 +331,30 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
             </div>
           </div>
 
-          <label className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-white border border-slate-300 hover:border-[#0B2545] text-xs font-semibold text-slate-700 flex items-center gap-2 cursor-pointer shadow-2xs hover:bg-slate-50 transition-colors shrink-0">
-            <Upload className="w-4 h-4 text-[#0B2545]" />
-            <span>Remplacer ce fichier (PNG/JPG)</span>
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              onChange={handleFileInput}
-              className="hidden"
-            />
-          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            {uploadedAssetUrls[activeTab] && (
+              <button
+                type="button"
+                onClick={handleMakeTransparent}
+                className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer"
+                title="Supprime automatiquement le fond blanc ou clair de ce fichier"
+              >
+                <Sparkles className="w-4 h-4 text-slate-950" />
+                <span>Rendre Fond Transparent</span>
+              </button>
+            )}
+
+            <label className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-white border border-slate-300 hover:border-[#0B2545] text-xs font-semibold text-slate-700 flex items-center gap-2 cursor-pointer shadow-2xs hover:bg-slate-50 transition-colors shrink-0">
+              <Upload className="w-4 h-4 text-[#0B2545]" />
+              <span>Remplacer ce fichier (PNG/JPG)</span>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={handleFileInput}
+                className="hidden"
+              />
+            </label>
+          </div>
         </div>
       )}
 

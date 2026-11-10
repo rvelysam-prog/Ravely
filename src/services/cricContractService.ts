@@ -595,7 +595,8 @@ export function downloadWordDocument(filename: string, title: string, htmlBodyCo
  * Génère le PDF vectoriel ultra-propre pour le Modèle 1 (ATTESTATION DE MANDAT DE RECRUTEMENT)
  */
 export async function generateModel1AttestationPdf(
-  v: CricContractVariables
+  v: CricContractVariables,
+  customVisualText?: string
 ): Promise<{ doc: jsPDF; filename: string; dataUri: string }> {
   const doc = new jsPDF({
     orientation: 'portrait',
@@ -832,7 +833,8 @@ export async function generateModel1AttestationPdf(
  * Génère le PDF vectoriel complet pour le Modèle 2 (CONTRAT DE PRESTATION DE SERVICES - 2 pages)
  */
 export async function generateModel2ContratPdf(
-  v: CricContractVariables
+  v: CricContractVariables,
+  customVisualText?: string
 ): Promise<{ doc: jsPDF; filename: string; dataUri: string }> {
   const doc = new jsPDF({
     orientation: 'portrait',

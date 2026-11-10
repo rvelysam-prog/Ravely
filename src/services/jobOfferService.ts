@@ -17,6 +17,7 @@ export interface JobOfferData {
   reference: string;
   datePublication: string; // ex: "06 Novembre 2026"
   datePublicationIso?: string; // ex: "2026-11-06"
+  heurePublication?: string; // ex: "14:30"
   titrePoste: string;
   departement: string;
   typeContrat: string;

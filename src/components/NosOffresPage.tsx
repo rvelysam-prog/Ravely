@@ -21,7 +21,8 @@ import {
   X,
   Mail,
   Phone,
-  UserCheck
+  UserCheck,
+  ArrowLeft
 } from 'lucide-react';
 import { SiteSettings, PublicPage } from '../types';
 import {
@@ -172,9 +173,19 @@ ${applyForm.message}`
         <div className="absolute inset-0 opacity-15 pointer-events-none bg-[radial-gradient(#D4A017_1px,transparent_1px)] [background-size:24px_24px]" />
         
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-500/15 border border-amber-400/30 text-amber-300 text-xs font-bold uppercase tracking-wider mb-4">
-            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-            <span>Recrutement Officiel &amp; Opportunités au Canada</span>
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <button
+              type="button"
+              onClick={() => onNavigate('accueil')}
+              className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer border border-white/20"
+            >
+              <ArrowLeft className="w-4 h-4 text-amber-400" />
+              <span>← Retour à l&apos;accueil</span>
+            </button>
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-500/15 border border-amber-400/30 text-amber-300 text-xs font-bold uppercase tracking-wider">
+              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+              <span>Recrutement Officiel &amp; Opportunités au Canada</span>
+            </div>
           </div>
 
           <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight text-white max-w-4xl leading-tight">
@@ -401,21 +412,10 @@ ${applyForm.message}`
                   <div className="p-4 bg-slate-50 border-t border-slate-200/80 flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => handleDownloadOfferPdf(offer)}
-                      disabled={isDownloading}
-                      className="flex-1 min-h-[38px] px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-[#0B2545] border border-slate-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-2xs disabled:opacity-50"
-                      title="Télécharger l'offre d'emploi officielle en PDF vectoriel avec cachet et signature"
-                    >
-                      <Download className="w-3.5 h-3.5 text-[#0066B3]" />
-                      <span>{isDownloading ? 'Téléchargement...' : 'Fiche PDF'}</span>
-                    </button>
-
-                    <button
-                      type="button"
                       onClick={() => setSelectedOfferForDetails(offer)}
-                      className="flex-1 min-h-[38px] px-3.5 py-1.5 rounded-xl bg-[#0B2545] hover:bg-[#134074] text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                      className="w-full min-h-[40px] px-4 py-2 rounded-xl bg-[#0B2545] hover:bg-[#134074] text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer shadow-2xs"
                     >
-                      <span>Détails &amp; Postuler</span>
+                      <span>Consulter l'offre &amp; Postuler</span>
                       <ArrowRight className="w-3.5 h-3.5 text-amber-400" />
                     </button>
                   </div>
@@ -554,15 +554,14 @@ ${applyForm.message}`
               </div>
             </div>
 
-            {/* Footer modal : Boutons télécharger et postuler */}
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-3">
+            {/* Footer modal : Bouton postuler */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3">
               <button
                 type="button"
-                onClick={() => handleDownloadOfferPdf(selectedOfferForDetails)}
-                className="px-4 py-2.5 rounded-xl bg-white hover:bg-slate-100 text-[#0B2545] border border-slate-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                onClick={() => setSelectedOfferForDetails(null)}
+                className="px-4 py-2.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-bold text-xs cursor-pointer shadow-2xs"
               >
-                <Download className="w-3.5 h-3.5 text-[#0066B3]" />
-                <span>Télécharger la Fiche Officielle (PDF)</span>
+                Fermer
               </button>
 
               <button
@@ -571,7 +570,7 @@ ${applyForm.message}`
                   setSelectedOfferForApply(selectedOfferForDetails);
                   setSelectedOfferForDetails(null);
                 }}
-                className="px-5 py-2.5 rounded-xl bg-[#0B2545] hover:bg-[#134074] text-white font-bold text-xs flex items-center gap-2 cursor-pointer shadow-xs"
+                className="px-6 py-2.5 rounded-xl bg-[#0B2545] hover:bg-[#134074] text-white font-bold text-xs flex items-center gap-2 cursor-pointer shadow-xs"
               >
                 <span>Postuler à cette offre</span>
                 <Send className="w-3.5 h-3.5 text-amber-400" />

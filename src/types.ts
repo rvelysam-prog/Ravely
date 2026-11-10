@@ -78,6 +78,10 @@ export interface Employee {
   photo: string;
   photo_url: string;
   contrat_pdf_url: string;
+  // Promesse d'embauche liée et persistée
+  promesse_pdf_url?: string;
+  promesse_data?: any;
+  promesse_html?: string;
   has_custom_pdf: boolean;
   must_change_password: boolean;
   is_active: boolean;

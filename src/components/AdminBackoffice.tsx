@@ -31,7 +31,8 @@ import {
   Phone,
   Scissors,
   Sparkles,
-  Briefcase
+  Briefcase,
+  ArrowLeft
 } from 'lucide-react';
 import { ContactMessage, Employee, SiteSettings } from '../types';
 import { BrandLogo } from './BrandLogo';
@@ -102,6 +103,8 @@ import { CompanyContactSettingsModal } from './admin/CompanyContactSettingsModal
 import { DocumentStudioModal } from './admin/DocumentStudioModal';
 import { JobOfferGeneratorModal } from './admin/JobOfferGeneratorModal';
 import { GenerationContratMasterModule } from './admin/GenerationContratMasterModule';
+import { PostulantNouveauMasterModule } from './admin/PostulantNouveauMasterModule';
+import { EmployeePromesseModal } from './admin/EmployeePromesseModal';
 import { BrouillonsTab } from './admin/BrouillonsTab';
 import { NouveauSalarieGenerateurModal } from './admin/NouveauSalarieGenerateurModal';
 import { PosteInputWithAnalyze } from './common/PosteInputWithAnalyze';
@@ -233,6 +236,9 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
   const [deleteModalEmp, setDeleteModalEmp] = useState<Employee | null>(null);
   const [deletingEmp, setDeletingEmp] = useState(false);
 
+  // Promesse d'Embauche Modal (Admin Seul)
+  const [promesseModalEmp, setPromesseModalEmp] = useState<Employee | null>(null);
+
   const [empForm, setEmpForm] = useState({
     civilite: 'Monsieur' as 'Monsieur' | 'Madame',
     nom_complet: '',
@@ -263,6 +269,10 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     password: 'Employe@2026!',
     doc_contact_phone: '+15068022206',
     doc_contact_email: 'atlantictransport.int.contact@ik.me',
+    numero_piece_identite: 'C01294857',
+    contact_urgence: '',
+    manager: 'ANTOINE FORESTIN',
+    ni: 'BC1129970',
     photo_base64: '',
     photo_name: ''
   });
@@ -468,6 +478,10 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       password: 'Employe@2026!',
       doc_contact_phone: getCompanyContactConfig().primaryPhone || '+15068022206',
       doc_contact_email: getCompanyContactConfig().primaryEmail || 'atlantictransport.int.contact@ik.me',
+      numero_piece_identite: 'C01294857',
+      contact_urgence: '',
+      manager: 'ANTOINE FORESTIN',
+      ni: 'BC1129970',
       photo_base64: '',
       photo_name: ''
     });
@@ -527,6 +541,10 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
         emp.doc_contact_phone || getCompanyContactConfig().primaryPhone || '+15068022206',
       doc_contact_email:
         emp.doc_contact_email || getCompanyContactConfig().primaryEmail || 'atlantictransport.int.contact@ik.me',
+      numero_piece_identite: emp.numero_piece_identite || 'C01294857',
+      contact_urgence: emp.contact_urgence || '',
+      manager: emp.manager || 'ANTOINE FORESTIN',
+      ni: emp.ni || 'BC1129970',
       photo_base64: emp.photo || emp.photo_url || '',
       photo_name: ''
     });
@@ -674,6 +692,10 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
         mailDocId: editingEmployee?.mailDocId ?? '',
         doc_contact_phone: empForm.doc_contact_phone.trim(),
         doc_contact_email: empForm.doc_contact_email.trim(),
+        numero_piece_identite: empForm.numero_piece_identite.trim(),
+        contact_urgence: empForm.contact_urgence.trim(),
+        manager: empForm.manager.trim() || 'ANTOINE FORESTIN',
+        ni: empForm.ni.trim() || 'BC1129970',
         responsabilites: getMissionsForPosteOrDepartment(empForm.poste, empForm.departement),
         photo: resolvedPhotoBase64,
         photo_url: resolvedPhotoBase64,
@@ -682,6 +704,8 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
         cachet_url: applyCustomCachetToEmployeeDoc && getSavedCustomCachet() ? getSavedCustomCachet() : '',
         filigrane_url: applyCustomFiligraneToEmployeeDoc && getSavedCustomFiligrane() ? getSavedCustomFiligrane() : '',
         contrat_pdf_url: '',
+        promesse_pdf_url: editingEmployee?.promesse_pdf_url || '',
+        promesse_data: editingEmployee?.promesse_data || undefined,
         has_custom_pdf: true,
         must_change_password: editingEmployee ? editingEmployee.must_change_password : false,
         is_active: editingEmployee ? editingEmployee.is_active : true,
@@ -725,35 +749,37 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             savedEmp.poste,
             savedEmp.departement
           );
-          const promessePdfDataUri = await generatePromesseEmbauchePdfDataUri({
+          const promessePayload = {
             nom_complet: savedEmp.nom_complet,
             date_naissance: savedEmp.date_naissance,
-            sexe: savedEmp.civilite === 'Madame' ? 'Féminin' : 'Masculin',
+            sexe: (savedEmp.civilite === 'Madame' ? 'Féminin' : 'Masculin') as 'Féminin' | 'Masculin',
             nationalite: savedEmp.nationalite,
-            numero_piece_identite: savedEmp.numero_piece_identite || 'C01294857',
+            numero_piece_identite: savedEmp.numero_piece_identite || empForm.numero_piece_identite || 'C01294857',
             telephone: savedEmp.telephone,
             email: savedEmp.email,
             adresse: savedEmp.adresse,
-            contact_urgence: savedEmp.contact_urgence || '',
+            contact_urgence: savedEmp.contact_urgence || empForm.contact_urgence || '',
             poste: savedEmp.poste,
             departement: savedEmp.departement,
-            manager: 'ANTOINE FORESTIN',
+            manager: savedEmp.manager || empForm.manager || 'ANTOINE FORESTIN',
             matricule: savedEmp.matricule,
             type_contrat:
               savedEmp.type_contrat === 'CDD'
                 ? 'Contrat à Durée Déterminée (CDD) de 2 ans'
-                : 'Contrat à Durée Déterminée (CDI)',
+                : 'Contrat à Durée Indéterminée (CDI)',
             date_embauche: savedEmp.date_embauche,
             date_etablissement: savedEmp.date_etablissement || savedEmp.date_signature,
             date_fin: savedEmp.date_fin_cdd,
             salaire_horaire: savedEmp.salaire_horaire || parseFloat(empForm.salaire_horaire) || 28.75,
             lieu_travail: savedEmp.lieu_travail,
             horaire: savedEmp.horaires,
-            ni: savedEmp.ni || 'BC1129970',
+            ni: savedEmp.ni || empForm.ni || 'BC1129970',
             responsabilites: posteMissions,
             company_contact_phone: savedEmp.doc_contact_phone,
             company_contact_email: savedEmp.doc_contact_email
-          });
+          };
+
+          const promessePdfDataUri = await generatePromesseEmbauchePdfDataUri(promessePayload);
 
           // Envoi direct automatique côté frontend avec EmailJS depuis atlantictransport.int.contact@ik.me
           // 100% GRATUIT sans dépendance à Firebase Trigger Email / sans SendGrid / sans forfait Blaze
@@ -782,12 +808,14 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             error: ejsResult.error || null
           });
 
-          // Met à jour le document salarié dans Firestore avec emailEnvoye, emailError et mailDocId
+          // Met à jour le document salarié dans Firestore avec emailEnvoye, emailError, mailDocId et promesse_data
           const empWithEmailStatus: Employee = {
             ...savedEmp,
             emailEnvoye: ejsResult.success,
             emailError: ejsResult.error || '',
-            mailDocId: ejsResult.messageId || `emailjs_${Date.now()}`
+            mailDocId: ejsResult.messageId || `emailjs_${Date.now()}`,
+            promesse_data: promessePayload,
+            promesse_pdf_url: promessePdfDataUri
           };
           await writeEmployeeToFirestore(empWithEmailStatus, true);
           const refreshedAfterMail = await fetchEmployeesFromFirestore();
@@ -805,9 +833,53 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             });
           }
         } else {
+          // Salarié édité : régénérer et persister la promesse d'embauche liée dans Firestore
+          const posteMissions = getMissionsForPosteOrDepartment(
+            savedEmp.poste,
+            savedEmp.departement
+          );
+          const promessePayload = {
+            nom_complet: savedEmp.nom_complet,
+            date_naissance: savedEmp.date_naissance,
+            sexe: (savedEmp.civilite === 'Madame' ? 'Féminin' : 'Masculin') as 'Féminin' | 'Masculin',
+            nationalite: savedEmp.nationalite,
+            numero_piece_identite: savedEmp.numero_piece_identite || empForm.numero_piece_identite || 'C01294857',
+            telephone: savedEmp.telephone,
+            email: savedEmp.email,
+            adresse: savedEmp.adresse,
+            contact_urgence: savedEmp.contact_urgence || empForm.contact_urgence || '',
+            poste: savedEmp.poste,
+            departement: savedEmp.departement,
+            manager: savedEmp.manager || empForm.manager || 'ANTOINE FORESTIN',
+            matricule: savedEmp.matricule,
+            type_contrat:
+              savedEmp.type_contrat === 'CDD'
+                ? 'Contrat à Durée Déterminée (CDD) de 2 ans'
+                : 'Contrat à Durée Indéterminée (CDI)',
+            date_embauche: savedEmp.date_embauche,
+            date_etablissement: savedEmp.date_etablissement || savedEmp.date_signature,
+            date_fin: savedEmp.date_fin_cdd,
+            salaire_horaire: savedEmp.salaire_horaire || parseFloat(empForm.salaire_horaire) || 28.75,
+            lieu_travail: savedEmp.lieu_travail,
+            horaire: savedEmp.horaires,
+            ni: savedEmp.ni || empForm.ni || 'BC1129970',
+            responsabilites: posteMissions,
+            company_contact_phone: savedEmp.doc_contact_phone,
+            company_contact_email: savedEmp.doc_contact_email
+          };
+          const promessePdfDataUri = await generatePromesseEmbauchePdfDataUri(promessePayload);
+          const updatedEmpWithPromesse: Employee = {
+            ...savedEmp,
+            promesse_data: promessePayload,
+            promesse_pdf_url: promessePdfDataUri
+          };
+          await writeEmployeeToFirestore(updatedEmpWithPromesse, true);
+          const refreshed = await fetchEmployeesFromFirestore();
+          setEmployees(refreshed);
+
           setFeedback({
             type: 'success',
-            text: `Salarié ${savedEmp.nom_complet} (${savedEmp.matricule}) mis à jour dans Firestore (ID: ${docId}) et Contrat PDF (${savedEmp.type_contrat}) régénéré.`
+            text: `Salarié ${savedEmp.nom_complet} (${savedEmp.matricule}) mis à jour dans Firestore et Promesse d'Embauche actualisée.`
           });
         }
 
@@ -1329,8 +1401,11 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
               : 'text-slate-700 hover:text-slate-950'
           }`}
         >
-          <FileText className="w-4 h-4 text-amber-400" />
-          <span>Génération Contrat (Prestation, Offres &amp; Tickets)</span>
+          <Sparkles className="w-4 h-4 text-amber-400" />
+          <span>POSTULANT NOUVEAU</span>
+          <span className="text-[10px] font-bold bg-amber-400 text-slate-950 px-1.5 py-0.5 rounded-full">
+            Maître
+          </span>
         </button>
 
         <button
@@ -1439,22 +1514,34 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       </div>
 
       {activeTab === 'promesse' && (
-        <PromesseEmbaucheSection
-          employees={employees}
-          onEmployeesUpdated={(updatedList) => {
-            setEmployees(updatedList);
-            setNextMatricule(getNextMatricule(updatedList));
-          }}
-        />
+        <div className="space-y-4">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+            <button
+              type="button"
+              onClick={() => switchAdminTab('employees')}
+              className="min-h-[40px] px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4 text-amber-500" />
+              <span>← Retour au tableau de bord</span>
+            </button>
+          </div>
+          <PromesseEmbaucheSection
+            employees={employees}
+            onEmployeesUpdated={(updatedList) => {
+              setEmployees(updatedList);
+              setNextMatricule(getNextMatricule(updatedList));
+            }}
+          />
+        </div>
       )}
 
       {activeTab === 'job_offers' && (
-        <GenerationContratMasterModule
+        <PostulantNouveauMasterModule
           settings={settings}
           onOpenInWebmail={(content) => {
             setWebmailInitialContent({
               htmlBody: content,
-              subject: 'Documents Contractuels & Offre Officielle — Atlantic Transport'
+              subject: 'Dossier Postulant & Documents Officiels — Atlantic Transport'
             });
             switchAdminTab('webmail');
           }}
@@ -1463,30 +1550,79 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
             setEmployees(updated);
             setNextMatricule(getNextMatricule(updated));
           }}
+          onBack={() => switchAdminTab('employees')}
         />
       )}
 
       {activeTab === 'drafts' && (
-        <BrouillonsTab
-          onResumeDraft={(draft) => {
-            setGenerateurModalEmployee({
-              nom_complet: draft.nomCandidat || '',
-              poste: draft.poste || '',
-              departement: draft.departement || ''
-            });
-            setIsGenerateurModalOpen(true);
-          }}
-        />
+        <div className="space-y-4">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+            <button
+              type="button"
+              onClick={() => switchAdminTab('employees')}
+              className="min-h-[40px] px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4 text-amber-500" />
+              <span>← Retour au tableau de bord</span>
+            </button>
+          </div>
+          <BrouillonsTab
+            onResumeDraft={(draft) => {
+              setGenerateurModalEmployee({
+                nom_complet: draft.nomCandidat || '',
+                poste: draft.poste || '',
+                departement: draft.departement || ''
+              });
+              setIsGenerateurModalOpen(true);
+            }}
+          />
+        </div>
       )}
 
-      {activeTab === 'mail_logs' && <EmailLogsSection />}
+      {activeTab === 'mail_logs' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+            <button
+              type="button"
+              onClick={() => switchAdminTab('employees')}
+              className="min-h-[40px] px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4 text-amber-500" />
+              <span>← Retour au tableau de bord</span>
+            </button>
+          </div>
+          <EmailLogsSection />
+        </div>
+      )}
 
       {activeTab === 'webmail' && (
-        <InfomaniakWebmailTab initialEmailContent={webmailInitialContent} />
+        <div className="space-y-4">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+            <button
+              type="button"
+              onClick={() => switchAdminTab('employees')}
+              className="min-h-[40px] px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4 text-amber-500" />
+              <span>← Retour au tableau de bord</span>
+            </button>
+          </div>
+          <InfomaniakWebmailTab initialEmailContent={webmailInitialContent} />
+        </div>
       )}
 
       {activeTab === 'badges' && (
-        <div className="space-y-6">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+            <button
+              type="button"
+              onClick={() => switchAdminTab('employees')}
+              className="min-h-[40px] px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4 text-amber-500" />
+              <span>← Retour au tableau de bord</span>
+            </button>
+          </div>
           <div className="bg-white rounded-2xl border border-slate-200 p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm">
             <div>
               <div className="flex items-center gap-2">
@@ -1566,7 +1702,17 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       )}
 
       {activeTab === 'email_code' && (
-        <div className="space-y-6">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+            <button
+              type="button"
+              onClick={() => switchAdminTab('employees')}
+              className="min-h-[40px] px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4 text-amber-500" />
+              <span>← Retour au tableau de bord</span>
+            </button>
+          </div>
           <div className="bg-white rounded-2xl border border-slate-200 p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm">
             <div>
               <div className="flex items-center gap-2">
@@ -1879,6 +2025,16 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                               <Code className="w-3 h-3 text-amber-600" />
                               <span>Code Mail</span>
                             </button>
+                            <span className="text-slate-300">·</span>
+                            <button
+                              type="button"
+                              onClick={() => setPromesseModalEmp(emp)}
+                              className="text-[11px] text-emerald-700 hover:text-emerald-950 inline-flex items-center gap-1 font-bold cursor-pointer"
+                              title="Voir, modifier et télécharger la Promesse d'Embauche officielle (Admin Seul)"
+                            >
+                              <FileText className="w-3 h-3 text-emerald-600" />
+                              <span>Promesse</span>
+                            </button>
                           </div>
                           {onOpenDirectEmployeeLink && (
                             <button
@@ -2054,6 +2210,15 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
                       </button>
                     </div>
 
+                    <button
+                      type="button"
+                      onClick={() => setPromesseModalEmp(emp)}
+                      className="w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-900 border border-emerald-300 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer hover:bg-emerald-100"
+                    >
+                      <FileText className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Promesse d&apos;Embauche (Admin Seul)</span>
+                    </button>
+
                     {onOpenDirectEmployeeLink && (
                       <button
                         type="button"
@@ -2103,15 +2268,23 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
         </div>
       )}
 
-      {/* ====================================================================
-          TAB 2: FICHIER EMPLOYES.JSON (CHAMP "photo" EN BASE64)
-      ==================================================================== */}
       {activeTab === 'json' && (
-        <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
-            <div>
-              <h2 className="font-display font-bold text-xl text-[#0B2545]">
-                Base de données statique : <code className="font-mono text-base">employes.json</code>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+            <button
+              type="button"
+              onClick={() => switchAdminTab('employees')}
+              className="min-h-[40px] px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4 text-amber-500" />
+              <span>← Retour au tableau de bord</span>
+            </button>
+          </div>
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
+              <div>
+                <h2 className="font-display font-bold text-xl text-[#0B2545]">
+                  Base de données statique : <code className="font-mono text-base">employes.json</code>
               </h2>
               <p className="text-xs sm:text-sm text-slate-600 mt-1">
                 Chaque salarié possède sa photo d’identité convertie en Base64 stockée dans le champ <code className="font-mono font-bold text-[#0B2545]">&quot;photo&quot;</code> de <code className="font-mono">employes.json</code>.
@@ -2179,6 +2352,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
               2
             )}
           </pre>
+          </div>
         </div>
       )}
 
@@ -2186,12 +2360,23 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           TAB 3: MODIFIER LE SITE & LOGO
       ==================================================================== */}
       {activeTab === 'cms' && (
-        <form onSubmit={handleSaveCms} className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 space-y-8">
-          <div className="border-b border-slate-200 pb-4">
-            <h2 className="font-display font-bold text-xl text-[#0B2545]">
-              Personnalisation du Site Public &amp; Identité Visuelle
-            </h2>
+        <form onSubmit={handleSaveCms} className="space-y-6">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+            <button
+              type="button"
+              onClick={() => switchAdminTab('employees')}
+              className="min-h-[40px] px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4 text-amber-500" />
+              <span>← Retour au tableau de bord</span>
+            </button>
           </div>
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 space-y-8">
+            <div className="border-b border-slate-200 pb-4">
+              <h2 className="font-display font-bold text-xl text-[#0B2545]">
+                Personnalisation du Site Public &amp; Identité Visuelle
+              </h2>
+            </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
@@ -2304,6 +2489,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
               Enregistrer les modifications
             </button>
           </div>
+          </div>
         </form>
       )}
 
@@ -2312,6 +2498,16 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       ==================================================================== */}
       {activeTab === 'messages' && (
         <div className="space-y-4">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+            <button
+              type="button"
+              onClick={() => switchAdminTab('employees')}
+              className="min-h-[40px] px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4 text-amber-500" />
+              <span>← Retour au tableau de bord</span>
+            </button>
+          </div>
           {messages.length === 0 ? (
             <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center text-sm text-slate-500">
               Aucun message de contact pour le moment.
@@ -3477,6 +3673,29 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           setNextMatricule(getNextMatricule(updated));
         }}
       />
+
+      {/* Modal Promesse d'Embauche - Voir, Modifier & Télécharger (Admin Seul) */}
+      {promesseModalEmp && (
+        <EmployeePromesseModal
+          isOpen={Boolean(promesseModalEmp)}
+          onClose={() => setPromesseModalEmp(null)}
+          employee={promesseModalEmp}
+          settings={settings}
+          onEmployeeUpdated={(updatedEmp) => {
+            const updatedList = employees.map((e) => (e.id === updatedEmp.id ? updatedEmp : e));
+            setEmployees(updatedList);
+            setPromesseModalEmp(updatedEmp);
+          }}
+          onOpenInWebmail={(html) => {
+            setWebmailInitialContent({
+              htmlBody: html,
+              subject: `Promesse d'Embauche — ${promesseModalEmp.nom_complet} (${promesseModalEmp.matricule})`
+            });
+            setPromesseModalEmp(null);
+            switchAdminTab('webmail');
+          }}
+        />
+      )}
     </div>
   );
 };

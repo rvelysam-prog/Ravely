@@ -52,6 +52,8 @@ export interface PromesseEmbaucheData {
   filigrane_data_url?: string;
   assets_config?: PdfImportedAssetsConfig;
   signature_salarie_html?: string;
+  customVisualText?: string;
+  civilite?: 'Monsieur' | 'Madame' | string;
 }
 
 export const DEFAULT_PROMESSE_RESPONSABILITES = [

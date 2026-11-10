@@ -65,6 +65,9 @@ export interface TicketEntretienData {
   urlEntretien: string;
   estConsomme: boolean; // Si true, code désactivé après l'entretien
   dateCreation: string;
+  tamponDataUrl?: string; // Tampon / Sceau d'attestation officiel
+  lieuOuLien?: string; // Lieu ou lien visioconférence
+  statutDossier?: string; // Statut du candidat
 }
 
 export interface AnnonceGabaritData {
@@ -616,7 +619,8 @@ export async function generatePrestationContractPdf(
  */
 export async function generateTicketEntretienPdf(
   ticket: TicketEntretienData,
-  customLogoUrl?: string
+  customLogoUrl?: string,
+  customVisualText?: string
 ): Promise<{ doc: jsPDF; filename: string; dataUri: string }> {
   const doc = new jsPDF({
     orientation: 'portrait',
