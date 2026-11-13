@@ -83,3 +83,77 @@ export async function removeImageBackground(
     img.src = imageSrc;
   });
 }
+
+export interface OptimizeImageOptions {
+  maxDimension?: number;
+  quality?: number;
+  forceJpeg?: boolean;
+}
+
+/**
+ * Lit un fichier image local (PNG/JPG/WebP/SVG), redimensionne proprement si trop grand
+ * pour éviter les dépassements de quota localStorage / Firestore, tout en préservant
+ * la transparence PNG pour logos, signatures et cachets.
+ */
+export async function readAndOptimizeImageFile(
+  file: File,
+  options: OptimizeImageOptions = {}
+): Promise<string> {
+  const maxDim = options.maxDimension ?? 850;
+  const quality = options.quality ?? 0.88;
+
+  const rawDataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result);
+      } else {
+        reject(new Error('Format de fichier non lisible'));
+      }
+    };
+    reader.onerror = () => reject(new Error('Impossible de lire le fichier sélectionné'));
+    reader.readAsDataURL(file);
+  });
+
+  // Si SVG ou petit fichier (< 120 Ko), conserver directement sans perte
+  if (file.type === 'image/svg+xml' || rawDataUrl.length < 160000) {
+    return rawDataUrl;
+  }
+
+  return new Promise<string>((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const w = img.naturalWidth || img.width || 600;
+        const h = img.naturalHeight || img.height || 600;
+        const ratio = Math.min(1, maxDim / Math.max(w, h));
+        const targetW = Math.max(1, Math.round(w * ratio));
+        const targetH = Math.max(1, Math.round(h * ratio));
+
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(rawDataUrl);
+          return;
+        }
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, targetW, targetH);
+
+        const isJpeg = options.forceJpeg || file.type === 'image/jpeg';
+        const optimized = isJpeg
+          ? canvas.toDataURL('image/jpeg', quality)
+          : canvas.toDataURL('image/png');
+
+        resolve(optimized.length < rawDataUrl.length ? optimized : rawDataUrl);
+      } catch {
+        resolve(rawDataUrl);
+      }
+    };
+    img.onerror = () => resolve(rawDataUrl);
+    img.src = rawDataUrl;
+  });
+}
+

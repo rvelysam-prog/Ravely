@@ -13,10 +13,20 @@ import {
   Layers,
   Sparkles,
   Columns,
-  Eye
+  Bold,
+  Italic,
+  Underline,
+  AlignLeft,
+  AlignCenter,
+  AlignJustify,
+  Undo2,
+  Redo2,
+  RotateCcw
 } from 'lucide-react';
+import html2canvas from 'html2canvas-pro';
 import {
   PdfImportedAssetsConfig,
+  PdfAssetItemSettings,
   UploadedAssetUrlsMap
 } from '../../services/departmentsAndEmailService';
 import { ForcusWordEditor } from '../admin/ForcusWordEditor';
@@ -44,7 +54,33 @@ export interface InteractiveCanvasProps {
   onOpenInWebmail?: (html: string) => void;
   onOpenForcusEditor?: () => void;
   onTextEdited?: (editedText: string) => void;
+  onResetText?: () => void;
+  hasCustomText?: boolean;
   children: React.ReactNode;
+}
+
+type CanvasViewMode = 'a4' | 'email' | 'converter';
+
+function buildAssetOverlayStyle(
+  cfg?: PdfAssetItemSettings,
+  defaults: { w?: number; h?: number; opacity?: number } = {}
+): React.CSSProperties {
+  const widthStr = cfg ? `${cfg.widthValue}${cfg.widthUnit || 'px'}` : defaults.w ? `${defaults.w}px` : undefined;
+  const heightStr = cfg ? `${cfg.heightValue}${cfg.heightUnit || 'px'}` : defaults.h ? `${defaults.h}px` : undefined;
+  const opacity = ((cfg?.opacity ?? defaults.opacity ?? 100) as number) / 100;
+  const ox = cfg?.offsetX ?? 0;
+  const oy = cfg?.offsetY ?? 0;
+  const rot = cfg?.rotation ?? 0;
+  const filter = cfg?.tintEnabled && cfg?.tintColor ? 'grayscale(100%) contrast(1.1)' : undefined;
+
+  return {
+    maxWidth: widthStr,
+    maxHeight: heightStr,
+    opacity,
+    transform: ox !== 0 || oy !== 0 || rot !== 0 ? `translate(${ox}px, ${oy}px) rotate(${rot}deg)` : undefined,
+    zIndex: cfg?.zIndex,
+    filter
+  };
 }
 
 export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
@@ -60,13 +96,14 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
   onOpenInWebmail,
   onOpenForcusEditor,
   onTextEdited,
+  onResetText,
+  hasCustomText = false,
   children
 }) => {
-  // Moteur 2 (PDF A4 Original) vs Moteur 1 (Client Mail Responsive)
-  const [renderEngine, setRenderEngine] = useState<'pdf' | 'email'>('pdf');
-  // Mode d'affichage : Vue 3 Fenêtres (Canvas + Aperçu Email + Code Source) vs Feuille A4 Directe (pour édition texte directe)
-  const [workspaceMode, setWorkspaceMode] = useState<'three_panels' | 'a4_direct_edit'>('three_panels');
+  // Vue par défaut : Document A4 Direct (immédiatement lisible et éditable pour les débutants)
+  const [viewMode, setViewMode] = useState<CanvasViewMode>('a4');
   const [captureSignal, setCaptureSignal] = useState<number>(1);
+  const [preCapturedA4DataUrl, setPreCapturedA4DataUrl] = useState<string | null>(null);
   const [compiledEmailHtml, setCompiledEmailHtml] = useState<string>(htmlEmailContent);
 
   const [isInPlaceForcusOpen, setIsInPlaceForcusOpen] = useState(false);
@@ -75,6 +112,7 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
   const [floatingMenu, setFloatingMenu] = useState<{ x: number; y: number } | null>(null);
 
   const a4SheetRef = useRef<HTMLDivElement | null>(null);
+  const editableWrapperRef = useRef<HTMLDivElement | null>(null);
 
   const activeArrierePlan = exclusiveVisualSet?.arrierePlan || uploadedAssetUrls.arrierePlan;
   const activeFiligrane = exclusiveVisualSet?.filigrane || uploadedAssetUrls.filigrane;
@@ -92,212 +130,311 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
       setCopiedHtml(true);
       setTimeout(() => setCopiedHtml(false), 3000);
     } catch {
-      // Fallback
+      // ignore
+    }
+  };
+
+  // Capture la page A4 tant qu'elle est affichée puis ouvre le Convertisseur 3 Fenêtres sans écran vide
+  const handleSwitchToConverter = async () => {
+    if (a4SheetRef.current && viewMode === 'a4') {
+      try {
+        const rendered = await html2canvas(a4SheetRef.current, {
+          scale: 1.4,
+          useCORS: true,
+          logging: false,
+          backgroundColor: '#ffffff'
+        });
+        if (rendered.width > 0 && rendered.height > 0) {
+          setPreCapturedA4DataUrl(rendered.toDataURL('image/png'));
+        }
+      } catch {
+        // Fallback géré par VisualHtmlEmailConverter
+      }
+    }
+    setViewMode('converter');
+    setCaptureSignal((s) => s + 1);
+  };
+
+  const applyRichCommand = (command: string) => {
+    try {
+      document.execCommand(command, false);
+      if (editableWrapperRef.current && onTextEdited) {
+        onTextEdited(editableWrapperRef.current.innerText || editableWrapperRef.current.innerHTML);
+      }
+    } catch {
+      // ignore
     }
   };
 
   return (
     <div className="space-y-4">
-      {/* BARRE DE CONTRÔLE SOMBRE DES DEUX MOTEURS DE RENDU */}
-      <div className="bg-[#0B2545] text-white p-3 sm:p-4 rounded-2xl flex flex-col xl:flex-row xl:items-center justify-between gap-3 shadow-md">
-        <div className="flex items-center gap-2.5">
-          <Layers className="w-5 h-5 text-[#D4A017] shrink-0" />
+      {/* BARRE DE CONTRÔLE PRINCIPALE */}
+      <div className="bg-[#0B2545] text-white p-4 rounded-xl flex flex-col xl:flex-row xl:items-center justify-between gap-4 border border-[#1E3A5F]">
+        <div className="flex items-start gap-3">
+          <div className="p-2 rounded-lg bg-white/10 shrink-0 mt-0.5">
+            <Layers className="w-5 h-5 text-[#D4A017]" />
+          </div>
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h4 className="font-bold text-sm text-white">{title}</h4>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-[#134074] text-amber-300 border border-amber-400/30">
+              <h4 className="font-bold text-sm sm:text-base text-white">{title}</h4>
+              <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-[#134074] text-amber-200 border border-amber-400/30 whitespace-nowrap">
                 {documentTypeLabel}
               </span>
             </div>
-            <p className="text-[11px] text-slate-300">
-              Double moteur de rendu &amp; Convertisseur 3 Fenêtres : Cliquez sur « Moteur 2 : PDF A4 Original » pour découper le A4 sur Canvas, ou éditez directement le texte.
+            <p className="text-xs text-blue-100/90 mt-1">
+              Cliquez directement sur la feuille A4 pour modifier le texte, passez en Aperçu Email, ou lancez FORCUS Word.
             </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Sélecteur Moteur 2 vs Moteur 1 */}
-          <div className="inline-flex rounded-xl bg-slate-900/60 p-1 border border-white/10">
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Sélecteur de Vue (3 options claires) */}
+          <div className="inline-flex flex-wrap rounded-lg bg-slate-900/70 p-1 border border-white/15 gap-1">
             <button
               type="button"
-              onClick={() => {
-                setRenderEngine('pdf');
-                setWorkspaceMode('three_panels');
-                setCaptureSignal((s) => s + 1);
-              }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 transition-all cursor-pointer ${
-                renderEngine === 'pdf'
-                  ? 'bg-white text-[#0B2545] shadow-xs'
-                  : 'text-slate-300 hover:text-white'
+              onClick={() => setViewMode('a4')}
+              className={`min-h-[36px] px-3 py-1.5 rounded-md text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+                viewMode === 'a4'
+                  ? 'bg-white text-[#0B2545]'
+                  : 'text-slate-300 hover:text-white hover:bg-white/10'
               }`}
             >
               <FileText className="w-3.5 h-3.5 text-[#0066B3]" />
-              <span>Moteur 2 : PDF A4 Original</span>
+              <span>Document A4 (Éditer)</span>
             </button>
 
             <button
               type="button"
-              onClick={() => setRenderEngine('email')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 transition-all cursor-pointer ${
-                renderEngine === 'email'
-                  ? 'bg-amber-400 text-slate-950 shadow-xs'
-                  : 'text-slate-300 hover:text-white'
+              onClick={() => setViewMode('email')}
+              className={`min-h-[36px] px-3 py-1.5 rounded-md text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+                viewMode === 'email'
+                  ? 'bg-amber-400 text-slate-950'
+                  : 'text-slate-300 hover:text-white hover:bg-white/10'
               }`}
             >
-              <Mail className="w-3.5 h-3.5 text-slate-900" />
-              <span>Moteur 1 : Client Mail Responsive</span>
+              <Mail className="w-3.5 h-3.5" />
+              <span>Aperçu Email</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSwitchToConverter}
+              className={`min-h-[36px] px-3 py-1.5 rounded-md text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+                viewMode === 'converter'
+                  ? 'bg-[#0066B3] text-white'
+                  : 'text-slate-300 hover:text-white hover:bg-white/10'
+              }`}
+            >
+              <Columns className="w-3.5 h-3.5" />
+              <span>3 Fenêtres HTML</span>
             </button>
           </div>
 
-          {/* Bascule Vue 3 Fenêtres vs Édition Texte Directe A4 */}
-          {renderEngine === 'pdf' && (
-            <div className="inline-flex rounded-xl bg-slate-900/60 p-1 border border-white/10">
+          {/* Boutons viewport (visibles en Email / Convertisseur) */}
+          {viewMode !== 'a4' && (
+            <div className="inline-flex rounded-lg bg-slate-900/70 p-1 border border-white/15">
               <button
                 type="button"
-                onClick={() => {
-                  setWorkspaceMode('three_panels');
-                  setCaptureSignal((s) => s + 1);
-                }}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer ${
-                  workspaceMode === 'three_panels'
-                    ? 'bg-[#0066B3] text-white'
-                    : 'text-slate-300 hover:text-white'
+                onClick={() => setEmailViewport('desktop')}
+                title="Aperçu Desktop (600px)"
+                className={`p-1.5 rounded cursor-pointer ${
+                  emailViewport === 'desktop' ? 'bg-white/20 text-white' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                <Columns className="w-3.5 h-3.5" />
-                <span>3 Fenêtres</span>
+                <Monitor className="w-4 h-4" />
               </button>
               <button
                 type="button"
-                onClick={() => setWorkspaceMode('a4_direct_edit')}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer ${
-                  workspaceMode === 'a4_direct_edit'
-                    ? 'bg-emerald-600 text-white'
-                    : 'text-slate-300 hover:text-white'
+                onClick={() => setEmailViewport('tablet')}
+                title="Aperçu Tablette"
+                className={`p-1.5 rounded cursor-pointer ${
+                  emailViewport === 'tablet' ? 'bg-white/20 text-white' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                <Eye className="w-3.5 h-3.5" />
-                <span>Éditer A4 Direct</span>
+                <Tablet className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setEmailViewport('mobile')}
+                title="Aperçu Mobile (375px)"
+                className={`p-1.5 rounded cursor-pointer ${
+                  emailViewport === 'mobile' ? 'bg-white/20 text-white' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Smartphone className="w-4 h-4" />
               </button>
             </div>
           )}
-
-          {/* Boutons viewport */}
-          <div className="inline-flex rounded-xl bg-slate-900/60 p-1 border border-white/10">
-            <button
-              type="button"
-              onClick={() => setEmailViewport('desktop')}
-              title="Aperçu Desktop (600px)"
-              className={`p-1.5 rounded-lg cursor-pointer ${
-                emailViewport === 'desktop' ? 'bg-white/20 text-white' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Monitor className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setEmailViewport('tablet')}
-              title="Aperçu Tablette"
-              className={`p-1.5 rounded-lg cursor-pointer ${
-                emailViewport === 'tablet' ? 'bg-white/20 text-white' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Tablet className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setEmailViewport('mobile')}
-              title="Aperçu Mobile (375px)"
-              className={`p-1.5 rounded-lg cursor-pointer ${
-                emailViewport === 'mobile' ? 'bg-white/20 text-white' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Smartphone className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          {/* Actions d'édition et d'export */}
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setIsInPlaceForcusOpen(true)}
-              className="min-h-[34px] px-3 py-1.5 rounded-xl bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-600 hover:to-indigo-600 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
-              title="Ouvrir l'éditeur complet FORCUS Word 2013 directement sur ce document"
-            >
-              <Edit3 className="w-3.5 h-3.5 text-amber-300" />
-              <span>Éditer avec FORCUS</span>
-            </button>
-
-            {onDownloadPdf && (
-              <button
-                type="button"
-                onClick={onDownloadPdf}
-                className="min-h-[34px] px-3 py-1.5 rounded-xl bg-[#0066B3] hover:bg-[#004f8c] text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Télécharger PDF</span>
-              </button>
-            )}
-
-            {onDownloadWord && (
-              <button
-                type="button"
-                onClick={onDownloadWord}
-                className="min-h-[34px] px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold inline-flex items-center gap-1.5 border border-white/10 cursor-pointer"
-              >
-                <FileText className="w-3.5 h-3.5 text-amber-300" />
-                <span>Word (.docx)</span>
-              </button>
-            )}
-
-            {onDownloadHtml && (
-              <button
-                type="button"
-                onClick={() => onDownloadHtml(effectiveHtml)}
-                className="min-h-[34px] px-3 py-1.5 rounded-xl bg-indigo-700 hover:bg-indigo-600 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>.HTML</span>
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={handleCopyHtml}
-              className="min-h-[34px] px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
-            >
-              {copiedHtml ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copiedHtml ? 'Code Copié !' : 'Copier HTML Responsive'}</span>
-            </button>
-
-            {onOpenInWebmail && (
-              <button
-                type="button"
-                onClick={() => onOpenInWebmail(effectiveHtml)}
-                className="min-h-[34px] px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
-                title="Transférer directement vers le Webmail Infomaniak"
-              >
-                <Send className="w-3.5 h-3.5" />
-                <span>Infomaniak</span>
-              </button>
-            )}
-          </div>
         </div>
       </div>
 
-      {/* FEUILLE A4 ORIGINALE (Visible en mode 'a4_direct_edit', rendue hors-écran en mode 'three_panels' pour capture fidèle via html2canvas) */}
+      {/* BARRE D'ACTIONS D'EXPORT & ÉDITION */}
+      <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setIsInPlaceForcusOpen(true)}
+            className="min-h-[38px] px-3.5 py-1.5 rounded-lg bg-[#2B579A] hover:bg-[#23477F] text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+          >
+            <Edit3 className="w-3.5 h-3.5 text-amber-300" />
+            <span>Ouvrir FORCUS Word</span>
+          </button>
+
+          {viewMode === 'a4' && (
+            <div className="inline-flex items-center gap-1 bg-white border border-slate-200 rounded-lg p-1">
+              <button
+                type="button"
+                onClick={() => applyRichCommand('bold')}
+                title="Gras"
+                className="p-1.5 rounded hover:bg-slate-100 text-slate-700 cursor-pointer"
+              >
+                <Bold className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => applyRichCommand('italic')}
+                title="Italique"
+                className="p-1.5 rounded hover:bg-slate-100 text-slate-700 cursor-pointer"
+              >
+                <Italic className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => applyRichCommand('underline')}
+                title="Souligné"
+                className="p-1.5 rounded hover:bg-slate-100 text-slate-700 cursor-pointer"
+              >
+                <Underline className="w-3.5 h-3.5" />
+              </button>
+              <span className="w-px h-4 bg-slate-200 mx-0.5" />
+              <button
+                type="button"
+                onClick={() => applyRichCommand('justifyLeft')}
+                title="Aligner à gauche"
+                className="p-1.5 rounded hover:bg-slate-100 text-slate-700 cursor-pointer"
+              >
+                <AlignLeft className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => applyRichCommand('justifyCenter')}
+                title="Centrer"
+                className="p-1.5 rounded hover:bg-slate-100 text-slate-700 cursor-pointer"
+              >
+                <AlignCenter className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => applyRichCommand('justifyFull')}
+                title="Justifier"
+                className="p-1.5 rounded hover:bg-slate-100 text-slate-700 cursor-pointer"
+              >
+                <AlignJustify className="w-3.5 h-3.5" />
+              </button>
+              <span className="w-px h-4 bg-slate-200 mx-0.5" />
+              <button
+                type="button"
+                onClick={() => applyRichCommand('undo')}
+                title="Annuler"
+                className="p-1.5 rounded hover:bg-slate-100 text-slate-700 cursor-pointer"
+              >
+                <Undo2 className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => applyRichCommand('redo')}
+                title="Rétablir"
+                className="p-1.5 rounded hover:bg-slate-100 text-slate-700 cursor-pointer"
+              >
+                <Redo2 className="w-3.5 h-3.5" />
+              </button>
+              {hasCustomText && onResetText && (
+                <>
+                  <span className="w-px h-4 bg-slate-200 mx-0.5" />
+                  <button
+                    type="button"
+                    onClick={onResetText}
+                    className="px-2 py-1 rounded hover:bg-amber-50 text-amber-800 text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>Réinitialiser texte</span>
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {onDownloadPdf && (
+            <button
+              type="button"
+              onClick={onDownloadPdf}
+              className="min-h-[38px] px-3.5 py-1.5 rounded-lg bg-[#0066B3] hover:bg-[#004f8c] text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Télécharger PDF</span>
+            </button>
+          )}
+
+          {onDownloadWord && (
+            <button
+              type="button"
+              onClick={onDownloadWord}
+              className="min-h-[38px] px-3.5 py-1.5 rounded-lg bg-white hover:bg-slate-100 text-slate-800 text-xs font-bold inline-flex items-center gap-1.5 border border-slate-300 cursor-pointer whitespace-nowrap"
+            >
+              <FileText className="w-3.5 h-3.5 text-[#0066B3]" />
+              <span>Word (.docx)</span>
+            </button>
+          )}
+
+          {onDownloadHtml && (
+            <button
+              type="button"
+              onClick={() => onDownloadHtml(effectiveHtml)}
+              className="min-h-[38px] px-3 py-1.5 rounded-lg bg-white hover:bg-slate-100 text-slate-800 text-xs font-bold inline-flex items-center gap-1.5 border border-slate-300 cursor-pointer whitespace-nowrap"
+            >
+              <Download className="w-3.5 h-3.5 text-indigo-600" />
+              <span>.HTML</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={handleCopyHtml}
+            className="min-h-[38px] px-3.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+          >
+            {copiedHtml ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+            <span>{copiedHtml ? 'Code Copié !' : 'Copier HTML'}</span>
+          </button>
+
+          {onOpenInWebmail && (
+            <button
+              type="button"
+              onClick={() => onOpenInWebmail(effectiveHtml)}
+              className="min-h-[38px] px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              title="Transférer directement vers le Webmail Infomaniak"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>Infomaniak</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* FEUILLE A4 ORIGINALE (Affichée et aérée par défaut ; rendue hors-écran si besoin de capture) */}
       <div
         className={
-          renderEngine === 'pdf' && workspaceMode === 'a4_direct_edit'
-            ? 'bg-slate-200/70 p-4 sm:p-8 rounded-2xl flex justify-center overflow-x-auto'
+          viewMode === 'a4'
+            ? 'bg-slate-100 border border-slate-200 p-4 sm:p-8 rounded-xl flex justify-center overflow-x-auto'
             : 'fixed -left-[9999px] top-0 pointer-events-none opacity-100'
         }
-        aria-hidden={!(renderEngine === 'pdf' && workspaceMode === 'a4_direct_edit')}
+        aria-hidden={viewMode !== 'a4'}
       >
         <div
           ref={a4SheetRef}
           onDoubleClick={(e) => {
-            if (workspaceMode !== 'a4_direct_edit') return;
+            if (viewMode !== 'a4') return;
             const rect = e.currentTarget.getBoundingClientRect();
             setFloatingMenu({
               x: Math.round(e.clientX - rect.left),
@@ -307,7 +444,7 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
           onClick={() => {
             if (floatingMenu) setFloatingMenu(null);
           }}
-          className="w-[794px] min-h-[1122px] bg-white text-slate-900 shadow-2xl rounded-sm p-10 sm:p-12 relative border border-slate-300 flex flex-col justify-between"
+          className="w-[794px] min-h-[1122px] bg-white text-slate-900 shadow-lg rounded-sm p-10 sm:p-12 relative border border-slate-300 flex flex-col justify-between"
           style={{
             fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif'
           }}
@@ -323,23 +460,35 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between border-b border-white/10 pb-1.5 mb-1">
-                <span className="font-bold text-amber-300">Options d'insertion :</span>
+                <span className="font-bold text-amber-300">Options rapides :</span>
                 <button
                   type="button"
                   onClick={() => setFloatingMenu(null)}
-                  className="text-slate-400 hover:text-white"
+                  className="text-slate-400 hover:text-white cursor-pointer"
                 >
                   ✕
                 </button>
               </div>
-              {onOpenForcusEditor && (
+              {onOpenForcusEditor ? (
                 <button
                   type="button"
                   onClick={() => {
                     setFloatingMenu(null);
                     onOpenForcusEditor();
                   }}
-                  className="p-1.5 hover:bg-white/10 rounded flex items-center gap-2 text-left"
+                  className="p-1.5 hover:bg-white/10 rounded flex items-center gap-2 text-left cursor-pointer"
+                >
+                  <Edit3 className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Ouvrir dans FORCUS Word</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFloatingMenu(null);
+                    setIsInPlaceForcusOpen(true);
+                  }}
+                  className="p-1.5 hover:bg-white/10 rounded flex items-center gap-2 text-left cursor-pointer"
                 >
                   <Edit3 className="w-3.5 h-3.5 text-blue-400" />
                   <span>Ouvrir dans FORCUS Word</span>
@@ -351,31 +500,33 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
                   setFloatingMenu(null);
                   document.execCommand('insertText', false, ' [Texte inséré] ');
                 }}
-                className="p-1.5 hover:bg-white/10 rounded flex items-center gap-2 text-left"
+                className="p-1.5 hover:bg-white/10 rounded flex items-center gap-2 text-left cursor-pointer"
               >
                 <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                <span>Insérer paragraphe ici</span>
+                <span>Insérer un paragraphe ici</span>
               </button>
             </div>
           )}
 
-          {/* Arrière-plan & Filigrane */}
+          {/* Arrière-plan & Filigrane avec réglages exacts */}
           {activeArrierePlan && (
             <div
-              className="absolute inset-0 pointer-events-none overflow-hidden z-0"
+              className="absolute inset-0 pointer-events-none overflow-hidden"
               style={{
                 backgroundImage: `url(${activeArrierePlan})`,
                 backgroundSize: 'cover',
                 backgroundPosition: 'center',
-                opacity: (assetsConfig.arrierePlan?.opacity ?? 20) / 100
+                opacity: (assetsConfig.arrierePlan?.opacity ?? 20) / 100,
+                zIndex: 0
               }}
             />
           )}
 
           {activeFiligrane && (
             <div
-              className="absolute inset-0 pointer-events-none flex items-center justify-center z-0"
+              className="absolute inset-0 pointer-events-none flex items-center justify-center"
               style={{
+                zIndex: 0,
                 transform: `translate(${assetsConfig.filigrane?.offsetX || 0}px, ${
                   assetsConfig.filigrane?.offsetY || 0
                 }px) rotate(${assetsConfig.filigrane?.rotation || 0}deg)`
@@ -384,37 +535,37 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
               <img
                 src={activeFiligrane}
                 alt="Filigrane"
-                className="max-w-[400px] max-h-[500px] object-contain"
-                style={{ opacity: (assetsConfig.filigrane?.opacity ?? 15) / 100 }}
+                className="object-contain"
+                style={{
+                  maxWidth: `${assetsConfig.filigrane?.widthValue || 380}${assetsConfig.filigrane?.widthUnit || 'px'}`,
+                  maxHeight: `${assetsConfig.filigrane?.heightValue || 460}${assetsConfig.filigrane?.heightUnit || 'px'}`,
+                  opacity: (assetsConfig.filigrane?.opacity ?? 15) / 100
+                }}
               />
             </div>
           )}
 
-          {/* En-tête Logo Acteur si présent */}
-          <div className="relative z-10 space-y-4">
+          {/* En-tête Logo Acteur + Contenu Principal */}
+          <div className="relative z-10 space-y-5">
             {activeLogo && (
-              <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-4">
                 <img
                   src={activeLogo}
                   alt="Logo officiel"
-                  style={{
-                    width: `${assetsConfig.logo?.widthValue || 150}px`,
-                    maxHeight: `${assetsConfig.logo?.heightValue || 60}px`,
-                    opacity: (assetsConfig.logo?.opacity ?? 100) / 100
-                  }}
+                  style={buildAssetOverlayStyle(assetsConfig.logo, { w: 180, h: 65, opacity: 100 })}
                   className="object-contain"
                 />
-                <span className="text-[10px] font-mono text-slate-500 uppercase">
+                <span className="text-[11px] font-mono text-slate-500 uppercase">
                   {documentTypeLabel}
                 </span>
               </div>
             )}
 
-            {/* Contenu principal du document */}
             <div
+              ref={editableWrapperRef}
               className="outline-none"
               onInput={(e) => {
-                const target = e.target as HTMLElement;
+                const target = e.currentTarget as HTMLElement;
                 if (onTextEdited) {
                   onTextEdited(target.innerText || target.innerHTML);
                 }
@@ -424,27 +575,29 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
             </div>
           </div>
 
-          {/* Pied de page visuel avec Signature, Cachet, Code-Barres, QR Code de l'acteur lié */}
+          {/* Pied de page visuel avec Signature, Cachet, Code-Barres, QR Code */}
           {(activeSignature || activeCachet || activeBarcode || activeQrCode) && (
-            <div className="relative z-10 mt-8 pt-4 border-t border-slate-200 flex items-end justify-between gap-4">
-              <div className="flex items-center gap-4">
+            <div className="relative z-10 mt-8 pt-5 border-t border-slate-200 flex items-end justify-between gap-4">
+              <div className="flex items-end gap-6">
                 {activeSignature && (
                   <div>
-                    <span className="text-[9px] text-slate-400 uppercase block mb-1">Signature</span>
+                    <span className="text-[10px] text-slate-400 uppercase block mb-1">Signature</span>
                     <img
                       src={activeSignature}
                       alt="Signature"
-                      className="max-h-14 max-w-[130px] object-contain"
+                      style={buildAssetOverlayStyle(assetsConfig.signature, { w: 140, h: 56, opacity: 100 })}
+                      className="object-contain"
                     />
                   </div>
                 )}
                 {activeCachet && (
                   <div>
-                    <span className="text-[9px] text-slate-400 uppercase block mb-1">Cachet / Sceau</span>
+                    <span className="text-[10px] text-slate-400 uppercase block mb-1">Cachet / Sceau</span>
                     <img
                       src={activeCachet}
                       alt="Cachet"
-                      className="max-h-16 max-w-[140px] object-contain"
+                      style={buildAssetOverlayStyle(assetsConfig.cachet, { w: 140, h: 70, opacity: 100 })}
+                      className="object-contain"
                     />
                   </div>
                 )}
@@ -455,14 +608,16 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
                   <img
                     src={activeBarcode}
                     alt="Code-Barres"
-                    className="max-h-12 max-w-[140px] object-contain"
+                    style={buildAssetOverlayStyle(assetsConfig.barcodeEmployeur, { w: 150, h: 48, opacity: 100 })}
+                    className="object-contain"
                   />
                 )}
                 {activeQrCode && (
                   <img
                     src={activeQrCode}
                     alt="QR Code"
-                    className="w-14 h-14 object-contain border border-slate-200 p-0.5 rounded bg-white"
+                    style={buildAssetOverlayStyle(assetsConfig.qrcodeEmployeur, { w: 64, h: 64, opacity: 100 })}
+                    className="object-contain border border-slate-200 p-0.5 rounded bg-white"
                   />
                 )}
               </div>
@@ -471,30 +626,33 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
         </div>
       </div>
 
-      {/* AFFICHAGE PRINCIPAL : VUE 3 FENÊTRES (DÉCOUPAGE CANVAS + APERÇU EMAIL + CODE SOURCE) OU MOTEUR 1 MAIL */}
-      {renderEngine === 'pdf' && workspaceMode === 'three_panels' ? (
+      {/* VUE 3 FENÊTRES (DÉCOUPAGE CANVAS + APERÇU EMAIL + CODE SOURCE) */}
+      {viewMode === 'converter' && (
         <VisualHtmlEmailConverter
           title={title}
           fallbackHtmlEmail={htmlEmailContent}
           emailViewport={emailViewport}
           captureTargetRef={a4SheetRef}
+          initialCanvasDataUrl={preCapturedA4DataUrl}
           autoCaptureSignal={captureSignal}
           onOpenInWebmail={onOpenInWebmail}
           onHtmlCompiled={setCompiledEmailHtml}
         />
-      ) : renderEngine === 'email' ? (
-        <div className="bg-slate-800 p-4 sm:p-8 rounded-2xl flex flex-col items-center gap-4">
+      )}
+
+      {/* VUE APERÇU EMAIL RESPONSIVE */}
+      {viewMode === 'email' && (
+        <div className="bg-slate-800 p-4 sm:p-8 rounded-xl flex flex-col items-center gap-4">
           <div className="w-full flex items-center justify-between text-xs text-slate-300 px-2 max-w-4xl">
             <span className="font-semibold flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-amber-400" />
-              Aperçu fidèle tel qu'affiché dans la boîte de réception du destinataire
+              Aperçu fidèle tel qu’affiché dans la boîte de réception du destinataire
             </span>
-            <span className="font-mono text-amber-300">
-              Largeur conteneur :{' '}
+            <span className="font-mono text-amber-300 tabular-nums">
               {emailViewport === 'desktop'
                 ? '600px (Webmail)'
                 : emailViewport === 'tablet'
-                ? '640px'
+                ? '640px (Tablette)'
                 : '375px (Mobile)'}
             </span>
           </div>
@@ -515,25 +673,25 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
                 <span className="font-bold text-slate-700 ml-2">Webmail / Gmail Preview</span>
               </div>
-              <span className="text-[11px] font-mono text-slate-500">HTML Table Responsive 100%</span>
+              <span className="text-[11px] font-mono text-slate-500">HTML Table Responsive</span>
             </div>
 
-            <div className="p-2 sm:p-4 bg-slate-50 min-h-[500px]">
+            <div className="p-3 sm:p-4 bg-slate-50 min-h-[500px]">
               <iframe
                 title="Aperçu Email Responsive"
                 srcDoc={effectiveHtml}
-                className="w-full min-h-[750px] border-0 bg-white shadow-xs rounded-lg"
+                className="w-full min-h-[720px] border-0 bg-white shadow-xs rounded-lg"
                 sandbox="allow-same-origin"
               />
             </div>
           </div>
         </div>
-      ) : null}
+      )}
 
       {/* Modale d'édition FORCUS In-Situ */}
       {isInPlaceForcusOpen && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 animate-fade-in">
-          <div className="w-full max-w-7xl h-[94vh] bg-white rounded-2xl overflow-hidden shadow-2xl flex flex-col border border-slate-700">
+          <div className="w-full max-w-7xl h-[94vh] bg-white rounded-xl overflow-hidden shadow-2xl flex flex-col border border-slate-700">
             <ForcusWordEditor
               isEmbeddedModal={true}
               initialTitle={title}

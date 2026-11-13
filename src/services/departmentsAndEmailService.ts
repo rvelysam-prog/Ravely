@@ -1822,6 +1822,82 @@ export function setSavedActorUploadedAssets(assets: UploadedAssetUrlsMap): void 
   }
 }
 
+const ACTOR_SCOPES_FOR_SYNC: ActorScopeId[] = [
+  'employeur',
+  'prestataire',
+  'hebEmployeur',
+  'notaire',
+  'inspecteurHir',
+  'commissaireDeclaration'
+];
+
+function belongsToActorScope(key: string, scope: ActorScopeId): boolean {
+  if (scope === 'employeur') {
+    return ['logo', 'signature', 'cachet', 'filigrane', 'arrierePlan', 'barcodeEmployeur', 'qrcodeEmployeur', 'photoCandidat'].includes(key);
+  }
+  if (scope === 'prestataire') {
+    return ['logoPrestataire', 'signaturePrestataire', 'cachetPrestataire', 'filigranePrestataire', 'arrierePlanPrestataire', 'barcodePrestataire', 'qrcodePrestataire', 'logoAgence'].includes(key);
+  }
+  return key.startsWith(`${scope}_`);
+}
+
+export async function saveActorUploadedAssetsToFirestore(assets: UploadedAssetUrlsMap): Promise<void> {
+  setSavedActorUploadedAssets(assets);
+  try {
+    await Promise.all(
+      ACTOR_SCOPES_FOR_SYNC.map(async (scope) => {
+        const scopedData: Record<string, string> = {};
+        Object.entries(assets).forEach(([k, v]) => {
+          if (belongsToActorScope(k, scope) && typeof v === 'string') {
+            scopedData[k] = v;
+          }
+        });
+        const docRef = doc(collection(db, 'settings'), `actor_assets_${scope}`);
+        await setDoc(
+          docRef,
+          {
+            scope,
+            assets: scopedData,
+            updated_at: new Date().toISOString()
+          },
+          { merge: true }
+        );
+      })
+    );
+  } catch (err) {
+    if (!isTransientUnavailableError(err)) {
+      console.warn('Sauvegarde locale des fichiers appliquée (Firestore hors ligne):', err);
+    }
+  }
+}
+
+export async function loadActorUploadedAssetsFromFirestore(): Promise<UploadedAssetUrlsMap> {
+  const local = getSavedActorUploadedAssets();
+  try {
+    const merged: UploadedAssetUrlsMap = { ...local };
+    await Promise.all(
+      ACTOR_SCOPES_FOR_SYNC.map(async (scope) => {
+        const docRef = doc(collection(db, 'settings'), `actor_assets_${scope}`);
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+          const data = snap.data() as { assets?: Record<string, string> };
+          if (data?.assets) {
+            Object.entries(data.assets).forEach(([k, v]) => {
+              if (typeof v === 'string' && v.trim()) {
+                (merged as Record<string, string>)[k] = v;
+              }
+            });
+          }
+        }
+      })
+    );
+    setSavedActorUploadedAssets(merged);
+    return merged;
+  } catch {
+    return local;
+  }
+}
+
 export function getSavedPdfAssetsConfig(): PdfImportedAssetsConfig {
   try {
     const raw = localStorage.getItem(LS_PDF_ASSETS_CONFIG_KEY);
