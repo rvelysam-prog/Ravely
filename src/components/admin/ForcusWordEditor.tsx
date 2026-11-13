@@ -74,6 +74,7 @@ import html2canvas from 'html2canvas-pro';
 import mammoth from 'mammoth';
 import { ArrowLeft, CheckCircle2 } from 'lucide-react';
 import { SiteSettings } from '../../types';
+import { VisualHtmlEmailConverter } from '../common/VisualHtmlEmailConverter';
 
 export interface ForcusWordEditorProps {
   settings?: SiteSettings;
@@ -131,6 +132,7 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
     }
   }, [initialHtmlContent, initialTitle, initialLayers]);
   const [activeTab, setActiveTab] = useState<RibbonTab>('ACCUEIL');
+  const [workspaceView, setWorkspaceView] = useState<'word_a4' | 'converter_3_panels'>('word_a4');
   const [zoomLevel, setZoomLevel] = useState<number>(100); // 50 à 200%
   const [isSelectionPaneOpen, setIsSelectionPaneOpen] = useState<boolean>(true);
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
@@ -751,6 +753,22 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
 
           <button
             type="button"
+            onClick={() =>
+              setWorkspaceView((v) => (v === 'word_a4' ? 'converter_3_panels' : 'word_a4'))
+            }
+            className={`px-3 py-1 font-bold text-xs rounded-md shadow-xs flex items-center gap-1.5 transition-all cursor-pointer ${
+              workspaceView === 'converter_3_panels'
+                ? 'bg-emerald-500 text-slate-950'
+                : 'bg-white/15 hover:bg-white/25 text-white'
+            }`}
+            title="Basculer entre les pages Word A4 et le Convertisseur Visuel 3 Fenêtres (Canvas -> Email HTML)"
+          >
+            <Columns className="w-3.5 h-3.5" />
+            <span>{workspaceView === 'converter_3_panels' ? 'Vue Pages Word A4' : 'Convertisseur 3 Fenêtres'}</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => handleConvertToHtmlEmailTemplate(true)}
             className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs rounded-md shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
             title="Convertir directement en template e-mail pour Webmail Infomaniak"
@@ -1346,9 +1364,17 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
         )}
       </div>
 
-      {/* 4. ZONE CENTRALE : FEUILLES A4 AVEC RÈGLES ET VOLET DE SÉLECTION */}
+      {/* 4. ZONE CENTRALE : FEUILLES A4 AVEC RÈGLES OU CONVERTISSEUR 3 FENÊTRES + VOLET DE SÉLECTION */}
       <div className="flex-1 flex overflow-hidden relative">
-        {/* Workspace scrollable contenant les pages A4 */}
+        {workspaceView === 'converter_3_panels' ? (
+          <div className="flex-1 overflow-auto p-4 bg-[#E1DFDD]">
+            <VisualHtmlEmailConverter
+              title={doc.title}
+              fallbackHtmlEmail={doc.pages.map((p) => p.htmlContent).join('<br/>')}
+              onOpenInWebmail={onOpenInWebmail}
+            />
+          </div>
+        ) : (
         <div
           className="flex-1 overflow-auto p-8 flex flex-col items-center gap-10 bg-[#E1DFDD] relative"
           onClick={() => {
@@ -1837,6 +1863,7 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
             </div>
           )}
         </div>
+        )}
 
         {/* 5. VOLET LATÉRAL DE GESTION DES CALQUES (Selection Pane) */}
         {isSelectionPaneOpen && (

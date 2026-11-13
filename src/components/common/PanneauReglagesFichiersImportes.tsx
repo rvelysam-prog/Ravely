@@ -13,25 +13,28 @@ import {
   Eye,
   Building2,
   Briefcase,
-  Sparkles
+  Sparkles,
+  Home,
+  Scale,
+  ClipboardCheck,
+  ScrollText,
+  QrCode,
+  Barcode
 } from 'lucide-react';
+import QRCode from 'qrcode';
 import {
   PdfImportedAssetsConfig,
   PdfAssetItemSettings,
   DEFAULT_PDF_ASSETS_CONFIG,
-  savePdfAssetsConfigToFirestore
+  savePdfAssetsConfigToFirestore,
+  ActorScopeId,
+  ImportedAssetKey,
+  UploadedAssetUrlsMap
 } from '../../services/departmentsAndEmailService';
 import { removeImageBackground } from '../../services/imageTransparencyService';
+import { generateSmallStackedBarcodeCanvasDataUrl } from '../../services/contractGenerationService';
 
-export type AssetTabKey =
-  | 'logo'
-  | 'signature'
-  | 'cachet'
-  | 'filigrane'
-  | 'arrierePlan'
-  | 'logoPrestataire'
-  | 'signaturePrestataire'
-  | 'cachetPrestataire';
+export type AssetTabKey = ImportedAssetKey;
 
 interface PanneauReglagesFichiersImportesProps {
   assetsConfig?: PdfImportedAssetsConfig;
@@ -39,19 +42,124 @@ interface PanneauReglagesFichiersImportesProps {
   onChangeConfig?: (newConfig: PdfImportedAssetsConfig) => void;
   onConfigChange?: (newConfig: PdfImportedAssetsConfig) => void;
   onUploadAsset?: (key: AssetTabKey, dataUrl: string, filename: string) => void;
-  uploadedAssetUrls?: {
-    logo?: string;
-    signature?: string;
-    cachet?: string;
-    filigrane?: string;
-    arrierePlan?: string;
-    logoPrestataire?: string;
-    signaturePrestataire?: string;
-    cachetPrestataire?: string;
-  };
+  uploadedAssetUrls?: UploadedAssetUrlsMap;
   title?: string;
   moduleTitle?: string;
+  verificationCodeRef?: string;
 }
+
+interface SubTabDef {
+  key: AssetTabKey;
+  label: string;
+  badge: string;
+  isAuthTool?: 'barcode' | 'qrcode';
+}
+
+const SCOPE_TABS: {
+  id: ActorScopeId;
+  shortLabel: string;
+  bindingHint: string;
+  icon: React.ComponentType<{ className?: string }>;
+  activeBg: string;
+  tabs: SubTabDef[];
+}[] = [
+  {
+    id: 'employeur',
+    shortLabel: '🏢 Partie 1 : Entreprise Employeur',
+    bindingHint: 'Appliqué aux documents principaux & contrats employeur',
+    icon: Building2,
+    activeBg: 'bg-[#0B2545] text-white',
+    tabs: [
+      { key: 'logo', label: '1. Logo Officiel', badge: 'En-tête / Badge' },
+      { key: 'signature', label: '2. Signature Employeur', badge: 'Zone Paraphes' },
+      { key: 'cachet', label: '3. Cachet / Sceau', badge: 'Tampon Officiel' },
+      { key: 'filigrane', label: '4. Filigrane', badge: 'Blason / Watermark' },
+      { key: 'arrierePlan', label: '5. Arrière-Plan', badge: 'Fond de page' },
+      { key: 'barcodeEmployeur', label: '6. Code-Barres', badge: 'Auth Barcode', isAuthTool: 'barcode' },
+      { key: 'qrcodeEmployeur', label: '7. QR Code', badge: 'Auth QR', isAuthTool: 'qrcode' }
+    ]
+  },
+  {
+    id: 'prestataire',
+    shortLabel: '🤝 Partie 2 : Cabinet Prestataire CRIC',
+    bindingHint: 'Appliqué au mandat CRIC & contrat de prestation',
+    icon: Briefcase,
+    activeBg: 'bg-[#0066B3] text-white',
+    tabs: [
+      { key: 'logoPrestataire', label: '1. Logo Prestataire', badge: 'Cabinet Mandaté' },
+      { key: 'signaturePrestataire', label: '2. Signature Mandataire', badge: 'Signataire CRIC' },
+      { key: 'cachetPrestataire', label: '3. Cachet / Sceau CRIC', badge: 'Tampon Mandat' },
+      { key: 'filigranePrestataire', label: '4. Filigrane', badge: 'Watermark' },
+      { key: 'arrierePlanPrestataire', label: '5. Arrière-Plan', badge: 'Fond de page' },
+      { key: 'barcodePrestataire', label: '6. Code-Barres', badge: 'Auth Barcode', isAuthTool: 'barcode' },
+      { key: 'qrcodePrestataire', label: '7. QR Code', badge: 'Auth QR', isAuthTool: 'qrcode' }
+    ]
+  },
+  {
+    id: 'hebEmployeur',
+    shortLabel: '🏠 Partie 3 : Hébergement Employeur (Onglet 9)',
+    bindingHint: "Liaison exclusive : Onglet 9 (Attestation officielle d'hébergement)",
+    icon: Home,
+    activeBg: 'bg-[#0B2545] text-white',
+    tabs: [
+      { key: 'hebEmployeur_logo', label: '1. Logo Officiel', badge: 'En-tête Onglet 9' },
+      { key: 'hebEmployeur_signature', label: '2. Signature Représentant', badge: 'Paraphes' },
+      { key: 'hebEmployeur_cachet', label: '3. Cachet / Sceau Entreprise', badge: 'Tampon' },
+      { key: 'hebEmployeur_filigrane', label: '4. Filigrane / Blason', badge: 'Watermark' },
+      { key: 'hebEmployeur_arrierePlan', label: '5. Arrière-Plan', badge: 'Fond' },
+      { key: 'hebEmployeur_barcode', label: '6. Code-Barres', badge: 'Auth Barcode', isAuthTool: 'barcode' },
+      { key: 'hebEmployeur_qrcode', label: '7. QR Code', badge: 'Auth QR', isAuthTool: 'qrcode' }
+    ]
+  },
+  {
+    id: 'notaire',
+    shortLabel: '⚖️ Partie 4 : Notaire Public BC (Onglet 10)',
+    bindingHint: "Liaison exclusive : Onglet 10 (Certificat d'authentification notariale)",
+    icon: Scale,
+    activeBg: 'bg-slate-800 text-white',
+    tabs: [
+      { key: 'notaire_logo', label: '1. Logo Étude Notariale', badge: 'En-tête Notaire' },
+      { key: 'notaire_signature', label: '2. Signature Notaire Public', badge: 'Notary Sign' },
+      { key: 'notaire_cachet', label: '3. Sceau / Cachet Notarial', badge: 'Official Seal' },
+      { key: 'notaire_filigrane', label: '4. Filigrane Notarial', badge: 'Watermark' },
+      { key: 'notaire_arrierePlan', label: '5. Arrière-Plan', badge: 'Fond' },
+      { key: 'notaire_barcode', label: '6. Code-Barres', badge: 'Auth Barcode', isAuthTool: 'barcode' },
+      { key: 'notaire_qrcode', label: '7. QR Code', badge: 'Auth QR', isAuthTool: 'qrcode' }
+    ]
+  },
+  {
+    id: 'inspecteurHir',
+    shortLabel: '🔍 Partie 5 : Inspecteur HIR / CM (Onglet 11)',
+    bindingHint: 'Liaison exclusive : Onglet 11 (Rapport officiel d’inspection du logement HIR)',
+    icon: ClipboardCheck,
+    activeBg: 'bg-emerald-800 text-white',
+    tabs: [
+      { key: 'inspecteurHir_logo', label: '1. Logo Organisme BCAC', badge: 'En-tête HIR' },
+      { key: 'inspecteurHir_signature', label: '2. Signature Inspecteur', badge: 'Inspector Sign' },
+      { key: 'inspecteurHir_cachet', label: '3. Cachet / Tampon HIR', badge: 'Certifié BCAC' },
+      { key: 'inspecteurHir_filigrane', label: '4. Filigrane Conformité', badge: 'Watermark' },
+      { key: 'inspecteurHir_arrierePlan', label: '5. Arrière-Plan', badge: 'Fond' },
+      { key: 'inspecteurHir_barcode', label: '6. Code-Barres', badge: 'Auth Barcode', isAuthTool: 'barcode' },
+      { key: 'inspecteurHir_qrcode', label: '7. QR Code', badge: 'Auth QR', isAuthTool: 'qrcode' }
+    ]
+  },
+  {
+    id: 'commissaireDeclaration',
+    shortLabel: '📜 Partie 6 : Déclaration / CER-CLT (Onglet 12)',
+    bindingHint: 'Liaison exclusive : Onglet 12 (Déclaration solennelle / Statutory Declaration)',
+    icon: ScrollText,
+    activeBg: 'bg-indigo-900 text-white',
+    tabs: [
+      { key: 'commissaireDeclaration_logo', label: '1. Logo Autorité / En-tête', badge: 'En-tête Onglet 12' },
+      { key: 'commissaireDeclaration_signature', label: '2. Signature Commissaire / Notaire', badge: 'Assermentation' },
+      { key: 'commissaireDeclaration_cachet', label: '3. Sceau / Cachet Officiel', badge: 'Affidavit Seal' },
+      { key: 'commissaireDeclaration_filigrane', label: '4. Filigrane Solennel', badge: 'Watermark' },
+      { key: 'commissaireDeclaration_arrierePlan', label: '5. Arrière-Plan', badge: 'Fond' },
+      { key: 'commissaireDeclaration_barcode', label: '6. Code-Barres', badge: 'Auth Barcode', isAuthTool: 'barcode' },
+      { key: 'commissaireDeclaration_qrcode', label: '7. QR Code', badge: 'Auth QR', isAuthTool: 'qrcode' }
+    ]
+  }
+];
 
 export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersImportesProps> = ({
   assetsConfig: propAssetsConfig,
@@ -61,35 +169,24 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
   onUploadAsset,
   uploadedAssetUrls = {},
   title,
-  moduleTitle
+  moduleTitle,
+  verificationCodeRef = 'ENT-BC-2026-AUTH'
 }) => {
   const effectiveConfig = propAssetsConfig || initialConfig || DEFAULT_PDF_ASSETS_CONFIG;
   const notifyChange = onChangeConfig || onConfigChange || (() => {});
   const displayTitle =
     title ||
     moduleTitle ||
-    "Panneau Réglages Fichiers Importés — Prévisualisation en direct & Sauvegarde Firestore";
+    'Panneau Réglages Fichiers Importés — 6 Parties Officiels & Outils d’Authentification';
 
-  const [activeScope, setActiveScope] = useState<'employeur' | 'prestataire'>('employeur');
+  const [activeScope, setActiveScope] = useState<ActorScopeId>('employeur');
   const [activeTab, setActiveTab] = useState<AssetTabKey>('logo');
   const [isSaving, setIsSaving] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
 
-  const employeurTabs: { key: AssetTabKey; label: string; badge: string }[] = [
-    { key: 'logo', label: '1. Logo Officiel', badge: 'En-tête / Badge' },
-    { key: 'signature', label: '2. Signature Employeur', badge: 'Zone Paraphes' },
-    { key: 'cachet', label: '3. Cachet Employeur', badge: 'Tampon Officiel' },
-    { key: 'filigrane', label: '4. Filigrane', badge: 'Blason / Watermark' },
-    { key: 'arrierePlan', label: '5. Arrière-Plan', badge: 'Fond de page' }
-  ];
-
-  const prestataireTabs: { key: AssetTabKey; label: string; badge: string }[] = [
-    { key: 'logoPrestataire', label: '1. Logo Prestataire', badge: 'Cabinet Mandaté' },
-    { key: 'signaturePrestataire', label: '2. Signature Prestataire', badge: 'Signataire Mandataire' },
-    { key: 'cachetPrestataire', label: '3. Cachet Prestataire', badge: 'Sceau / Tampon Mandat' }
-  ];
-
-  const currentTabs = activeScope === 'employeur' ? employeurTabs : prestataireTabs;
+  const currentScopeDef = SCOPE_TABS.find((s) => s.id === activeScope) || SCOPE_TABS[0];
+  const currentTabs = currentScopeDef.tabs;
+  const activeSubTabDef = currentTabs.find((t) => t.key === activeTab);
 
   const currentCfg: PdfAssetItemSettings =
     effectiveConfig[activeTab] ||
@@ -193,6 +290,30 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
     }
   };
 
+  const handleAutoGenerateAuthAsset = async (type: 'barcode' | 'qrcode') => {
+    if (!onUploadAsset) return;
+    try {
+      if (type === 'barcode') {
+        const barcodeUrl = generateSmallStackedBarcodeCanvasDataUrl(
+          `${verificationCodeRef}-${activeScope.toUpperCase()}`
+        );
+        onUploadAsset(activeTab, barcodeUrl, `${activeTab}_barcode.png`);
+        setFeedback(`Code-Barres généré et assigné à ${currentScopeDef.shortLabel} !`);
+      } else {
+        const qrUrl = await QRCode.toDataURL(
+          `AUTH:${verificationCodeRef}|ACTOR:${activeScope}|VERIFY:ATLANTIC-BC`,
+          { width: 220, margin: 1 }
+        );
+        onUploadAsset(activeTab, qrUrl, `${activeTab}_qrcode.png`);
+        setFeedback(`QR Code généré et assigné à ${currentScopeDef.shortLabel} !`);
+      }
+      setTimeout(() => setFeedback(null), 3500);
+    } catch {
+      setFeedback('Erreur lors de la génération automatique');
+      setTimeout(() => setFeedback(null), 3000);
+    }
+  };
+
   return (
     <div className="rounded-2xl border border-slate-300 bg-slate-50 p-4 sm:p-5 space-y-4 shadow-xs">
       {/* Header du panneau */}
@@ -202,7 +323,7 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
           <div>
             <h5 className="text-sm font-bold text-[#0B2545]">{displayTitle}</h5>
             <p className="text-[11px] text-slate-600">
-              Ajustez largeur, hauteur, opacité, position X/Y, rotation, couleur/teinte et superposition pour tous vos documents officiels (Employeur &amp; Prestataire CRIC).
+              Personnalisez Logos, Signatures, Cachets/Sceaux, Filigranes, Codes-Barres et QR Codes par partie (Employeur, CRIC, Hébergement, Notaire, Inspecteur HIR/CM, Déclaration CER-CLT).
             </p>
           </div>
         </div>
@@ -244,69 +365,68 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
         </div>
       </div>
 
-      {/* SÉLECTEUR DE SCOPE : EMPLOYEUR CANADA VS PRESTATAIRE CRIC */}
-      <div className="flex items-center gap-2 p-1 bg-slate-200/70 rounded-xl w-fit">
-        <button
-          type="button"
-          onClick={() => {
-            setActiveScope('employeur');
-            setActiveTab('logo');
-          }}
-          className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-            activeScope === 'employeur'
-              ? 'bg-[#0B2545] text-white shadow-xs'
-              : 'text-slate-700 hover:text-slate-900'
-          }`}
-        >
-          <Building2 className="w-3.5 h-3.5 text-amber-400" />
-          <span>🏢 Entreprise Employeur (Canada)</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            setActiveScope('prestataire');
-            setActiveTab('signaturePrestataire');
-          }}
-          className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-            activeScope === 'prestataire'
-              ? 'bg-[#0066B3] text-white shadow-xs'
-              : 'text-slate-700 hover:text-slate-900'
-          }`}
-        >
-          <Briefcase className="w-3.5 h-3.5 text-amber-300" />
-          <span>🤝 Cabinet Prestataire CRIC</span>
-        </button>
+      {/* SÉLECTEUR DES 6 PARTIES / ACTEURS OFFICIELS */}
+      <div className="space-y-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 p-1.5 bg-slate-200/75 rounded-xl">
+          {SCOPE_TABS.map((scope) => {
+            const Icon = scope.icon;
+            const isCurrent = activeScope === scope.id;
+            return (
+              <button
+                key={scope.id}
+                type="button"
+                onClick={() => {
+                  setActiveScope(scope.id);
+                  setActiveTab(scope.tabs[0].key);
+                }}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  isCurrent ? `${scope.activeBg} shadow-xs` : 'text-slate-700 hover:bg-white/70 hover:text-slate-950'
+                }`}
+              >
+                <Icon className={`w-3.5 h-3.5 ${isCurrent ? 'text-amber-300' : 'text-slate-500'}`} />
+                <span>{scope.shortLabel}</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="text-[11px] text-blue-900 font-semibold px-1">
+          Liaison active : {currentScopeDef.bindingHint}
+        </p>
       </div>
 
-      {/* Onglets de sélection du fichier ciblé */}
+      {/* Onglets de sélection du fichier ciblé (7 sous-onglets incluant Barcode & QR Code) */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1">
-        {currentTabs.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => setActiveTab(t.key)}
-            className={`min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border transition-all cursor-pointer shrink-0 ${
-              activeTab === t.key
-                ? 'bg-white border-[#0B2545] text-[#0B2545] shadow-xs ring-2 ring-[#0B2545]/15'
-                : 'bg-white/60 border-slate-200 text-slate-700 hover:bg-white'
-            }`}
-          >
-            <span>{t.label}</span>
-            <span
-              className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-medium ${
+        {currentTabs.map((t) => {
+          const hasCustomFile = Boolean(uploadedAssetUrls[t.key]);
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setActiveTab(t.key)}
+              className={`min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border transition-all cursor-pointer shrink-0 ${
                 activeTab === t.key
-                  ? 'bg-[#0B2545] text-white'
-                  : 'bg-slate-200 text-slate-600'
+                  ? 'bg-white border-[#0B2545] text-[#0B2545] shadow-xs ring-2 ring-[#0B2545]/15'
+                  : 'bg-white/60 border-slate-200 text-slate-700 hover:bg-white'
               }`}
             >
-              {t.badge}
-            </span>
-          </button>
-        ))}
+              <span>{t.label}</span>
+              <span
+                className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-medium ${
+                  activeTab === t.key
+                    ? 'bg-[#0B2545] text-white'
+                    : hasCustomFile
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : 'bg-slate-200 text-slate-600'
+                }`}
+              >
+                {hasCustomFile ? '✓ Actif' : t.badge}
+              </span>
+            </button>
+          );
+        })}
       </div>
 
-      {/* Zone de téléversement direct si activée */}
+      {/* Zone de téléversement direct & générateurs Code-Barres / QR Code */}
       {onUploadAsset && (
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl bg-white border border-slate-200">
           <div className="flex items-center gap-3">
@@ -323,15 +443,39 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
             )}
             <div>
               <span className="text-xs font-bold text-slate-800 block">
-                Fichier source actif pour {activeTab}
+                Fichier source actif : {activeSubTabDef?.label || activeTab}
               </span>
               <span className="text-[11px] text-slate-500 font-mono">
-                {uploadedAssetUrls[activeTab] ? 'Fichier personnalisé chargé' : 'Utilise le fichier système par défaut'}
+                {uploadedAssetUrls[activeTab]
+                  ? 'Visuel personnalisé actif — propagé automatiquement sur les documents associés'
+                  : 'Aucun fichier importé (élément système par défaut)'}
               </span>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {activeSubTabDef?.isAuthTool === 'barcode' && (
+              <button
+                type="button"
+                onClick={() => handleAutoGenerateAuthAsset('barcode')}
+                className="min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-amber-300 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              >
+                <Barcode className="w-4 h-4" />
+                <span>Générer Code-Barres</span>
+              </button>
+            )}
+
+            {activeSubTabDef?.isAuthTool === 'qrcode' && (
+              <button
+                type="button"
+                onClick={() => handleAutoGenerateAuthAsset('qrcode')}
+                className="min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-emerald-300 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              >
+                <QrCode className="w-4 h-4" />
+                <span>Générer QR Code</span>
+              </button>
+            )}
+
             {uploadedAssetUrls[activeTab] && (
               <button
                 type="button"
@@ -360,8 +504,7 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
 
       {/* Grille de contrôles ergonomiques */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 bg-white p-4 rounded-xl border border-slate-200">
-        
-        {/* Colonne 1 : Dimensions (Largeur & Hauteur) */}
+        {/* Colonne 1 : Dimensions */}
         <div className="space-y-3">
           <div className="flex items-center gap-1.5 text-xs font-bold text-[#0B2545]">
             <Maximize2 className="w-4 h-4 text-amber-600" />
@@ -597,7 +740,6 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
             />
           </div>
         </div>
-
       </div>
     </div>
   );

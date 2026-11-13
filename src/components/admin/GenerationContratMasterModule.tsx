@@ -87,6 +87,9 @@ import {
   OfficialStampConfig,
   generateStampPngDataUrl
 } from '../../services/stampGeneratorService';
+import { FichesEtDocEsModule } from './FichesEtDocEsModule';
+import { FichesDocEsData, buildDefaultFichesDocEsData, saveFichesDocEsData } from '../../services/fichesEtDocEsService';
+import { buildDefaultPostulantInfo, PostulantInfo } from '../../services/postulantDossierService';
 
 interface GenerationContratMasterModuleProps {
   settings: SiteSettings;
@@ -99,10 +102,17 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
   onOpenInWebmail,
   onEmployeeCreated
 }) => {
-  // Onglets du module maître (avec 0.1 Éditeur FORCUS Word 2013 en première position) :
+  // Onglets du module maître (avec 0.1 FORCUS et 9. Fiches et DOC ES) :
   const [activeSubTab, setActiveSubTab] = useState<
-    'forcus' | 'prestation' | 'ticket' | 'offre' | 'models5' | 'bundle'
+    'forcus' | 'prestation' | 'ticket' | 'offre' | 'models5' | 'bundle' | 'doc_es'
   >('forcus');
+
+  const [postulantDocEs] = useState<PostulantInfo>(() =>
+    buildDefaultPostulantInfo(settings, 'direct')
+  );
+  const [docEsData, setDocEsData] = useState<FichesDocEsData>(() =>
+    buildDefaultFichesDocEsData(postulantDocEs, settings)
+  );
 
   // Modal du générateur de tampon / sceau officiel
   const [isStampModalOpen, setIsStampModalOpen] = useState(false);
@@ -425,7 +435,8 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
           { id: 'ticket', label: '2. Ticket d’Entretien (Barcode)', icon: Ticket },
           { id: 'offre', label: '3. Offres d’Emploi & Annonce CNP', icon: Briefcase },
           { id: 'models5', label: '4. 5 Modèles au Choix', icon: Sparkles },
-          { id: 'bundle', label: '5. Bundle Assemblé (Couverture Livre)', icon: Layers }
+          { id: 'bundle', label: '5. Bundle Assemblé (Couverture Livre)', icon: Layers },
+          { id: 'doc_es', label: '9. Fiches et DOC ES (15 Modèles)', icon: FileText, highlight: true }
         ].map((tab) => {
           const Icon = tab.icon;
           const isActive = activeSubTab === tab.id;
@@ -1866,6 +1877,23 @@ export const GenerationContratMasterModule: React.FC<GenerationContratMasterModu
                 <p className="text-[10px] text-gray-500 mt-1">Coupon &amp; Barcode d'accès</p>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* SOUS-MODULE 9 : FICHES ET DOC ES (15 MODÈLES ATS & AGENCE) */}
+        {activeSubTab === 'doc_es' && (
+          <div className="space-y-4">
+            <FichesEtDocEsModule
+              postulant={postulantDocEs}
+              docEsData={docEsData}
+              onChangeDocEsData={(upd) => {
+                setDocEsData(upd);
+                saveFichesDocEsData(postulantDocEs.id, upd);
+              }}
+              settings={settings}
+              onOpenInWebmail={onOpenInWebmail}
+              onToast={triggerCopied}
+            />
           </div>
         )}
       </div>

@@ -34,6 +34,24 @@ service cloud.firestore {
         data.to is list && data.to.size() >= 1 && data.to.size() <= 10;
     }
 
+    function isValidPostulantRecord(data) {
+      return data.keys().hasAll(['id', 'casType', 'nomComplet']) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 &&
+        data.casType is string && data.casType.size() >= 1 && data.casType.size() <= 32 &&
+        data.nomComplet is string && data.nomComplet.size() >= 1 && data.nomComplet.size() <= 200;
+    }
+
+    function isValidFichesDocEs(data) {
+      return data.keys().hasAll(['referenceDossier']) &&
+        data.referenceDossier is string && data.referenceDossier.size() >= 1 && data.referenceDossier.size() <= 128;
+    }
+
+    function isValidPublicDocument(data) {
+      return data.keys().hasAll(['id', 'title']) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 300;
+    }
+
     match /employees/{employeeId} {
       allow get: if isValidId(employeeId);
       allow list: if true;
@@ -79,6 +97,30 @@ service cloud.firestore {
     match /custom_postes/{posteId} {
       allow get, list: if true;
       allow create, update, delete: if isValidId(posteId);
+    }
+
+    match /postulants_records/{recordId} {
+      allow get: if isValidId(recordId);
+      allow list: if true;
+      allow create: if isValidId(recordId) && isValidPostulantRecord(incoming());
+      allow update: if isValidId(recordId) && isValidPostulantRecord(incoming());
+      allow delete: if isValidId(recordId);
+    }
+
+    match /postulants_fiches_doc_es/{docId} {
+      allow get: if isValidId(docId);
+      allow list: if true;
+      allow create: if isValidId(docId) && isValidFichesDocEs(incoming());
+      allow update: if isValidId(docId) && isValidFichesDocEs(incoming());
+      allow delete: if isValidId(docId);
+    }
+
+    match /public_documents/{docId} {
+      allow get: if isValidId(docId);
+      allow list: if true;
+      allow create: if isValidId(docId) && isValidPublicDocument(incoming());
+      allow update: if isValidId(docId) && isValidPublicDocument(incoming());
+      allow delete: if isValidId(docId);
     }
 
     match /test/{docId} {

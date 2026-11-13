@@ -1447,15 +1447,59 @@ const LS_LOCAL_MAIL_LOGS_KEY = 'atlantic_local_mail_logs_cache_v1';
 export type AssetUnit = 'px' | '%';
 export type HorizontalAlign = 'left' | 'center' | 'right';
 export type VerticalAlign = 'top' | 'middle' | 'bottom';
+export type ActorScopeId =
+  | 'employeur'
+  | 'prestataire'
+  | 'hebEmployeur'
+  | 'notaire'
+  | 'inspecteurHir'
+  | 'commissaireDeclaration';
+
 export type ImportedAssetKey =
   | 'logo'
   | 'signature'
   | 'cachet'
   | 'filigrane'
   | 'arrierePlan'
+  | 'barcodeEmployeur'
+  | 'qrcodeEmployeur'
   | 'logoPrestataire'
   | 'signaturePrestataire'
-  | 'cachetPrestataire';
+  | 'cachetPrestataire'
+  | 'filigranePrestataire'
+  | 'arrierePlanPrestataire'
+  | 'barcodePrestataire'
+  | 'qrcodePrestataire'
+  | 'hebEmployeur_logo'
+  | 'hebEmployeur_signature'
+  | 'hebEmployeur_cachet'
+  | 'hebEmployeur_filigrane'
+  | 'hebEmployeur_arrierePlan'
+  | 'hebEmployeur_barcode'
+  | 'hebEmployeur_qrcode'
+  | 'notaire_logo'
+  | 'notaire_signature'
+  | 'notaire_cachet'
+  | 'notaire_filigrane'
+  | 'notaire_arrierePlan'
+  | 'notaire_barcode'
+  | 'notaire_qrcode'
+  | 'inspecteurHir_logo'
+  | 'inspecteurHir_signature'
+  | 'inspecteurHir_cachet'
+  | 'inspecteurHir_filigrane'
+  | 'inspecteurHir_arrierePlan'
+  | 'inspecteurHir_barcode'
+  | 'inspecteurHir_qrcode'
+  | 'commissaireDeclaration_logo'
+  | 'commissaireDeclaration_signature'
+  | 'commissaireDeclaration_cachet'
+  | 'commissaireDeclaration_filigrane'
+  | 'commissaireDeclaration_arrierePlan'
+  | 'commissaireDeclaration_barcode'
+  | 'commissaireDeclaration_qrcode';
+
+export type UploadedAssetUrlsMap = Partial<Record<ImportedAssetKey | 'logoAgence' | 'photoCandidat', string>>;
 
 export interface PdfAssetItemSettings {
   widthValue: number;
@@ -1474,139 +1518,211 @@ export interface PdfAssetItemSettings {
   dataUrl?: string;
 }
 
+const makeDefaultLogo = (color = '#0C2366'): PdfAssetItemSettings => ({
+  widthValue: 180,
+  widthUnit: 'px',
+  heightValue: 60,
+  heightUnit: 'px',
+  opacity: 100,
+  tintEnabled: false,
+  tintColor: color,
+  offsetX: 0,
+  offsetY: 0,
+  alignX: 'left',
+  alignY: 'top',
+  rotation: 0,
+  zIndex: 10
+});
+
+const makeDefaultSignature = (color = '#0C2366'): PdfAssetItemSettings => ({
+  widthValue: 130,
+  widthUnit: 'px',
+  heightValue: 68,
+  heightUnit: 'px',
+  opacity: 100,
+  tintEnabled: false,
+  tintColor: color,
+  offsetX: 0,
+  offsetY: 0,
+  alignX: 'center',
+  alignY: 'middle',
+  rotation: 0,
+  zIndex: 12
+});
+
+const makeDefaultCachet = (color = '#1E3A8A'): PdfAssetItemSettings => ({
+  widthValue: 155,
+  widthUnit: 'px',
+  heightValue: 84,
+  heightUnit: 'px',
+  opacity: 100,
+  tintEnabled: false,
+  tintColor: color,
+  offsetX: 0,
+  offsetY: 0,
+  alignX: 'left',
+  alignY: 'middle',
+  rotation: 0,
+  zIndex: 11
+});
+
+const makeDefaultFiligrane = (): PdfAssetItemSettings => ({
+  widthValue: 290,
+  widthUnit: 'px',
+  heightValue: 360,
+  heightUnit: 'px',
+  opacity: 15,
+  tintEnabled: false,
+  tintColor: '#64748B',
+  offsetX: 0,
+  offsetY: 0,
+  alignX: 'center',
+  alignY: 'middle',
+  rotation: 0,
+  zIndex: 0
+});
+
+const makeDefaultArrierePlan = (): PdfAssetItemSettings => ({
+  widthValue: 100,
+  widthUnit: '%',
+  heightValue: 100,
+  heightUnit: '%',
+  opacity: 20,
+  tintEnabled: false,
+  tintColor: '#CBD5E1',
+  offsetX: 0,
+  offsetY: 0,
+  alignX: 'center',
+  alignY: 'middle',
+  rotation: 0,
+  zIndex: 0
+});
+
+const makeDefaultBarcode = (): PdfAssetItemSettings => ({
+  widthValue: 170,
+  widthUnit: 'px',
+  heightValue: 48,
+  heightUnit: 'px',
+  opacity: 100,
+  tintEnabled: false,
+  tintColor: '#0F172A',
+  offsetX: 0,
+  offsetY: 0,
+  alignX: 'right',
+  alignY: 'bottom',
+  rotation: 0,
+  zIndex: 14
+});
+
+const makeDefaultQrCode = (): PdfAssetItemSettings => ({
+  widthValue: 82,
+  widthUnit: 'px',
+  heightValue: 82,
+  heightUnit: 'px',
+  opacity: 100,
+  tintEnabled: false,
+  tintColor: '#0B2545',
+  offsetX: 0,
+  offsetY: 0,
+  alignX: 'right',
+  alignY: 'bottom',
+  rotation: 0,
+  zIndex: 14
+});
+
 export interface PdfImportedAssetsConfig {
   logo: PdfAssetItemSettings;
   signature: PdfAssetItemSettings;
   cachet: PdfAssetItemSettings;
   filigrane: PdfAssetItemSettings;
   arrierePlan?: PdfAssetItemSettings;
+  barcodeEmployeur?: PdfAssetItemSettings;
+  qrcodeEmployeur?: PdfAssetItemSettings;
   logoPrestataire?: PdfAssetItemSettings;
   signaturePrestataire?: PdfAssetItemSettings;
   cachetPrestataire?: PdfAssetItemSettings;
+  filigranePrestataire?: PdfAssetItemSettings;
+  arrierePlanPrestataire?: PdfAssetItemSettings;
+  barcodePrestataire?: PdfAssetItemSettings;
+  qrcodePrestataire?: PdfAssetItemSettings;
+  // Actor 3 : Attestation d'hébergement — Employeur (Onglet 9)
+  hebEmployeur_logo?: PdfAssetItemSettings;
+  hebEmployeur_signature?: PdfAssetItemSettings;
+  hebEmployeur_cachet?: PdfAssetItemSettings;
+  hebEmployeur_filigrane?: PdfAssetItemSettings;
+  hebEmployeur_arrierePlan?: PdfAssetItemSettings;
+  hebEmployeur_barcode?: PdfAssetItemSettings;
+  hebEmployeur_qrcode?: PdfAssetItemSettings;
+  // Actor 4 : Certificat d'authentification notariale — Notaire BC (Onglet 10)
+  notaire_logo?: PdfAssetItemSettings;
+  notaire_signature?: PdfAssetItemSettings;
+  notaire_cachet?: PdfAssetItemSettings;
+  notaire_filigrane?: PdfAssetItemSettings;
+  notaire_arrierePlan?: PdfAssetItemSettings;
+  notaire_barcode?: PdfAssetItemSettings;
+  notaire_qrcode?: PdfAssetItemSettings;
+  // Actor 5 : Rapport d'inspection HIR — Inspecteur BCAC / CM (Onglet 11)
+  inspecteurHir_logo?: PdfAssetItemSettings;
+  inspecteurHir_signature?: PdfAssetItemSettings;
+  inspecteurHir_cachet?: PdfAssetItemSettings;
+  inspecteurHir_filigrane?: PdfAssetItemSettings;
+  inspecteurHir_arrierePlan?: PdfAssetItemSettings;
+  inspecteurHir_barcode?: PdfAssetItemSettings;
+  inspecteurHir_qrcode?: PdfAssetItemSettings;
+  // Actor 6 : Déclaration solennelle — Notaire ou Commissaire CER-CLT (Onglet 12)
+  commissaireDeclaration_logo?: PdfAssetItemSettings;
+  commissaireDeclaration_signature?: PdfAssetItemSettings;
+  commissaireDeclaration_cachet?: PdfAssetItemSettings;
+  commissaireDeclaration_filigrane?: PdfAssetItemSettings;
+  commissaireDeclaration_arrierePlan?: PdfAssetItemSettings;
+  commissaireDeclaration_barcode?: PdfAssetItemSettings;
+  commissaireDeclaration_qrcode?: PdfAssetItemSettings;
   updated_at?: string;
 }
 
 export const DEFAULT_PDF_ASSETS_CONFIG: PdfImportedAssetsConfig = {
-  logo: {
-    widthValue: 180,
-    widthUnit: 'px',
-    heightValue: 60,
-    heightUnit: 'px',
-    opacity: 100,
-    tintEnabled: false,
-    tintColor: '#0C2366',
-    offsetX: 0,
-    offsetY: 0,
-    alignX: 'left',
-    alignY: 'top',
-    rotation: 0,
-    zIndex: 10
-  },
-  signature: {
-    widthValue: 130,
-    widthUnit: 'px',
-    heightValue: 68,
-    heightUnit: 'px',
-    opacity: 100,
-    tintEnabled: false,
-    tintColor: '#0C2366',
-    offsetX: 0,
-    offsetY: 0,
-    alignX: 'center',
-    alignY: 'middle',
-    rotation: 0,
-    zIndex: 12
-  },
-  cachet: {
-    widthValue: 155,
-    widthUnit: 'px',
-    heightValue: 84,
-    heightUnit: 'px',
-    opacity: 100,
-    tintEnabled: false,
-    tintColor: '#1E3A8A',
-    offsetX: 0,
-    offsetY: 0,
-    alignX: 'left',
-    alignY: 'middle',
-    rotation: 0,
-    zIndex: 11
-  },
-  filigrane: {
-    widthValue: 290,
-    widthUnit: 'px',
-    heightValue: 360,
-    heightUnit: 'px',
-    opacity: 100,
-    tintEnabled: false,
-    tintColor: '#64748B',
-    offsetX: 0,
-    offsetY: 0,
-    alignX: 'center',
-    alignY: 'middle',
-    rotation: 0,
-    zIndex: 0
-  },
-  arrierePlan: {
-    widthValue: 100,
-    widthUnit: '%',
-    heightValue: 100,
-    heightUnit: '%',
-    opacity: 20,
-    tintEnabled: false,
-    tintColor: '#CBD5E1',
-    offsetX: 0,
-    offsetY: 0,
-    alignX: 'center',
-    alignY: 'middle',
-    rotation: 0,
-    zIndex: 0
-  },
-  logoPrestataire: {
-    widthValue: 170,
-    widthUnit: 'px',
-    heightValue: 55,
-    heightUnit: 'px',
-    opacity: 100,
-    tintEnabled: false,
-    tintColor: '#0C2366',
-    offsetX: 0,
-    offsetY: 0,
-    alignX: 'left',
-    alignY: 'top',
-    rotation: 0,
-    zIndex: 10
-  },
-  signaturePrestataire: {
-    widthValue: 130,
-    widthUnit: 'px',
-    heightValue: 68,
-    heightUnit: 'px',
-    opacity: 100,
-    tintEnabled: false,
-    tintColor: '#0C2366',
-    offsetX: 0,
-    offsetY: 0,
-    alignX: 'center',
-    alignY: 'middle',
-    rotation: 0,
-    zIndex: 12
-  },
-  cachetPrestataire: {
-    widthValue: 155,
-    widthUnit: 'px',
-    heightValue: 84,
-    heightUnit: 'px',
-    opacity: 100,
-    tintEnabled: false,
-    tintColor: '#1E3A8A',
-    offsetX: 0,
-    offsetY: 0,
-    alignX: 'center',
-    alignY: 'middle',
-    rotation: 0,
-    zIndex: 11
-  }
+  logo: makeDefaultLogo('#0C2366'),
+  signature: makeDefaultSignature('#0C2366'),
+  cachet: makeDefaultCachet('#1E3A8A'),
+  filigrane: { ...makeDefaultFiligrane(), opacity: 100 },
+  arrierePlan: makeDefaultArrierePlan(),
+  barcodeEmployeur: makeDefaultBarcode(),
+  qrcodeEmployeur: makeDefaultQrCode(),
+  logoPrestataire: { ...makeDefaultLogo('#0C2366'), widthValue: 170, heightValue: 55 },
+  signaturePrestataire: makeDefaultSignature('#0C2366'),
+  cachetPrestataire: { ...makeDefaultCachet('#1E3A8A'), alignX: 'center' },
+  filigranePrestataire: makeDefaultFiligrane(),
+  arrierePlanPrestataire: makeDefaultArrierePlan(),
+  barcodePrestataire: makeDefaultBarcode(),
+  qrcodePrestataire: makeDefaultQrCode(),
+  hebEmployeur_logo: makeDefaultLogo('#0B2545'),
+  hebEmployeur_signature: makeDefaultSignature('#0B2545'),
+  hebEmployeur_cachet: makeDefaultCachet('#0B2545'),
+  hebEmployeur_filigrane: makeDefaultFiligrane(),
+  hebEmployeur_arrierePlan: makeDefaultArrierePlan(),
+  hebEmployeur_barcode: makeDefaultBarcode(),
+  hebEmployeur_qrcode: makeDefaultQrCode(),
+  notaire_logo: makeDefaultLogo('#1E293B'),
+  notaire_signature: makeDefaultSignature('#1E293B'),
+  notaire_cachet: makeDefaultCachet('#7F1D1D'),
+  notaire_filigrane: makeDefaultFiligrane(),
+  notaire_arrierePlan: makeDefaultArrierePlan(),
+  notaire_barcode: makeDefaultBarcode(),
+  notaire_qrcode: makeDefaultQrCode(),
+  inspecteurHir_logo: makeDefaultLogo('#065F46'),
+  inspecteurHir_signature: makeDefaultSignature('#065F46'),
+  inspecteurHir_cachet: makeDefaultCachet('#065F46'),
+  inspecteurHir_filigrane: makeDefaultFiligrane(),
+  inspecteurHir_arrierePlan: makeDefaultArrierePlan(),
+  inspecteurHir_barcode: makeDefaultBarcode(),
+  inspecteurHir_qrcode: makeDefaultQrCode(),
+  commissaireDeclaration_logo: makeDefaultLogo('#312E81'),
+  commissaireDeclaration_signature: makeDefaultSignature('#312E81'),
+  commissaireDeclaration_cachet: makeDefaultCachet('#312E81'),
+  commissaireDeclaration_filigrane: makeDefaultFiligrane(),
+  commissaireDeclaration_arrierePlan: makeDefaultArrierePlan(),
+  commissaireDeclaration_barcode: makeDefaultBarcode(),
+  commissaireDeclaration_qrcode: makeDefaultQrCode()
 };
 
 function sanitizeAssetItem(
@@ -1665,17 +1781,45 @@ function sanitizeAssetItem(
 export function normalizePdfAssetsConfig(
   raw?: Partial<PdfImportedAssetsConfig> | null
 ): PdfImportedAssetsConfig {
-  return {
+  const result: PdfImportedAssetsConfig = {
     logo: sanitizeAssetItem(raw?.logo, DEFAULT_PDF_ASSETS_CONFIG.logo),
     signature: sanitizeAssetItem(raw?.signature, DEFAULT_PDF_ASSETS_CONFIG.signature),
     cachet: sanitizeAssetItem(raw?.cachet, DEFAULT_PDF_ASSETS_CONFIG.cachet),
     filigrane: sanitizeAssetItem(raw?.filigrane, DEFAULT_PDF_ASSETS_CONFIG.filigrane),
-    arrierePlan: sanitizeAssetItem(raw?.arrierePlan, DEFAULT_PDF_ASSETS_CONFIG.arrierePlan || DEFAULT_PDF_ASSETS_CONFIG.filigrane),
-    logoPrestataire: sanitizeAssetItem(raw?.logoPrestataire, DEFAULT_PDF_ASSETS_CONFIG.logoPrestataire || DEFAULT_PDF_ASSETS_CONFIG.logo),
-    signaturePrestataire: sanitizeAssetItem(raw?.signaturePrestataire, DEFAULT_PDF_ASSETS_CONFIG.signaturePrestataire || DEFAULT_PDF_ASSETS_CONFIG.signature),
-    cachetPrestataire: sanitizeAssetItem(raw?.cachetPrestataire, DEFAULT_PDF_ASSETS_CONFIG.cachetPrestataire || DEFAULT_PDF_ASSETS_CONFIG.cachet),
     updated_at: raw?.updated_at || new Date().toISOString()
   };
+
+  const optionalKeys = Object.keys(DEFAULT_PDF_ASSETS_CONFIG).filter(
+    (k) => k !== 'logo' && k !== 'signature' && k !== 'cachet' && k !== 'filigrane' && k !== 'updated_at'
+  ) as (keyof Omit<PdfImportedAssetsConfig, 'updated_at'>)[];
+
+  for (const key of optionalKeys) {
+    const fb = DEFAULT_PDF_ASSETS_CONFIG[key] || DEFAULT_PDF_ASSETS_CONFIG.logo;
+    result[key] = sanitizeAssetItem(raw?.[key], fb);
+  }
+
+  return result;
+}
+
+const LS_ACTOR_UPLOADED_ASSETS_KEY = 'atlantic_actor_uploaded_assets_v1';
+
+export function getSavedActorUploadedAssets(): UploadedAssetUrlsMap {
+  try {
+    const raw = localStorage.getItem(LS_ACTOR_UPLOADED_ASSETS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function setSavedActorUploadedAssets(assets: UploadedAssetUrlsMap): void {
+  try {
+    localStorage.setItem(LS_ACTOR_UPLOADED_ASSETS_KEY, JSON.stringify(assets));
+  } catch {
+    // Ignore localStorage quota overflow
+  }
 }
 
 export function getSavedPdfAssetsConfig(): PdfImportedAssetsConfig {

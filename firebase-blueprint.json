@@ -280,7 +280,7 @@
     },
     "PdfAssetsSettings": {
       "title": "PdfAssetsSettings",
-      "description": "Réglages admin des fichiers importés (logo, signature, cachet, filigrane) pour la Promesse d'Embauche et les PDF",
+      "description": "Réglages admin des fichiers importés (logo, signature, cachet, filigrane, arrière-plan, code-barres, QR) pour les 6 parties officielles",
       "type": "object",
       "properties": {
         "logo": {
@@ -300,6 +300,79 @@
           "maxLength": 64
         }
       }
+    },
+    "PostulantRecord": {
+      "title": "PostulantRecord",
+      "description": "Dossier complet d'un postulant (Cas 1 Direct ou Cas 2 Agence CRIC, onglets 1 à 12)",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "codeIdCandidature": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "casType": {
+          "type": "string",
+          "enum": ["direct", "agence"],
+          "maxLength": 32
+        },
+        "nomComplet": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "intitulePoste": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "updatedAt": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "casType", "nomComplet"]
+    },
+    "PostulantFichesDocEs": {
+      "title": "PostulantFichesDocEs",
+      "description": "Données structurées des 15 modèles Fiches et DOC ES liées à un postulant",
+      "type": "object",
+      "properties": {
+        "referenceDossier": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "updatedAt": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": ["referenceDossier"]
+    },
+    "PublicDocument": {
+      "title": "PublicDocument",
+      "description": "Document Studio reconstructible et lien public de téléchargement",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "updatedAt": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "title"]
     }
   },
   "firestore": {
@@ -314,6 +387,18 @@
     "/settings/{settingId}": {
       "schema": "PdfAssetsSettings",
       "description": "Collection des réglages des fichiers importés pour la génération PDF"
+    },
+    "/postulants_records/{recordId}": {
+      "schema": "PostulantRecord",
+      "description": "Collection des dossiers Postulant Nouveau et paramètres d'hébergement/notaire/HIR"
+    },
+    "/postulants_fiches_doc_es/{docId}": {
+      "schema": "PostulantFichesDocEs",
+      "description": "Collection des données des 15 fiches et formulaires DOC ES par candidat"
+    },
+    "/public_documents/{docId}": {
+      "schema": "PublicDocument",
+      "description": "Collection des documents publics partagés via Document Studio"
     }
   }
 }
