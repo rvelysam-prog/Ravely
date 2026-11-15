@@ -29,7 +29,7 @@ import {
   saveFichesDocEsData
 } from '../../services/fichesEtDocEsService';
 import { downloadWordDocument } from '../../services/cricContractService';
-import { ReferenceLayoutTemplate, resolveEffectiveLayout } from '../../services/layoutImitationService';
+import { ReferenceLayoutTemplate, SpatialBlueprint, resolveEffectiveLayout } from '../../services/layoutImitationService';
 
 interface FichesEtDocEsModuleProps {
   postulant: PostulantInfo;
@@ -237,12 +237,7 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
 
   const activeModel = modelsCatalog.find((m) => m.id === selectedModelId) || modelsCatalog[0];
   const effectiveLayout = resolveEffectiveLayout(layoutTemplate);
-  const isCleanLetterhead = Boolean(
-    effectiveLayout &&
-      (effectiveLayout.layoutArchetype === 'letterhead_split' ||
-        effectiveLayout.borderStyle === 'none' ||
-        effectiveLayout.headerStyle === 'entete_epure')
-  );
+  const bp: SpatialBlueprint | undefined = effectiveLayout?.spatialBlueprint;
   const renderedContent = renderDocEsPlainText(selectedModelId, postulant, docEsData, settings);
   const cleanPreviewContent = renderedContent.content
     .replace(/^[=\-_]{4,}\s*$/gm, '')
@@ -258,7 +253,7 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
 
   // Téléchargement Word (.docx)
   const handleDownloadWord = () => {
-    const title = activeModel.title;
+    const title = bp?.titleUppercase ? activeModel.title.toUpperCase() : activeModel.title;
     const primary = effectiveLayout?.primaryColor || '#0B2545';
     const tint = effectiveLayout?.highlightTintColor || '#D8F3EB';
     const fontCss =
@@ -267,14 +262,19 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
         : effectiveLayout?.fontFamily === 'courier'
         ? '"Courier New", monospace'
         : 'Calibri, Segoe UI, Arial, sans-serif';
+    const titleAlign = bp?.titleAlign || (effectiveLayout?.headerAlign === 'left' ? 'left' : 'center');
+    const refPillHtml = bp?.hasRefPill
+      ? `<p style="display:inline-block; background:${tint}; color:${primary}; padding:3px 8px; font-weight:bold; font-size:10pt;">Vos références · ${docEsData.referenceDossier}</p>`
+      : `<p style="font-size:9.5pt; color:#475569;">Réf. Dossier : <strong>${docEsData.referenceDossier}</strong> · Date : ${postulant.dateEffet}</p>`;
+
     downloadWordDocument(
       `DOC_ES_${activeModel.number.replace(/\s+/g, '_')}_${postulant.nom.toUpperCase()}`,
-      title,
+      activeModel.title,
       `<div style="font-family: ${fontCss}; color: ${effectiveLayout?.bodyTextColor || '#1e293b'};">
         <p style="font-weight:bold; color:${primary}; margin-bottom:4px;">${postulant.nomEntreprise}</p>
-        <p style="display:inline-block; background:${tint}; color:${primary}; padding:3px 8px; font-weight:bold; font-size:10pt;">Vos références · ${docEsData.referenceDossier}</p>
-        <h1 style="text-align:${effectiveLayout?.headerAlign === 'left' ? 'left' : 'center'}; color:#0f172a; font-size:16pt; margin:14px 0 4px 0;">${title}</h1>
-        <p style="text-align:${effectiveLayout?.headerAlign === 'left' ? 'left' : 'center'}; color:#475569; font-size:10pt; text-transform:uppercase; margin:0 0 14px 0;">${renderedContent.subtitle}</p>
+        ${refPillHtml}
+        <h1 style="text-align:${titleAlign}; color:#0f172a; font-size:16pt; margin:14px 0 4px 0;">${title}</h1>
+        <p style="text-align:${titleAlign}; color:#475569; font-size:10pt; margin:0 0 14px 0;">${renderedContent.subtitle}</p>
         <div style="white-space: pre-wrap; font-family: ${fontCss}; font-size: 10.5pt; line-height: 1.55;">${cleanPreviewContent}</div>
       </div>`
     );
@@ -525,7 +525,7 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
           {/* ========================================================================= */}
           {viewMode === 'preview' && (
             <div
-              className="rounded-sm shadow-sm space-y-4 transition-all"
+              className="rounded-sm shadow-sm space-y-4 transition-all relative overflow-hidden"
               style={{
                 backgroundColor: effectiveLayout?.pageBgColor || '#ffffff',
                 border:
@@ -534,6 +534,9 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
                     : effectiveLayout?.borderStyle === 'simple'
                     ? `2px solid ${effectiveLayout.borderColor || '#0B2545'}`
                     : '1px solid #e2e8f0',
+                borderLeft: bp?.hasLeftAccentStripe
+                  ? `6px solid ${effectiveLayout?.primaryColor || '#0B2545'}`
+                  : undefined,
                 padding:
                   effectiveLayout?.blockSpacing === 'compact'
                     ? '24px'
@@ -549,37 +552,130 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
                 color: effectiveLayout?.bodyTextColor || '#1e293b'
               }}
             >
-              {/* En-tête de page officiel */}
-              {isCleanLetterhead ? (
+              {/* Bandeau d'accentuation supérieur si top_accent_bar */}
+              {bp?.headerLayout === 'top_accent_bar' && (
+                <div
+                  className="-mx-7 -mt-7 mb-4 h-2"
+                  style={{ backgroundColor: effectiveLayout?.primaryColor || '#0B2545' }}
+                />
+              )}
+
+              {/* En-tête de page piloté par le SpatialBlueprint du modèle importé */}
+              {bp ? (
                 <div className="space-y-3">
-                  <div className="flex items-start justify-between">
-                    <div>
+                  {bp.headerLayout === 'filled_banner' ? (
+                    <div
+                      className="p-4 rounded-md flex items-center justify-between text-white"
+                      style={{
+                        backgroundColor: effectiveLayout?.headerBgColor || effectiveLayout?.primaryColor || '#0B2545',
+                        borderBottom: `3px solid ${effectiveLayout?.accentColor || '#D4A017'}`
+                      }}
+                    >
+                      <div>
+                        <h4 className="font-extrabold text-base">{postulant.nomEntreprise}</h4>
+                        <p className="text-[11px] opacity-85">Système ATS · {activeModel.number}</p>
+                      </div>
+                      <div className="text-right text-[11px]">
+                        <div className="font-bold">Réf : {docEsData.referenceDossier}</div>
+                        <div className="opacity-85">Date : {postulant.dateEffet}</div>
+                      </div>
+                    </div>
+                  ) : bp.headerLayout === 'centered_stack' ? (
+                    <div
+                      className="text-center pb-3"
+                      style={{
+                        borderBottom: bp.headerHasDivider
+                          ? `2px solid ${effectiveLayout?.primaryColor || '#0B2545'}`
+                          : undefined
+                      }}
+                    >
                       <h4
-                        className="font-extrabold text-lg tracking-tight"
+                        className="font-extrabold text-lg"
                         style={{ color: effectiveLayout?.primaryColor || '#0B2545' }}
                       >
                         {postulant.nomEntreprise}
                       </h4>
-                      <p className="text-[11px] text-slate-600">{postulant.adresseEntreprise}</p>
+                      <p className="text-[11px] text-slate-500">
+                        {postulant.adresseEntreprise} · Réf : {docEsData.referenceDossier}
+                      </p>
                     </div>
-                    <div className="w-3 h-3 border border-slate-300 flex items-center justify-center shrink-0">
-                      <div className="w-1.5 h-1.5 bg-slate-900" />
-                    </div>
-                  </div>
-                  <div className="space-y-1 text-[11px]">
-                    <span
-                      className="inline-block px-2.5 py-0.5 rounded-sm font-bold"
+                  ) : (
+                    <div
+                      className="flex items-start justify-between pb-2"
                       style={{
-                        backgroundColor: effectiveLayout?.highlightTintColor || '#D8F3EB',
-                        color: effectiveLayout?.primaryColor || '#0B663A'
+                        borderBottom: bp.headerHasDivider
+                          ? `2px solid ${effectiveLayout?.accentColor || effectiveLayout?.primaryColor || '#0B2545'}`
+                          : undefined
                       }}
                     >
-                      Vos références
-                    </span>
-                    <div className="text-slate-700">
-                      N° Dossier : <strong className="text-slate-900">{docEsData.referenceDossier}</strong> · Date : <strong className="text-slate-900">{postulant.dateEffet}</strong>
+                      <div>
+                        <h4
+                          className="font-extrabold text-lg tracking-tight"
+                          style={{ color: effectiveLayout?.primaryColor || '#0B2545' }}
+                        >
+                          {postulant.nomEntreprise}
+                        </h4>
+                        <p className="text-[11px] text-slate-600">{postulant.adresseEntreprise}</p>
+                      </div>
+                      {bp.headerLayout === 'split_lr' ? (
+                        <div className="text-right text-[11px] text-slate-600">
+                          <span className="font-bold block" style={{ color: effectiveLayout?.primaryColor || '#0B2545' }}>
+                            Réf : {docEsData.referenceDossier}
+                          </span>
+                          <span>Date : {postulant.dateEffet}</span>
+                        </div>
+                      ) : bp.hasTopRightMarker ? (
+                        <div className="w-3 h-3 border border-slate-300 flex items-center justify-center shrink-0">
+                          <div className="w-1.5 h-1.5 bg-slate-900" />
+                        </div>
+                      ) : null}
                     </div>
-                  </div>
+                  )}
+
+                  {/* Bloc Métadonnées selon metaLayout */}
+                  {(bp.metaLayout === 'two_col_asymmetric' || bp.metaLayout === 'two_col_equal') && (
+                    <div className="grid grid-cols-2 gap-4 text-[11px] text-slate-700 pt-1">
+                      <div>
+                        <div className="font-bold text-slate-900">{postulant.nomEntreprise}</div>
+                        <div>{postulant.intitulePoste} · CNP {postulant.codeCnp}</div>
+                      </div>
+                      <div className={bp.metaLayout === 'two_col_asymmetric' ? 'text-right pt-2' : 'text-right'}>
+                        <div className="font-bold text-slate-900">CANDIDAT : {postulant.nomComplet.toUpperCase()}</div>
+                        <div>Code ID : {postulant.codeIdCandidature}</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {bp.metaLayout === 'boxed_grid' && (
+                    <div className="grid grid-cols-2 border border-slate-300 bg-slate-50 text-[11px]">
+                      <div className="p-2 border-r border-slate-300">
+                        <div className="font-bold text-slate-900">{postulant.nomEntreprise}</div>
+                        <div className="text-slate-600">{postulant.adresseEntreprise}</div>
+                      </div>
+                      <div className="p-2">
+                        <div className="font-bold text-slate-900">{postulant.nomComplet}</div>
+                        <div className="text-slate-600">Dossier : {docEsData.referenceDossier}</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {bp.hasRefPill && (
+                    <div className="space-y-1 text-[11px]">
+                      <span
+                        className="inline-block px-2.5 py-0.5 rounded-sm font-bold"
+                        style={{
+                          backgroundColor: effectiveLayout?.highlightTintColor || '#D8F3EB',
+                          color: effectiveLayout?.primaryColor || '#0B663A'
+                        }}
+                      >
+                        Vos références
+                      </span>
+                      <div className="text-slate-700">
+                        N° Dossier : <strong className="text-slate-900">{docEsData.referenceDossier}</strong> · Date :{' '}
+                        <strong className="text-slate-900">{postulant.dateEffet}</strong>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div
@@ -611,39 +707,34 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
 
               {/* Titre et sous-titre */}
               <div
-                className={isCleanLetterhead ? 'py-2' : 'py-2 px-4 rounded-xl border border-slate-200'}
+                className={bp?.titleHasBox ? 'py-2.5 px-4 rounded-sm' : 'py-1.5'}
                 style={{
-                  textAlign: effectiveLayout?.headerAlign === 'left' ? 'left' : 'center',
-                  backgroundColor: isCleanLetterhead
-                    ? 'transparent'
-                    : effectiveLayout?.headerStyle === 'bandeau_plein'
-                    ? effectiveLayout.headerBgColor
-                    : '#f8fafc'
+                  textAlign: bp?.titleAlign || 'center',
+                  backgroundColor: bp?.titleHasBox
+                    ? effectiveLayout?.highlightTintColor || '#f1f5f9'
+                    : 'transparent',
+                  border: bp?.titleHasBox
+                    ? `1.5px solid ${effectiveLayout?.primaryColor || '#0B2545'}`
+                    : undefined,
+                  borderBottom: bp?.titleHasUnderline
+                    ? `2px solid ${effectiveLayout?.accentColor || '#D4A017'}`
+                    : bp?.titleHasBox
+                    ? `1.5px solid ${effectiveLayout?.primaryColor || '#0B2545'}`
+                    : undefined
                 }}
               >
                 <h3
-                  className={isCleanLetterhead ? 'font-bold text-base tracking-tight' : 'font-black text-sm uppercase tracking-wide'}
+                  className={`font-bold text-base tracking-tight ${bp?.titleUppercase ? 'uppercase' : ''}`}
                   style={{
-                    color:
-                      !isCleanLetterhead && effectiveLayout?.headerStyle === 'bandeau_plein'
-                        ? '#ffffff'
-                        : isCleanLetterhead
-                        ? '#0f172a'
-                        : effectiveLayout?.primaryColor || '#0B2545'
+                    color: bp?.titleHasBox
+                      ? effectiveLayout?.primaryColor || '#0B2545'
+                      : '#0f172a'
                   }}
                 >
                   {renderedContent.title}
                 </h3>
-                {renderedContent.subtitle && (
-                  <p
-                    className={`text-[11px] mt-0.5 ${isCleanLetterhead ? 'uppercase tracking-wider' : 'italic'}`}
-                    style={{
-                      color:
-                        !isCleanLetterhead && effectiveLayout?.headerStyle === 'bandeau_plein'
-                          ? '#e2e8f0'
-                          : '#64748b'
-                    }}
-                  >
+                {renderedContent.subtitle && (bp ? bp.titleHasSubtitle : true) && (
+                  <p className="text-[11px] mt-0.5 text-slate-500">
                     {renderedContent.subtitle}
                   </p>
                 )}
@@ -652,9 +743,9 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
               {/* Contenu formaté propre sans lignes ===== */}
               <div
                 className={
-                  isCleanLetterhead
-                    ? 'text-xs whitespace-pre-wrap leading-relaxed'
-                    : 'text-xs whitespace-pre-wrap leading-relaxed bg-slate-50/60 p-4 rounded-xl border border-slate-200 overflow-x-auto'
+                  bp?.bodyLayout === 'cards'
+                    ? 'text-xs whitespace-pre-wrap leading-relaxed bg-slate-50/70 p-4 rounded-lg border border-slate-200 overflow-x-auto'
+                    : 'text-xs whitespace-pre-wrap leading-relaxed'
                 }
                 style={{
                   color: effectiveLayout?.bodyTextColor || '#1e293b',
@@ -669,19 +760,32 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
                 {cleanPreviewContent}
               </div>
 
-              {/* Pied de page certifié */}
-              <div className="pt-3 border-t border-slate-200 flex items-center justify-between text-[10px] text-slate-500">
-                <span>{postulant.nomEntreprise} · {postulant.adresseEntreprise}</span>
-                <span className="font-bold text-slate-600 flex items-center gap-2">
-                  {!isCleanLetterhead && (
-                    <span className="text-emerald-700 inline-flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      Conforme EIMT &amp; Droit du Travail Canada
+              {/* Pied de page certifié selon footerLayout */}
+              {(!bp || bp.footerLayout !== 'none') && (
+                <div
+                  className={`pt-3 flex items-center text-[10px] text-slate-500 ${
+                    bp?.footerLayout === 'centered_legal' ? 'justify-center text-center' : 'justify-between'
+                  }`}
+                  style={{
+                    borderTop: !bp || bp.hasFooterDivider ? '1px solid #e2e8f0' : undefined
+                  }}
+                >
+                  {bp?.footerLayout !== 'minimal_page' && (
+                    <span>{postulant.nomEntreprise} · {postulant.adresseEntreprise}</span>
+                  )}
+                  {bp?.footerLayout !== 'centered_legal' && (
+                    <span className="font-bold text-slate-600 flex items-center gap-2">
+                      {!bp && (
+                        <span className="text-emerald-700 inline-flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          Conforme EIMT &amp; Droit du Travail Canada
+                        </span>
+                      )}
+                      {bp && <span>1/1</span>}
                     </span>
                   )}
-                  {isCleanLetterhead && <span>1/1</span>}
-                </span>
-              </div>
+                </div>
+              )}
             </div>
           )}
 

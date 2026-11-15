@@ -18,7 +18,11 @@ import {
   Underline,
   AlignLeft,
   AlignCenter,
+  AlignRight,
   AlignJustify,
+  List,
+  ListOrdered,
+  Highlighter,
   Undo2,
   Redo2,
   RotateCcw
@@ -27,10 +31,13 @@ import html2canvas from 'html2canvas-pro';
 import {
   PdfImportedAssetsConfig,
   PdfAssetItemSettings,
-  UploadedAssetUrlsMap
+  UploadedAssetUrlsMap,
+  ImportedAssetKey,
+  DEFAULT_PDF_ASSETS_CONFIG
 } from '../../services/departmentsAndEmailService';
 import { ForcusWordEditor } from '../admin/ForcusWordEditor';
 import { VisualHtmlEmailConverter } from './VisualHtmlEmailConverter';
+import { EditableDocumentVisual } from './EditableDocumentVisual';
 import { ReferenceLayoutTemplate, resolveEffectiveLayout } from '../../services/layoutImitationService';
 
 export interface InteractiveCanvasProps {
@@ -39,6 +46,9 @@ export interface InteractiveCanvasProps {
   assetsConfig: PdfImportedAssetsConfig;
   onChangeAssetsConfig?: (config: PdfImportedAssetsConfig) => void;
   uploadedAssetUrls?: UploadedAssetUrlsMap;
+  activeAssetKeyMap?: Partial<
+    Record<'logo' | 'signature' | 'cachet' | 'filigrane' | 'arrierePlan' | 'barcode' | 'qrcode', ImportedAssetKey>
+  >;
   exclusiveVisualSet?: {
     logo?: string;
     signature?: string;
@@ -64,33 +74,13 @@ export interface InteractiveCanvasProps {
 
 type CanvasViewMode = 'a4' | 'email' | 'converter';
 
-function buildAssetOverlayStyle(
-  cfg?: PdfAssetItemSettings,
-  defaults: { w?: number; h?: number; opacity?: number } = {}
-): React.CSSProperties {
-  const widthStr = cfg ? `${cfg.widthValue}${cfg.widthUnit || 'px'}` : defaults.w ? `${defaults.w}px` : undefined;
-  const heightStr = cfg ? `${cfg.heightValue}${cfg.heightUnit || 'px'}` : defaults.h ? `${defaults.h}px` : undefined;
-  const opacity = ((cfg?.opacity ?? defaults.opacity ?? 100) as number) / 100;
-  const ox = cfg?.offsetX ?? 0;
-  const oy = cfg?.offsetY ?? 0;
-  const rot = cfg?.rotation ?? 0;
-  const filter = cfg?.tintEnabled && cfg?.tintColor ? 'grayscale(100%) contrast(1.1)' : undefined;
-
-  return {
-    maxWidth: widthStr,
-    maxHeight: heightStr,
-    opacity,
-    transform: ox !== 0 || oy !== 0 || rot !== 0 ? `translate(${ox}px, ${oy}px) rotate(${rot}deg)` : undefined,
-    zIndex: cfg?.zIndex,
-    filter
-  };
-}
-
 export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
   title,
   documentTypeLabel,
   assetsConfig,
+  onChangeAssetsConfig,
   uploadedAssetUrls = {},
+  activeAssetKeyMap,
   exclusiveVisualSet,
   layoutTemplate,
   htmlEmailContent,
@@ -116,6 +106,11 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
   const [emailViewport, setEmailViewport] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
   const [copiedHtml, setCopiedHtml] = useState(false);
   const [floatingMenu, setFloatingMenu] = useState<{ x: number; y: number } | null>(null);
+  const [selectedVisualKey, setSelectedVisualKey] = useState<string | null>(null);
+  const [activeFontName, setActiveFontName] = useState<string>('Arial');
+  const [activeFontSize, setActiveFontSize] = useState<string>('3');
+  const [activeTextColor, setActiveTextColor] = useState<string>('#0f172a');
+  const [activeHighlightColor, setActiveHighlightColor] = useState<string>('#fef08a');
 
   const a4SheetRef = useRef<HTMLDivElement | null>(null);
   const editableWrapperRef = useRef<HTMLDivElement | null>(null);
@@ -130,6 +125,76 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
 
   const effectiveHtml = compiledEmailHtml || htmlEmailContent;
 
+  const DEFAULT_SLOT_KEY: Record<
+    'logo' | 'signature' | 'cachet' | 'filigrane' | 'arrierePlan' | 'barcode' | 'qrcode',
+    ImportedAssetKey
+  > = {
+    logo: 'logo',
+    signature: 'signature',
+    cachet: 'cachet',
+    filigrane: 'filigrane',
+    arrierePlan: 'arrierePlan',
+    barcode: 'barcodeEmployeur',
+    qrcode: 'qrcodeEmployeur'
+  };
+
+  const resolveSlotKey = (
+    slot: 'logo' | 'signature' | 'cachet' | 'filigrane' | 'arrierePlan' | 'barcode' | 'qrcode'
+  ): ImportedAssetKey => activeAssetKeyMap?.[slot] || DEFAULT_SLOT_KEY[slot];
+
+  const getSlotSettings = (
+    slot: 'logo' | 'signature' | 'cachet' | 'filigrane' | 'arrierePlan' | 'barcode' | 'qrcode'
+  ): PdfAssetItemSettings => {
+    const key = resolveSlotKey(slot);
+    return (
+      assetsConfig[key] ||
+      DEFAULT_PDF_ASSETS_CONFIG[key] || {
+        widthValue: 150,
+        widthUnit: 'px',
+        heightValue: 64,
+        heightUnit: 'px',
+        opacity: 100,
+        tintEnabled: false,
+        tintColor: '#0B2545',
+        offsetX: 0,
+        offsetY: 0,
+        alignX: 'center',
+        alignY: 'middle',
+        rotation: 0,
+        zIndex: 10,
+        wrapMode: 'inline'
+      }
+    );
+  };
+
+  const updateSlotSettings = (
+    slot: 'logo' | 'signature' | 'cachet' | 'filigrane' | 'arrierePlan' | 'barcode' | 'qrcode',
+    patch: Partial<PdfAssetItemSettings>
+  ) => {
+    if (!onChangeAssetsConfig) return;
+    const key = resolveSlotKey(slot);
+    const current = getSlotSettings(slot);
+    onChangeAssetsConfig({
+      ...assetsConfig,
+      [key]: { ...current, ...patch },
+      updated_at: new Date().toISOString()
+    });
+  };
+
+  const resetSlotSettings = (
+    slot: 'logo' | 'signature' | 'cachet' | 'filigrane' | 'arrierePlan' | 'barcode' | 'qrcode'
+  ) => {
+    if (!onChangeAssetsConfig) return;
+    const key = resolveSlotKey(slot);
+    const def = DEFAULT_PDF_ASSETS_CONFIG[key];
+    if (!def) return;
+    onChangeAssetsConfig({
+      ...assetsConfig,
+      [key]: { ...def },
+      updated_at: new Date().toISOString()
+    });
+  };
+
   const handleCopyHtml = async () => {
     try {
       await navigator.clipboard.writeText(effectiveHtml);
@@ -142,6 +207,7 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
 
   // Capture la page A4 tant qu'elle est affichée puis ouvre le Convertisseur 3 Fenêtres sans écran vide
   const handleSwitchToConverter = async () => {
+    setSelectedVisualKey(null);
     if (a4SheetRef.current && viewMode === 'a4') {
       try {
         const rendered = await html2canvas(a4SheetRef.current, {
@@ -161,9 +227,9 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
     setCaptureSignal((s) => s + 1);
   };
 
-  const applyRichCommand = (command: string) => {
+  const applyRichCommand = (command: string, value?: string) => {
     try {
-      document.execCommand(command, false);
+      document.execCommand(command, false, value);
       if (editableWrapperRef.current && onTextEdited) {
         onTextEdited(editableWrapperRef.current.innerText || editableWrapperRef.current.innerHTML);
       }
@@ -292,11 +358,50 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
           </button>
 
           {viewMode === 'a4' && (
-            <div className="inline-flex items-center gap-1 bg-white border border-slate-200 rounded-lg p-1">
+            <div className="inline-flex flex-wrap items-center gap-1 bg-white border border-slate-200 rounded-lg p-1">
+              {/* Police & Taille style Word 2013 */}
+              <select
+                value={activeFontName}
+                onMouseDown={(e) => e.stopPropagation()}
+                onChange={(e) => {
+                  setActiveFontName(e.target.value);
+                  applyRichCommand('fontName', e.target.value);
+                }}
+                title="Police du texte sélectionné"
+                className="h-7 px-1.5 rounded border border-slate-200 text-[11px] font-semibold text-slate-700 bg-slate-50 cursor-pointer"
+              >
+                <option value="Arial">Arial</option>
+                <option value="Times New Roman">Times New Roman</option>
+                <option value="Georgia">Georgia</option>
+                <option value="Calibri">Calibri</option>
+                <option value="Verdana">Verdana</option>
+                <option value="Courier New">Courier New</option>
+              </select>
+
+              <select
+                value={activeFontSize}
+                onMouseDown={(e) => e.stopPropagation()}
+                onChange={(e) => {
+                  setActiveFontSize(e.target.value);
+                  applyRichCommand('fontSize', e.target.value);
+                }}
+                title="Taille de police"
+                className="h-7 px-1.5 rounded border border-slate-200 text-[11px] font-mono text-slate-700 bg-slate-50 cursor-pointer"
+              >
+                <option value="1">8 pt</option>
+                <option value="2">10 pt</option>
+                <option value="3">12 pt</option>
+                <option value="4">14 pt</option>
+                <option value="5">18 pt</option>
+                <option value="6">24 pt</option>
+              </select>
+
+              <span className="w-px h-4 bg-slate-200 mx-0.5" />
+
               <button
                 type="button"
                 onClick={() => applyRichCommand('bold')}
-                title="Gras"
+                title="Gras (Ctrl+B)"
                 className="p-1.5 rounded hover:bg-slate-100 text-slate-700 cursor-pointer"
               >
                 <Bold className="w-3.5 h-3.5" />
@@ -304,7 +409,7 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
               <button
                 type="button"
                 onClick={() => applyRichCommand('italic')}
-                title="Italique"
+                title="Italique (Ctrl+I)"
                 className="p-1.5 rounded hover:bg-slate-100 text-slate-700 cursor-pointer"
               >
                 <Italic className="w-3.5 h-3.5" />
@@ -312,11 +417,64 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
               <button
                 type="button"
                 onClick={() => applyRichCommand('underline')}
-                title="Souligné"
+                title="Souligné (Ctrl+U)"
                 className="p-1.5 rounded hover:bg-slate-100 text-slate-700 cursor-pointer"
               >
                 <Underline className="w-3.5 h-3.5" />
               </button>
+
+              <label
+                title="Couleur du texte"
+                className="px-1 py-0.5 rounded hover:bg-slate-100 cursor-pointer inline-flex items-center gap-1"
+              >
+                <span className="text-[11px] font-extrabold underline" style={{ color: activeTextColor }}>
+                  A
+                </span>
+                <input
+                  type="color"
+                  value={activeTextColor}
+                  onChange={(e) => {
+                    setActiveTextColor(e.target.value);
+                    applyRichCommand('foreColor', e.target.value);
+                  }}
+                  className="w-4 h-4 p-0 border-0 bg-transparent cursor-pointer"
+                />
+              </label>
+
+              <label
+                title="Surlignage du texte"
+                className="px-1 py-0.5 rounded hover:bg-slate-100 cursor-pointer inline-flex items-center gap-0.5"
+              >
+                <Highlighter className="w-3.5 h-3.5 text-amber-600" />
+                <input
+                  type="color"
+                  value={activeHighlightColor}
+                  onChange={(e) => {
+                    setActiveHighlightColor(e.target.value);
+                    applyRichCommand('hiliteColor', e.target.value);
+                  }}
+                  className="w-4 h-4 p-0 border-0 bg-transparent cursor-pointer"
+                />
+              </label>
+
+              <span className="w-px h-4 bg-slate-200 mx-0.5" />
+              <button
+                type="button"
+                onClick={() => applyRichCommand('insertUnorderedList')}
+                title="Liste à puces"
+                className="p-1.5 rounded hover:bg-slate-100 text-slate-700 cursor-pointer"
+              >
+                <List className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => applyRichCommand('insertOrderedList')}
+                title="Liste numérotée"
+                className="p-1.5 rounded hover:bg-slate-100 text-slate-700 cursor-pointer"
+              >
+                <ListOrdered className="w-3.5 h-3.5" />
+              </button>
+
               <span className="w-px h-4 bg-slate-200 mx-0.5" />
               <button
                 type="button"
@@ -333,6 +491,14 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
                 className="p-1.5 rounded hover:bg-slate-100 text-slate-700 cursor-pointer"
               >
                 <AlignCenter className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => applyRichCommand('justifyRight')}
+                title="Aligner à droite"
+                className="p-1.5 rounded hover:bg-slate-100 text-slate-700 cursor-pointer"
+              >
+                <AlignRight className="w-3.5 h-3.5" />
               </button>
               <button
                 type="button"
@@ -454,6 +620,7 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
           }}
           onClick={() => {
             if (floatingMenu) setFloatingMenu(null);
+            if (selectedVisualKey) setSelectedVisualKey(null);
           }}
           className="shadow-lg rounded-sm relative flex flex-col justify-between transition-all"
           style={{
@@ -548,7 +715,7 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
                 backgroundImage: `url(${activeArrierePlan})`,
                 backgroundSize: 'cover',
                 backgroundPosition: 'center',
-                opacity: (assetsConfig.arrierePlan?.opacity ?? 20) / 100,
+                opacity: (getSlotSettings('arrierePlan').opacity ?? 20) / 100,
                 zIndex: 0
               }}
             />
@@ -558,22 +725,27 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
             <div
               className="absolute inset-0 pointer-events-none flex items-center justify-center"
               style={{
-                zIndex: 0,
-                transform: `translate(${assetsConfig.filigrane?.offsetX || 0}px, ${
-                  assetsConfig.filigrane?.offsetY || 0
-                }px) rotate(${assetsConfig.filigrane?.rotation || 0}deg)`
+                zIndex: getSlotSettings('filigrane').zIndex ?? 0
               }}
             >
-              <img
-                src={activeFiligrane}
-                alt="Filigrane"
-                className="object-contain"
-                style={{
-                  maxWidth: `${assetsConfig.filigrane?.widthValue || 380}${assetsConfig.filigrane?.widthUnit || 'px'}`,
-                  maxHeight: `${assetsConfig.filigrane?.heightValue || 460}${assetsConfig.filigrane?.heightUnit || 'px'}`,
-                  opacity: (assetsConfig.filigrane?.opacity ?? 15) / 100
-                }}
-              />
+              <div className={onChangeAssetsConfig ? 'pointer-events-auto' : 'pointer-events-none'}>
+                <EditableDocumentVisual
+                  src={activeFiligrane}
+                  alt="Filigrane"
+                  label="Filigrane"
+                  settings={{
+                    ...getSlotSettings('filigrane'),
+                    opacity: getSlotSettings('filigrane').opacity ?? 15
+                  }}
+                  isSelected={selectedVisualKey === 'filigrane'}
+                  onSelect={() => setSelectedVisualKey('filigrane')}
+                  onUpdateSettings={(patch) => updateSlotSettings('filigrane', patch)}
+                  onReset={() => resetSlotSettings('filigrane')}
+                  defaultWidthPx={380}
+                  defaultHeightPx={460}
+                  interactive={Boolean(onChangeAssetsConfig)}
+                />
+              </div>
             </div>
           )}
 
@@ -589,11 +761,18 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
                     : 'justify-between'
                 }`}
               >
-                <img
+                <EditableDocumentVisual
                   src={activeLogo}
                   alt="Logo officiel"
-                  style={buildAssetOverlayStyle(assetsConfig.logo, { w: 180, h: 65, opacity: 100 })}
-                  className="object-contain"
+                  label="Logo"
+                  settings={getSlotSettings('logo')}
+                  isSelected={selectedVisualKey === 'logo'}
+                  onSelect={() => setSelectedVisualKey('logo')}
+                  onUpdateSettings={(patch) => updateSlotSettings('logo', patch)}
+                  onReset={() => resetSlotSettings('logo')}
+                  defaultWidthPx={180}
+                  defaultHeightPx={65}
+                  interactive={Boolean(onChangeAssetsConfig)}
                 />
                 <span className="text-[11px] font-mono text-slate-500 uppercase">
                   {documentTypeLabel}
@@ -630,22 +809,36 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
                 {activeSignature && (
                   <div>
                     <span className="text-[10px] text-slate-400 uppercase block mb-1">Signature</span>
-                    <img
+                    <EditableDocumentVisual
                       src={activeSignature}
                       alt="Signature"
-                      style={buildAssetOverlayStyle(assetsConfig.signature, { w: 140, h: 56, opacity: 100 })}
-                      className="object-contain"
+                      label="Signature"
+                      settings={getSlotSettings('signature')}
+                      isSelected={selectedVisualKey === 'signature'}
+                      onSelect={() => setSelectedVisualKey('signature')}
+                      onUpdateSettings={(patch) => updateSlotSettings('signature', patch)}
+                      onReset={() => resetSlotSettings('signature')}
+                      defaultWidthPx={140}
+                      defaultHeightPx={56}
+                      interactive={Boolean(onChangeAssetsConfig)}
                     />
                   </div>
                 )}
                 {activeCachet && (
                   <div>
                     <span className="text-[10px] text-slate-400 uppercase block mb-1">Cachet / Sceau</span>
-                    <img
+                    <EditableDocumentVisual
                       src={activeCachet}
                       alt="Cachet"
-                      style={buildAssetOverlayStyle(assetsConfig.cachet, { w: 140, h: 70, opacity: 100 })}
-                      className="object-contain"
+                      label="Cachet / Sceau"
+                      settings={getSlotSettings('cachet')}
+                      isSelected={selectedVisualKey === 'cachet'}
+                      onSelect={() => setSelectedVisualKey('cachet')}
+                      onUpdateSettings={(patch) => updateSlotSettings('cachet', patch)}
+                      onReset={() => resetSlotSettings('cachet')}
+                      defaultWidthPx={140}
+                      defaultHeightPx={70}
+                      interactive={Boolean(onChangeAssetsConfig)}
                     />
                   </div>
                 )}
@@ -653,19 +846,34 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
 
               <div className="flex items-center gap-3">
                 {activeBarcode && (
-                  <img
+                  <EditableDocumentVisual
                     src={activeBarcode}
                     alt="Code-Barres"
-                    style={buildAssetOverlayStyle(assetsConfig.barcodeEmployeur, { w: 150, h: 48, opacity: 100 })}
-                    className="object-contain"
+                    label="Code-Barres"
+                    settings={getSlotSettings('barcode')}
+                    isSelected={selectedVisualKey === 'barcode'}
+                    onSelect={() => setSelectedVisualKey('barcode')}
+                    onUpdateSettings={(patch) => updateSlotSettings('barcode', patch)}
+                    onReset={() => resetSlotSettings('barcode')}
+                    defaultWidthPx={150}
+                    defaultHeightPx={48}
+                    interactive={Boolean(onChangeAssetsConfig)}
                   />
                 )}
                 {activeQrCode && (
-                  <img
+                  <EditableDocumentVisual
                     src={activeQrCode}
                     alt="QR Code"
-                    style={buildAssetOverlayStyle(assetsConfig.qrcodeEmployeur, { w: 64, h: 64, opacity: 100 })}
-                    className="object-contain border border-slate-200 p-0.5 rounded bg-white"
+                    label="QR Code"
+                    settings={getSlotSettings('qrcode')}
+                    isSelected={selectedVisualKey === 'qrcode'}
+                    onSelect={() => setSelectedVisualKey('qrcode')}
+                    onUpdateSettings={(patch) => updateSlotSettings('qrcode', patch)}
+                    onReset={() => resetSlotSettings('qrcode')}
+                    defaultWidthPx={64}
+                    defaultHeightPx={64}
+                    className="border border-slate-200 p-0.5 rounded bg-white"
+                    interactive={Boolean(onChangeAssetsConfig)}
                   />
                 )}
               </div>

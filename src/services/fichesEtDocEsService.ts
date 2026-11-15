@@ -11,6 +11,7 @@ import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import {
   ReferenceLayoutTemplate,
+  SpatialBlueprint,
   hexToRgbTuple,
   resolveEffectiveLayout
 } from './layoutImitationService';
@@ -895,6 +896,7 @@ export function generateSingleDocEsPdf(
   layoutTemplate?: ReferenceLayoutTemplate
 ): { doc: jsPDF; filename: string } {
   const effective = resolveEffectiveLayout(layoutTemplate);
+  const bp: SpatialBlueprint | undefined = effective?.spatialBlueprint;
   const orientation = effective?.orientation || 'portrait';
   const pageFormat = effective?.pageFormat || 'a4';
   const doc = new jsPDF({
@@ -906,15 +908,8 @@ export function generateSingleDocEsPdf(
 
   const PAGE_WIDTH = doc.internal.pageSize.getWidth();
   const PAGE_HEIGHT = doc.internal.pageSize.getHeight();
-  const isCleanLetterhead = Boolean(
-    effective &&
-      (effective.layoutArchetype === 'letterhead_split' ||
-        effective.borderStyle === 'none' ||
-        effective.headerStyle === 'entete_epure')
-  );
-
-  const MARGIN_LEFT = effective?.marginsMm?.left ?? (isCleanLetterhead ? 18 : 20);
-  const MARGIN_RIGHT = effective?.marginsMm?.right ?? (isCleanLetterhead ? 18 : 20);
+  const MARGIN_LEFT = effective?.marginsMm?.left ?? 18;
+  const MARGIN_RIGHT = effective?.marginsMm?.right ?? 18;
   const MARGIN_TOP = effective?.marginsMm?.top ?? 15;
   const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT;
   const pdfFont = effective?.fontFamily || 'helvetica';
@@ -930,16 +925,20 @@ export function generateSingleDocEsPdf(
   const accentRgb = effective?.accentColor ? hexToRgbTuple(effective.accentColor) : ([212, 160, 23] as [number, number, number]);
   const tintRgb = effective?.highlightTintColor ? hexToRgbTuple(effective.highlightTintColor) : ([216, 243, 235] as [number, number, number]);
   const bodyRgb = effective?.bodyTextColor ? hexToRgbTuple(effective.bodyTextColor) : ([30, 41, 59] as [number, number, number]);
+  const borderRgb = effective?.borderColor ? hexToRgbTuple(effective.borderColor) : primaryRgb;
 
   const rendered = renderDocEsPlainText(modelId, p, d, settings);
 
-  if (effective?.pageBgColor && effective.pageBgColor.toUpperCase() !== '#FFFFFF') {
-    doc.setFillColor(...hexToRgbTuple(effective.pageBgColor));
-    doc.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, 'F');
-  }
-
-  const drawFrame = () => {
-    if (!effective && !isCleanLetterhead) {
+  const drawPageBackgroundAndFrame = () => {
+    if (effective?.pageBgColor && effective.pageBgColor.toUpperCase() !== '#FFFFFF') {
+      doc.setFillColor(...hexToRgbTuple(effective.pageBgColor));
+      doc.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, 'F');
+    }
+    if (bp?.hasLeftAccentStripe) {
+      doc.setFillColor(...primaryRgb);
+      doc.rect(0, 0, 5.5, PAGE_HEIGHT, 'F');
+    }
+    if (!effective) {
       doc.setDrawColor(...primaryRgb);
       doc.setLineWidth(0.8);
       doc.rect(12, 12, PAGE_WIDTH - 24, PAGE_HEIGHT - 24);
@@ -948,128 +947,244 @@ export function generateSingleDocEsPdf(
       doc.rect(14, 14, PAGE_WIDTH - 28, PAGE_HEIGHT - 28);
       return;
     }
-    if (!effective || effective.borderStyle === 'none' || isCleanLetterhead) return;
-    doc.setDrawColor(...primaryRgb);
-    doc.setLineWidth(0.8);
-    doc.rect(12, 12, PAGE_WIDTH - 24, PAGE_HEIGHT - 24);
+    if (effective.borderStyle === 'none') return;
+    doc.setDrawColor(...borderRgb);
+    doc.setLineWidth(effective.borderStyle === 'official_band' ? 1.1 : 0.7);
+    doc.rect(11, 11, PAGE_WIDTH - 22, PAGE_HEIGHT - 22);
     if (effective.borderStyle === 'double' || effective.borderStyle === 'official_band') {
       doc.setDrawColor(...accentRgb);
-      doc.setLineWidth(0.3);
-      doc.rect(14, 14, PAGE_WIDTH - 28, PAGE_HEIGHT - 28);
+      doc.setLineWidth(0.35);
+      doc.rect(13.5, 13.5, PAGE_WIDTH - 27, PAGE_HEIGHT - 27);
     }
   };
 
-  drawFrame();
+  drawPageBackgroundAndFrame();
 
-  let y = Math.max(16, MARGIN_TOP);
+  let y = Math.max(15, MARGIN_TOP);
 
-  if (isCleanLetterhead) {
-    // En-tête épuré sans bandeau sombre ni cadre
+  if (bp) {
+    // 1. En-tête piloté strictement par le SpatialBlueprint du fichier importé
+    if (bp.headerLayout === 'top_accent_bar') {
+      doc.setFillColor(...primaryRgb);
+      doc.rect(0, 0, PAGE_WIDTH, 5, 'F');
+    }
+
+    if (bp.headerLayout === 'filled_banner') {
+      const bannerH = Math.max(18, Math.min(30, bp.headerBannerHeightMm || 22));
+      const bx = effective?.borderStyle !== 'none' ? 14 : 0;
+      const bw = effective?.borderStyle !== 'none' ? PAGE_WIDTH - 28 : PAGE_WIDTH;
+      doc.setFillColor(...headerRgb);
+      doc.rect(bx, y - 2, bw, bannerH, 'F');
+
+      const headerTextRgb = effective?.headerTextColor
+        ? hexToRgbTuple(effective.headerTextColor)
+        : ([255, 255, 255] as [number, number, number]);
+      doc.setFont(pdfFont, 'bold');
+      doc.setFontSize(12);
+      doc.setTextColor(...headerTextRgb);
+      doc.text(p.nomEntreprise.toUpperCase(), MARGIN_LEFT, y + 6.5);
+      doc.setFont(pdfFont, 'normal');
+      doc.setFontSize(8.2);
+      doc.setTextColor(...accentRgb);
+      doc.text(`MODULE FICHES ET DOC ES · MODÈLE ${modelId}`, MARGIN_LEFT, y + 12.5);
+
+      doc.setFontSize(8);
+      doc.setTextColor(...headerTextRgb);
+      doc.text(`Réf. Dossier : ${d.referenceDossier}`, PAGE_WIDTH - MARGIN_RIGHT, y + 6.5, { align: 'right' });
+      doc.text(`Date : ${p.dateEffet}`, PAGE_WIDTH - MARGIN_RIGHT, y + 12.5, { align: 'right' });
+      y += bannerH + 4;
+    } else if (bp.headerLayout === 'centered_stack') {
+      doc.setFont(pdfFont, 'bold');
+      doc.setFontSize(13);
+      doc.setTextColor(...primaryRgb);
+      doc.text(p.nomEntreprise.toUpperCase(), PAGE_WIDTH / 2, y + 4, { align: 'center' });
+      doc.setFont(pdfFont, 'normal');
+      doc.setFontSize(8.2);
+      doc.setTextColor(71, 85, 105);
+      doc.text(`MODULE FICHES ET DOC ES · MODÈLE ${modelId} · RÉF : ${d.referenceDossier}`, PAGE_WIDTH / 2, y + 9, {
+        align: 'center'
+      });
+      y += 13;
+      if (bp.headerHasDivider) {
+        doc.setDrawColor(...primaryRgb);
+        doc.setLineWidth(0.5);
+        doc.line(MARGIN_LEFT, y, PAGE_WIDTH - MARGIN_RIGHT, y);
+        y += 4;
+      }
+    } else if (bp.headerLayout === 'split_lr') {
+      doc.setFont(pdfFont, 'bold');
+      doc.setFontSize(12.5);
+      doc.setTextColor(...primaryRgb);
+      doc.text(p.nomEntreprise.toUpperCase(), MARGIN_LEFT, y + 4);
+      doc.setFont(pdfFont, 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(71, 85, 105);
+      doc.text(`Système ATS · Modèle ${modelId}`, PAGE_WIDTH - MARGIN_RIGHT, y + 3, { align: 'right' });
+      doc.text(`Dossier : ${d.referenceDossier}`, PAGE_WIDTH - MARGIN_RIGHT, y + 7.2, { align: 'right' });
+      y += 11;
+      if (bp.headerHasDivider) {
+        doc.setDrawColor(...accentRgb);
+        doc.setLineWidth(0.5);
+        doc.line(MARGIN_LEFT, y, PAGE_WIDTH - MARGIN_RIGHT, y);
+        y += 4;
+      }
+    } else {
+      // left_clean / top_accent_bar
+      doc.setFont(pdfFont, 'bold');
+      doc.setFontSize(13);
+      doc.setTextColor(...primaryRgb);
+      doc.text(p.nomEntreprise.toUpperCase(), MARGIN_LEFT, y + 4);
+      if (bp.hasTopRightMarker) {
+        doc.setDrawColor(180, 190, 200);
+        doc.setLineWidth(0.2);
+        doc.rect(PAGE_WIDTH - MARGIN_RIGHT - 3, y, 3, 3);
+        doc.setFillColor(20, 25, 35);
+        doc.rect(PAGE_WIDTH - MARGIN_RIGHT - 2.1, y + 0.9, 1.2, 1.2, 'F');
+      }
+      y += 10;
+      if (bp.headerHasDivider) {
+        doc.setDrawColor(...primaryRgb);
+        doc.setLineWidth(0.35);
+        doc.line(MARGIN_LEFT, y, PAGE_WIDTH - MARGIN_RIGHT, y);
+        y += 4;
+      }
+    }
+
+    // 2. Métadonnées Expéditeur / Destinataire selon metaLayout
+    if (bp.metaLayout === 'two_col_asymmetric' || bp.metaLayout === 'two_col_equal') {
+      const rightOffset = bp.metaLayout === 'two_col_asymmetric' ? 3.5 : 0;
+      doc.setFont(pdfFont, 'normal');
+      doc.setFontSize(8.2);
+      doc.setTextColor(71, 85, 105);
+      doc.text(p.adresseEntreprise || 'Canada', MARGIN_LEFT, y);
+      doc.text(`Système ATS · ${p.intitulePoste}`, MARGIN_LEFT, y + 4);
+
+      doc.setFont(pdfFont, 'bold');
+      doc.setTextColor(15, 23, 42);
+      doc.text(`CANDIDAT : ${p.nomComplet.toUpperCase()}`, PAGE_WIDTH - MARGIN_RIGHT, y + rightOffset, { align: 'right' });
+      doc.setFont(pdfFont, 'normal');
+      doc.setTextColor(71, 85, 105);
+      doc.text(`Code ID : ${p.codeIdCandidature}`, PAGE_WIDTH - MARGIN_RIGHT, y + rightOffset + 4, { align: 'right' });
+      y += rightOffset + 9;
+    } else if (bp.metaLayout === 'boxed_grid') {
+      doc.setDrawColor(203, 213, 225);
+      doc.setFillColor(248, 250, 252);
+      doc.rect(MARGIN_LEFT, y, CONTENT_WIDTH, 13, 'FD');
+      doc.line(MARGIN_LEFT + CONTENT_WIDTH / 2, y, MARGIN_LEFT + CONTENT_WIDTH / 2, y + 13);
+      doc.setFont(pdfFont, 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(15, 23, 42);
+      doc.text(p.nomEntreprise, MARGIN_LEFT + 3, y + 4.8);
+      doc.text(`CANDIDAT : ${p.nomComplet}`, MARGIN_LEFT + CONTENT_WIDTH / 2 + 3, y + 4.8);
+      doc.setFont(pdfFont, 'normal');
+      doc.setTextColor(71, 85, 105);
+      doc.text(p.adresseEntreprise || 'Canada', MARGIN_LEFT + 3, y + 9.5);
+      doc.text(`Dossier : ${d.referenceDossier}`, MARGIN_LEFT + CONTENT_WIDTH / 2 + 3, y + 9.5);
+      y += 17;
+    } else if (bp.metaLayout === 'single_col_left') {
+      doc.setFont(pdfFont, 'normal');
+      doc.setFontSize(8.2);
+      doc.setTextColor(71, 85, 105);
+      doc.text(`${p.adresseEntreprise || 'Canada'} · Candidat : ${p.nomComplet} (${p.codeIdCandidature})`, MARGIN_LEFT, y);
+      y += 7;
+    }
+
+    // 3. Pastille de références uniquement si détectée sur le modèle
+    if (bp.hasRefPill) {
+      doc.setFillColor(...tintRgb);
+      doc.roundedRect(MARGIN_LEFT, y, 34, 5.5, 1, 1, 'F');
+      doc.setFont(pdfFont, 'bold');
+      doc.setFontSize(8.2);
+      doc.setTextColor(...primaryRgb);
+      doc.text('Vos références', MARGIN_LEFT + 2, y + 3.8);
+
+      y += 8;
+      doc.setFontSize(8.2);
+      doc.setTextColor(71, 85, 105);
+      doc.setFont(pdfFont, 'normal');
+      doc.text('N° Dossier', MARGIN_LEFT, y);
+      doc.setFont(pdfFont, 'bold');
+      doc.setTextColor(15, 23, 42);
+      doc.text(`: ${d.referenceDossier}`, MARGIN_LEFT + 34, y);
+
+      y += 4.2;
+      doc.setFont(pdfFont, 'normal');
+      doc.setTextColor(71, 85, 105);
+      doc.text('Date d’effet', MARGIN_LEFT, y);
+      doc.setFont(pdfFont, 'bold');
+      doc.setTextColor(15, 23, 42);
+      doc.text(`: ${p.dateEffet} · Modèle ${modelId}`, MARGIN_LEFT + 34, y);
+      y += 7.5;
+    }
+
+    // 4. Titre piloté par titleAlign / titleHasBox / titleHasUnderline / titleUppercase
+    const titleStr = bp.titleUppercase ? rendered.title.toUpperCase() : rendered.title;
+    const alignTitle = bp.titleAlign === 'left' ? 'left' : bp.titleAlign === 'right' ? 'right' : 'center';
+    const titleX = alignTitle === 'center' ? PAGE_WIDTH / 2 : alignTitle === 'right' ? PAGE_WIDTH - MARGIN_RIGHT : MARGIN_LEFT;
+
+    if (bp.titleHasBox) {
+      doc.setFillColor(...tintRgb);
+      doc.setDrawColor(...primaryRgb);
+      doc.setLineWidth(0.5);
+      doc.rect(MARGIN_LEFT, y - 3.5, CONTENT_WIDTH, bp.titleHasSubtitle && rendered.subtitle ? 13 : 9, 'FD');
+      y += 1.5;
+    }
+
     doc.setFont(pdfFont, 'bold');
     doc.setFontSize(13);
-    doc.setTextColor(...primaryRgb);
-    doc.text(p.nomEntreprise.toUpperCase(), MARGIN_LEFT, y + 4);
+    doc.setTextColor(...(bp.titleHasBox ? primaryRgb : ([15, 23, 42] as [number, number, number])));
+    doc.text(titleStr, titleX, y, { align: alignTitle });
 
-    // Repère discret en haut à droite
-    doc.setDrawColor(180, 190, 200);
-    doc.setLineWidth(0.2);
-    doc.rect(PAGE_WIDTH - MARGIN_RIGHT - 3, y, 3, 3);
-    doc.setFillColor(20, 25, 35);
-    doc.rect(PAGE_WIDTH - MARGIN_RIGHT - 2.1, y + 0.9, 1.2, 1.2, 'F');
+    if (bp.titleHasSubtitle && rendered.subtitle) {
+      y += 5;
+      doc.setFont(pdfFont, 'normal');
+      doc.setFontSize(8.5);
+      doc.setTextColor(71, 85, 105);
+      doc.text(rendered.subtitle, titleX, y, { align: alignTitle });
+    }
 
-    y += 12;
-    doc.setFont(pdfFont, 'normal');
-    doc.setFontSize(8.2);
-    doc.setTextColor(71, 85, 105);
-    doc.text(p.adresseEntreprise || 'Canada', MARGIN_LEFT, y);
-    doc.text(`Système ATS · ${p.intitulePoste}`, MARGIN_LEFT, y + 4);
-
-    doc.setFont(pdfFont, 'bold');
-    doc.setTextColor(15, 23, 42);
-    doc.text(`CANDIDAT : ${p.nomComplet.toUpperCase()}`, PAGE_WIDTH - MARGIN_RIGHT, y, { align: 'right' });
-    doc.setFont(pdfFont, 'normal');
-    doc.setTextColor(71, 85, 105);
-    doc.text(`Code ID : ${p.codeIdCandidature}`, PAGE_WIDTH - MARGIN_RIGHT, y + 4, { align: 'right' });
-
-    y += 10;
-    // Pastille pastel Références
-    doc.setFillColor(...tintRgb);
-    doc.roundedRect(MARGIN_LEFT, y, 34, 5.5, 1, 1, 'F');
-    doc.setFont(pdfFont, 'bold');
-    doc.setFontSize(8.2);
-    doc.setTextColor(...primaryRgb);
-    doc.text('Vos références', MARGIN_LEFT + 2, y + 3.8);
-
-    y += 8;
-    doc.setFontSize(8.2);
-    doc.setTextColor(71, 85, 105);
-    doc.setFont(pdfFont, 'normal');
-    doc.text('N° Dossier', MARGIN_LEFT, y);
-    doc.setFont(pdfFont, 'bold');
-    doc.setTextColor(15, 23, 42);
-    doc.text(`: ${d.referenceDossier}`, MARGIN_LEFT + 34, y);
-
-    y += 4.2;
-    doc.setFont(pdfFont, 'normal');
-    doc.setTextColor(71, 85, 105);
-    doc.text('Date d’effet', MARGIN_LEFT, y);
-    doc.setFont(pdfFont, 'bold');
-    doc.setTextColor(15, 23, 42);
-    doc.text(`: ${p.dateEffet} · Modèle ${modelId}`, MARGIN_LEFT + 34, y);
-
-    y += 9;
+    if (bp.titleHasUnderline) {
+      y += 3.5;
+      doc.setDrawColor(...accentRgb);
+      doc.setLineWidth(0.5);
+      doc.line(MARGIN_LEFT, y, PAGE_WIDTH - MARGIN_RIGHT, y);
+    }
+    y += 7;
   } else {
-    // Bandeau supérieur classique
+    // Fallback classique sans modèle importé
     doc.setFillColor(...headerRgb);
     doc.rect(15, 15, PAGE_WIDTH - 30, 22, 'F');
-
     doc.setFont(pdfFont, 'bold');
     doc.setFontSize(12);
     doc.setTextColor(255, 255, 255);
     doc.text(p.nomEntreprise.toUpperCase(), MARGIN_LEFT, 24);
-
     doc.setFont(pdfFont, 'normal');
     doc.setFontSize(8.5);
     doc.setTextColor(...accentRgb);
     doc.text(`MODULE FICHES ET DOC ES · MODÈLE ${modelId}`, MARGIN_LEFT, 31);
-
-    doc.setFont(pdfFont, 'normal');
     doc.setFontSize(8);
     doc.setTextColor(220, 230, 242);
     doc.text(`Réf. Dossier : ${d.referenceDossier}`, PAGE_WIDTH - MARGIN_RIGHT, 24, { align: 'right' });
     doc.text(`Date : ${p.dateEffet}`, PAGE_WIDTH - MARGIN_RIGHT, 31, { align: 'right' });
-
     y = Math.max(46, MARGIN_TOP + 28);
-  }
 
-  // Titre du document
-  doc.setFont(pdfFont, 'bold');
-  doc.setFontSize(isCleanLetterhead ? 14 : 13);
-  doc.setTextColor(...(isCleanLetterhead ? ([15, 23, 42] as [number, number, number]) : primaryRgb));
-  const alignTitle = effective?.headerAlign === 'left' ? ('left' as const) : ('center' as const);
-  doc.text(rendered.title, alignTitle === 'center' ? PAGE_WIDTH / 2 : MARGIN_LEFT, y, { align: alignTitle });
-
-  if (rendered.subtitle) {
-    y += 5;
-    doc.setFont(pdfFont, isCleanLetterhead ? 'normal' : 'italic');
-    doc.setFontSize(8.5);
-    doc.setTextColor(71, 85, 105);
-    doc.text(
-      isCleanLetterhead ? rendered.subtitle.toUpperCase() : rendered.subtitle,
-      alignTitle === 'center' ? PAGE_WIDTH / 2 : MARGIN_LEFT,
-      y,
-      { align: alignTitle }
-    );
-  }
-
-  if (!isCleanLetterhead) {
+    doc.setFont(pdfFont, 'bold');
+    doc.setFontSize(13);
+    doc.setTextColor(...primaryRgb);
+    doc.text(rendered.title, PAGE_WIDTH / 2, y, { align: 'center' });
+    if (rendered.subtitle) {
+      y += 5;
+      doc.setFont(pdfFont, 'italic');
+      doc.setFontSize(8.5);
+      doc.setTextColor(71, 85, 105);
+      doc.text(rendered.subtitle, PAGE_WIDTH / 2, y, { align: 'center' });
+    }
     y += 7;
     doc.setDrawColor(...accentRgb);
     doc.setLineWidth(0.5);
     doc.line(MARGIN_LEFT, y, PAGE_WIDTH - MARGIN_RIGHT, y);
+    y += 6.5;
   }
-
-  y += 6.5;
 
   // Corps du texte nettoyé
   const sanitizedContent = rendered.content
@@ -1081,18 +1196,33 @@ export function generateSingleDocEsPdf(
   doc.setFontSize(8.5);
   doc.setTextColor(...bodyRgb);
 
-  const lines = doc.splitTextToSize(sanitizedContent, CONTENT_WIDTH);
+  const lines = doc.splitTextToSize(sanitizedContent, CONTENT_WIDTH - (bp?.bodyLayout === 'cards' ? 4 : 0));
   for (let i = 0; i < lines.length; i++) {
     if (y > PAGE_HEIGHT - 22) {
       doc.addPage();
-      drawFrame();
+      drawPageBackgroundAndFrame();
       y = Math.max(20, MARGIN_TOP);
     }
     const line = lines[i];
     if (/^[=\-_]{3,}/.test(line.trim())) {
       continue;
     }
-    if (line.match(/^[0-9]\./) || line.startsWith('CANDIDAT :') || line.startsWith('RÉFÉRENCE') || line.startsWith('VOLET')) {
+    const isHeading =
+      Boolean(line.match(/^[0-9]\./)) ||
+      line.startsWith('CANDIDAT :') ||
+      line.startsWith('RÉFÉRENCE') ||
+      line.startsWith('VOLET');
+
+    if (isHeading) {
+      if (bp?.hasSectionDividers && i > 0) {
+        doc.setDrawColor(226, 232, 240);
+        doc.setLineWidth(0.25);
+        doc.line(MARGIN_LEFT, y - 1, PAGE_WIDTH - MARGIN_RIGHT, y - 1);
+      }
+      if (bp?.bodyLayout === 'cards') {
+        doc.setFillColor(...tintRgb);
+        doc.rect(MARGIN_LEFT, y - 3, CONTENT_WIDTH, 4.8, 'F');
+      }
       doc.setFont(pdfFont, 'bold');
       doc.setTextColor(...primaryRgb);
       y += 1.2;
@@ -1100,26 +1230,43 @@ export function generateSingleDocEsPdf(
       doc.setFont(pdfFont, 'normal');
       doc.setTextColor(...bodyRgb);
     }
-    doc.text(line, MARGIN_LEFT, y);
+    doc.text(line, bp?.bodyLayout === 'cards' ? MARGIN_LEFT + 2 : MARGIN_LEFT, y);
     y += lineStep;
   }
 
-  // Pied de page avec pagination exacte
+  // Pied de page piloté par footerLayout
   const totalPages = doc.getNumberOfPages();
-  for (let pg = 1; pg <= totalPages; pg++) {
-    doc.setPage(pg);
-    doc.setFont(pdfFont, 'normal');
-    doc.setFontSize(7);
-    doc.setTextColor(100, 116, 139);
-    doc.text(
-      `${p.nomEntreprise} · Système ATS Certifié · Modèle ${modelId} · Document Officiel`,
-      isCleanLetterhead ? MARGIN_LEFT : PAGE_WIDTH / 2,
-      PAGE_HEIGHT - 12,
-      { align: isCleanLetterhead ? 'left' : 'center' }
-    );
-    if (isCleanLetterhead) {
-      doc.setFont(pdfFont, 'bold');
-      doc.text(`${pg}/${totalPages}`, PAGE_WIDTH - MARGIN_RIGHT, PAGE_HEIGHT - 12, { align: 'right' });
+  const fLayout = bp?.footerLayout || 'centered_legal';
+  if (fLayout !== 'none') {
+    for (let pg = 1; pg <= totalPages; pg++) {
+      doc.setPage(pg);
+      if (bp?.hasFooterDivider) {
+        doc.setDrawColor(203, 213, 225);
+        doc.setLineWidth(0.25);
+        doc.line(MARGIN_LEFT, PAGE_HEIGHT - 16, PAGE_WIDTH - MARGIN_RIGHT, PAGE_HEIGHT - 16);
+      }
+      doc.setFont(pdfFont, 'normal');
+      doc.setFontSize(7);
+      doc.setTextColor(100, 116, 139);
+
+      if (fLayout === 'centered_legal') {
+        doc.text(
+          `${p.nomEntreprise} · Système ATS Certifié · Modèle ${modelId} · Document Officiel`,
+          PAGE_WIDTH / 2,
+          PAGE_HEIGHT - 12,
+          { align: 'center' }
+        );
+      } else {
+        if (fLayout !== 'minimal_page') {
+          doc.text(
+            `${p.nomEntreprise} · Modèle ${modelId} · Réf. ${d.referenceDossier}`,
+            MARGIN_LEFT,
+            PAGE_HEIGHT - 12
+          );
+        }
+        doc.setFont(pdfFont, 'bold');
+        doc.text(`${pg}/${totalPages}`, PAGE_WIDTH - MARGIN_RIGHT, PAGE_HEIGHT - 12, { align: 'right' });
+      }
     }
   }
 

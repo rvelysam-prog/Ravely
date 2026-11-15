@@ -37,6 +37,33 @@ export type LayoutArchetype =
   | 'executive_banner'
   | 'table_report';
 
+export interface SpatialBlueprint {
+  headerLayout: 'filled_banner' | 'top_accent_bar' | 'split_lr' | 'left_clean' | 'centered_stack';
+  headerHasDivider: boolean;
+  headerBannerHeightMm: number;
+  metaLayout: 'two_col_asymmetric' | 'two_col_equal' | 'single_col_left' | 'boxed_grid' | 'none';
+  hasRefPill: boolean;
+  titleAlign: 'left' | 'center' | 'right';
+  titleHasBox: boolean;
+  titleHasUnderline: boolean;
+  titleUppercase: boolean;
+  titleHasSubtitle: boolean;
+  bodyLayout: 'prose_paragraphs' | 'numbered_sections' | 'structured_table' | 'cards';
+  hasLeftAccentStripe: boolean;
+  hasSectionDividers: boolean;
+  tableHeaderStyle: 'filled_primary' | 'tinted' | 'bordered_plain';
+  signatureLayout:
+    | 'two_col_fait_a_right_sig'
+    | 'two_col_bipartite'
+    | 'three_col_footer'
+    | 'right_block'
+    | 'left_block';
+  signatureHasTopBorder: boolean;
+  footerLayout: 'qr_legal_page' | 'centered_legal' | 'rule_with_page' | 'minimal_page' | 'none';
+  hasFooterDivider: boolean;
+  hasTopRightMarker: boolean;
+}
+
 export interface ReferenceLayoutTemplate {
   docKey: LayoutTargetDocKey;
   sourceFileName: string;
@@ -74,6 +101,7 @@ export interface ReferenceLayoutTemplate {
   hasBottomLegalFooter?: boolean;
   singlePageFit?: boolean;
   hasTablesDetected: boolean;
+  spatialBlueprint?: SpatialBlueprint;
   detectedElements: DetectedRefElement[];
   ignoredMissingElements: DetectedRefElement[];
   detectedSummary: string;
@@ -88,18 +116,94 @@ export function mixHexWithWhite(hex: string, whiteRatio = 0.86): string {
   return `#${[mr, mg, mb].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
 }
 
+export function buildBlueprintFromLegacyTemplate(tpl: ReferenceLayoutTemplate): SpatialBlueprint {
+  const headerLayout: SpatialBlueprint['headerLayout'] =
+    tpl.headerStyle === 'bandeau_plein'
+      ? 'filled_banner'
+      : tpl.headerAlign === 'center'
+      ? 'centered_stack'
+      : tpl.headerStyle === 'split_officiel'
+      ? 'split_lr'
+      : 'left_clean';
+
+  const metaLayout: SpatialBlueprint['metaLayout'] =
+    tpl.hasTwoColumnMeta === false
+      ? tpl.hasRefHighlightBox
+        ? 'single_col_left'
+        : 'none'
+      : tpl.headerStyle === 'split_officiel'
+      ? 'two_col_equal'
+      : 'two_col_asymmetric';
+
+  const titleAlign: SpatialBlueprint['titleAlign'] =
+    tpl.hasCenteredTitleBlock === false
+      ? 'left'
+      : tpl.headerAlign === 'center' || tpl.hasCenteredTitleBlock
+      ? 'center'
+      : 'left';
+
+  const bodyLayout: SpatialBlueprint['bodyLayout'] = tpl.hasTablesDetected
+    ? 'structured_table'
+    : tpl.borderStyle === 'card_blocks'
+    ? 'cards'
+    : tpl.headerStyle === 'entete_epure'
+    ? 'prose_paragraphs'
+    : 'numbered_sections';
+
+  const signatureLayout: SpatialBlueprint['signatureLayout'] =
+    tpl.signatureZoneStyle === 'three_col_footer'
+      ? 'three_col_footer'
+      : tpl.signaturePlacement === 'bottom_split'
+      ? 'two_col_bipartite'
+      : tpl.signaturePlacement === 'bottom_left'
+      ? 'left_block'
+      : tpl.hasTwoColumnMeta === false && tpl.headerStyle !== 'entete_epure'
+      ? 'right_block'
+      : 'two_col_fait_a_right_sig';
+
+  return {
+    headerLayout,
+    headerHasDivider: headerLayout !== 'filled_banner' && tpl.headerStyle !== 'entete_epure',
+    headerBannerHeightMm: headerLayout === 'filled_banner' ? 24 : 0,
+    metaLayout,
+    hasRefPill: Boolean(tpl.hasRefHighlightBox),
+    titleAlign,
+    titleHasBox: tpl.headerStyle === 'encadre_classique' && !tpl.hasRefHighlightBox,
+    titleHasUnderline: tpl.borderStyle === 'official_band',
+    titleUppercase: headerLayout === 'filled_banner' || tpl.borderStyle === 'double',
+    titleHasSubtitle: true,
+    bodyLayout,
+    hasLeftAccentStripe: false,
+    hasSectionDividers: tpl.borderStyle === 'card_blocks',
+    tableHeaderStyle: headerLayout === 'filled_banner' ? 'filled_primary' : 'tinted',
+    signatureLayout,
+    signatureHasTopBorder: headerLayout !== 'left_clean' || tpl.signatureZoneStyle === 'three_col_footer',
+    footerLayout:
+      tpl.hasBottomLegalFooter === false
+        ? 'rule_with_page'
+        : tpl.detectedElements?.includes('qrcode')
+        ? 'qr_legal_page'
+        : 'centered_legal',
+    hasFooterDivider: true,
+    hasTopRightMarker: false
+  };
+}
+
 export function resolveEffectiveLayout(
   tpl?: ReferenceLayoutTemplate
-): (ReferenceLayoutTemplate & {
-  layoutArchetype: LayoutArchetype;
-  highlightTintColor: string;
-  hasTwoColumnMeta: boolean;
-  hasRefHighlightBox: boolean;
-  hasCenteredTitleBlock: boolean;
-  signatureZoneStyle: 'two_col_fait_a_right_sig' | 'three_col_footer';
-  hasBottomLegalFooter: boolean;
-  singlePageFit: boolean;
-}) | undefined {
+):
+  | (ReferenceLayoutTemplate & {
+      layoutArchetype: LayoutArchetype;
+      highlightTintColor: string;
+      hasTwoColumnMeta: boolean;
+      hasRefHighlightBox: boolean;
+      hasCenteredTitleBlock: boolean;
+      signatureZoneStyle: 'two_col_fait_a_right_sig' | 'three_col_footer';
+      hasBottomLegalFooter: boolean;
+      singlePageFit: boolean;
+      spatialBlueprint: SpatialBlueprint;
+    })
+  | undefined {
   if (!tpl) return undefined;
   const archetype: LayoutArchetype =
     tpl.layoutArchetype ||
@@ -107,20 +211,29 @@ export function resolveEffectiveLayout(
       ? 'executive_banner'
       : tpl.borderStyle === 'double' || tpl.borderStyle === 'simple'
       ? 'boxed_certificate'
+      : tpl.hasTablesDetected
+      ? 'table_report'
       : 'letterhead_split');
+
+  const spatialBlueprint: SpatialBlueprint = tpl.spatialBlueprint
+    ? { ...buildBlueprintFromLegacyTemplate(tpl), ...tpl.spatialBlueprint }
+    : buildBlueprintFromLegacyTemplate({ ...tpl, layoutArchetype: archetype });
 
   return {
     ...tpl,
     layoutArchetype: archetype,
     highlightTintColor: tpl.highlightTintColor || mixHexWithWhite(tpl.primaryColor || '#0B2545', 0.87),
-    hasTwoColumnMeta: tpl.hasTwoColumnMeta ?? archetype === 'letterhead_split',
-    hasRefHighlightBox: tpl.hasRefHighlightBox ?? archetype === 'letterhead_split',
-    hasCenteredTitleBlock: tpl.hasCenteredTitleBlock ?? archetype === 'letterhead_split',
+    hasTwoColumnMeta: tpl.hasTwoColumnMeta ?? spatialBlueprint.metaLayout.startsWith('two_col'),
+    hasRefHighlightBox: tpl.hasRefHighlightBox ?? spatialBlueprint.hasRefPill,
+    hasCenteredTitleBlock: tpl.hasCenteredTitleBlock ?? spatialBlueprint.titleAlign === 'center',
     signatureZoneStyle:
       tpl.signatureZoneStyle ||
-      (archetype === 'letterhead_split' ? 'two_col_fait_a_right_sig' : 'three_col_footer'),
-    hasBottomLegalFooter: tpl.hasBottomLegalFooter ?? archetype === 'letterhead_split',
-    singlePageFit: tpl.singlePageFit ?? true
+      (spatialBlueprint.signatureLayout === 'three_col_footer'
+        ? 'three_col_footer'
+        : 'two_col_fait_a_right_sig'),
+    hasBottomLegalFooter: tpl.hasBottomLegalFooter ?? spatialBlueprint.footerLayout !== 'none',
+    singlePageFit: tpl.singlePageFit ?? true,
+    spatialBlueprint
   };
 }
 
@@ -290,13 +403,22 @@ function luminance(r: number, g: number, b: number): number {
 
 interface PdfTextZonesInsight {
   numPages: number;
+  detectedFontFamily?: 'helvetica' | 'times' | 'courier';
   hasLeftUpperBlock: boolean;
   hasRightUpperBlock: boolean;
-  hasCenteredTitle: boolean;
+  rightUpperIsLowerThanLeft: boolean;
   hasLeftRefKeyValues: boolean;
-  hasBottomLeftFaitA: boolean;
-  hasBottomRightSig: boolean;
+  titleAlign: 'left' | 'center' | 'right';
+  titleUppercase: boolean;
+  hasSubtitleLine: boolean;
+  titleBandYMin?: number;
+  titleBandYMax?: number;
+  hasNumberedSections: boolean;
+  hasBottomLeftText: boolean;
+  hasBottomRightText: boolean;
+  hasBottomCenterText: boolean;
   hasFooterStrip: boolean;
+  lineCount: number;
 }
 
 async function renderFileToAnalysisCanvas(file: File): Promise<{
@@ -325,22 +447,59 @@ async function renderFileToAnalysisCanvas(file: File): Promise<{
 
     await page.render({ canvasContext: ctx, viewport }).promise;
 
-    // Extraire la géométrie exacte des zones de texte PDF
     let pdfTextZones: PdfTextZonesInsight | undefined;
     try {
-      const textContent = await page.getTextContent();
+      const textContent = (await page.getTextContent()) as {
+        items: Array<{ str?: string; transform?: number[]; width?: number; height?: number; fontName?: string }>;
+        styles?: Record<string, { fontFamily?: string }>;
+      };
       const pw = viewport0.width || 595;
       const ph = viewport0.height || 842;
 
+      let serifCount = 0;
+      let monoCount = 0;
+      let sansCount = 0;
+
+      if (textContent.styles) {
+        Object.values(textContent.styles).forEach((st) => {
+          const ff = (st.fontFamily || '').toLowerCase();
+          if (ff.includes('serif') || ff.includes('times') || ff.includes('georgia') || ff.includes('garamond')) {
+            serifCount++;
+          } else if (ff.includes('mono') || ff.includes('courier')) {
+            monoCount++;
+          } else {
+            sansCount++;
+          }
+        });
+      }
+      const detectedFontFamily: 'helvetica' | 'times' | 'courier' =
+        serifCount > sansCount && serifCount >= monoCount
+          ? 'times'
+          : monoCount > sansCount && monoCount > serifCount
+          ? 'courier'
+          : 'helvetica';
+
       let leftUpper = 0;
       let rightUpper = 0;
-      let centeredMidCount = 0;
+      let leftUpperMinY = 1;
+      let rightUpperMinY = 1;
       let leftRefCount = 0;
       let bottomLeftCount = 0;
       let bottomRightCount = 0;
+      let bottomCenterCount = 0;
       let footerStripCount = 0;
+      let numberedSectionsCount = 0;
 
-      for (const item of textContent.items as Array<{ str?: string; transform?: number[]; width?: number; height?: number }>) {
+      interface ParsedSpan {
+        text: string;
+        xPct: number;
+        xCenterPct: number;
+        yPctTop: number;
+        fontSize: number;
+      }
+      const parsedSpans: ParsedSpan[] = [];
+
+      for (const item of textContent.items) {
         const text = (item.str || '').trim();
         if (!text || !item.transform) continue;
         const tx = item.transform[4] || 0;
@@ -349,41 +508,99 @@ async function renderFileToAnalysisCanvas(file: File): Promise<{
         const w = item.width || text.length * fontSize * 0.45;
 
         const xPct = tx / pw;
-        const yPctTop = 1 - ty / ph; // 0 = haut de page, 1 = bas de page
+        const yPctTop = 1 - ty / ph;
         const xCenterPct = (tx + w / 2) / pw;
 
-        if (yPctTop >= 0.10 && yPctTop <= 0.36) {
-          if (xPct < 0.44) leftUpper++;
-          if (xPct > 0.50) rightUpper++;
+        parsedSpans.push({ text, xPct, xCenterPct, yPctTop, fontSize });
+
+        if (item.fontName && textContent.styles?.[item.fontName]) {
+          const ff = (textContent.styles[item.fontName].fontFamily || '').toLowerCase();
+          if (ff.includes('serif') || ff.includes('times')) serifCount++;
+          else if (ff.includes('mono') || ff.includes('courier')) monoCount++;
         }
-        if (yPctTop >= 0.23 && yPctTop <= 0.42 && xPct < 0.50) {
+
+        if (yPctTop >= 0.09 && yPctTop <= 0.36) {
+          if (xPct < 0.44) {
+            leftUpper++;
+            if (yPctTop < leftUpperMinY) leftUpperMinY = yPctTop;
+          }
+          if (xPct > 0.50) {
+            rightUpper++;
+            if (yPctTop < rightUpperMinY) rightUpperMinY = yPctTop;
+          }
+        }
+        if (yPctTop >= 0.21 && yPctTop <= 0.42 && xPct < 0.50) {
           if (text.includes(':') || text.toLowerCase().includes('réf') || text.includes('N°')) {
             leftRefCount++;
           }
         }
-        if (yPctTop >= 0.34 && yPctTop <= 0.54) {
-          if (xCenterPct >= 0.34 && xCenterPct <= 0.68 && (fontSize >= 11 || text.length > 10)) {
-            centeredMidCount++;
-          }
+        if (/^([1-9]|[IVX]{1,4})\.\s+\S/i.test(text) || /^ARTICLE\s+\d+/i.test(text)) {
+          numberedSectionsCount++;
         }
         if (yPctTop >= 0.64 && yPctTop <= 0.87) {
-          if (xPct < 0.46) bottomLeftCount++;
-          if (xPct > 0.48) bottomRightCount++;
+          if (xPct < 0.40) bottomLeftCount++;
+          else if (xPct > 0.54) bottomRightCount++;
+          else bottomCenterCount++;
         }
         if (yPctTop > 0.87) {
           footerStripCount++;
         }
       }
 
+      // Identifier le titre principal réel dans la moitié supérieure (entre 10% et 56%)
+      const upperCandidates = parsedSpans.filter(
+        (s) => s.yPctTop >= 0.09 && s.yPctTop <= 0.56 && s.text.length >= 6
+      );
+      const maxFont = upperCandidates.reduce((m, s) => Math.max(m, s.fontSize), 0);
+      const titleSpans = upperCandidates.filter((s) => s.fontSize >= Math.max(10.5, maxFont * 0.86));
+      const primaryTitle = titleSpans[0];
+
+      let titleAlign: 'left' | 'center' | 'right' = 'center';
+      let titleUppercase = false;
+      let hasSubtitleLine = false;
+      let titleBandYMin: number | undefined;
+      let titleBandYMax: number | undefined;
+
+      if (primaryTitle) {
+        if (primaryTitle.xPct < 0.22 && primaryTitle.xCenterPct < 0.42) {
+          titleAlign = 'left';
+        } else if (primaryTitle.xPct > 0.55) {
+          titleAlign = 'right';
+        } else {
+          titleAlign = 'center';
+        }
+        const letters = primaryTitle.text.replace(/[^a-zA-ZÀ-ÿ]/g, '');
+        const upperCount = (letters.match(/[A-ZÀ-Ý]/g) || []).length;
+        titleUppercase = letters.length > 0 && upperCount / letters.length >= 0.72;
+        titleBandYMin = Math.max(0.05, primaryTitle.yPctTop - 0.025);
+        titleBandYMax = Math.min(0.65, primaryTitle.yPctTop + 0.04);
+        hasSubtitleLine = upperCandidates.some(
+          (s) =>
+            s !== primaryTitle &&
+            s.yPctTop > primaryTitle.yPctTop &&
+            s.yPctTop <= primaryTitle.yPctTop + 0.045
+        );
+      }
+
       pdfTextZones = {
         numPages: pdf.numPages || 1,
+        detectedFontFamily,
         hasLeftUpperBlock: leftUpper >= 2,
         hasRightUpperBlock: rightUpper >= 2,
-        hasCenteredTitle: centeredMidCount >= 1,
-        hasLeftRefKeyValues: leftRefCount >= 1,
-        hasBottomLeftFaitA: bottomLeftCount >= 1,
-        hasBottomRightSig: bottomRightCount >= 1,
-        hasFooterStrip: footerStripCount >= 1
+        rightUpperIsLowerThanLeft:
+          leftUpper >= 2 && rightUpper >= 2 && rightUpperMinY > leftUpperMinY + 0.03,
+        hasLeftRefKeyValues: leftRefCount >= 2,
+        titleAlign,
+        titleUppercase,
+        hasSubtitleLine,
+        titleBandYMin,
+        titleBandYMax,
+        hasNumberedSections: numberedSectionsCount >= 2,
+        hasBottomLeftText: bottomLeftCount >= 1,
+        hasBottomRightText: bottomRightCount >= 1,
+        hasBottomCenterText: bottomCenterCount >= 1,
+        hasFooterStrip: footerStripCount >= 1,
+        lineCount: parsedSpans.length
       };
     } catch {
       // Fallback sur analyse canvas si getTextContent indisponible
@@ -436,8 +653,9 @@ function createCompressedThumbnail(sourceCanvas: HTMLCanvasElement): string {
 }
 
 /**
- * Analyse la géométrie, la palette, les colonnes, les zones structurelles,
- * les marges, les encadrements réels et les visuels présents sur un document modèle.
+ * Analyse la géométrie réelle, la palette, l'alignement de titre, les diviseurs,
+ * les colonnes, les encadrements, les polices et les visuels de N'IMPORTE QUEL
+ * document modèle importé, sans aucun modèle codé en dur.
  */
 export async function analyzeReferenceDocumentFile(
   file: File,
@@ -500,12 +718,16 @@ export async function analyzeReferenceDocumentFile(
     return !isNearWhite(r, g, b, 236) && diffBg > 24;
   };
 
-  // 2. Détection stricte d'un VRAI cadre de bordure continu sur les 4 côtés
-  const checkHorizontalLineCoverage = (yStartPct: number, yEndPct: number): { maxRun: number; lineCount: number } => {
+  // 2. Détection lignes horizontales / verticales réelles
+  const checkHorizontalLineCoverage = (
+    yStartPct: number,
+    yEndPct: number,
+    minRunRatio = 0.55
+  ): { maxRun: number; lineCount: number } => {
     const y0 = Math.max(2, Math.round(h * yStartPct));
     const y1 = Math.min(h - 3, Math.round(h * yEndPct));
-    const x0 = Math.round(w * 0.14);
-    const x1 = Math.round(w * 0.86);
+    const x0 = Math.round(w * 0.10);
+    const x1 = Math.round(w * 0.90);
     const span = Math.max(1, (x1 - x0) / 2);
     let maxRun = 0;
     let lineCount = 0;
@@ -516,12 +738,15 @@ export async function analyzeReferenceDocumentFile(
       }
       const cov = hits / span;
       if (cov > maxRun) maxRun = cov;
-      if (cov > 0.62) lineCount++;
+      if (cov >= minRunRatio) lineCount++;
     }
     return { maxRun, lineCount };
   };
 
-  const checkVerticalLineCoverage = (xStartPct: number, xEndPct: number): { maxRun: number; lineCount: number } => {
+  const checkVerticalLineCoverage = (
+    xStartPct: number,
+    xEndPct: number
+  ): { maxRun: number; lineCount: number } => {
     const x0 = Math.max(2, Math.round(w * xStartPct));
     const x1 = Math.min(w - 3, Math.round(w * xEndPct));
     const y0 = Math.round(h * 0.14);
@@ -536,21 +761,21 @@ export async function analyzeReferenceDocumentFile(
       }
       const cov = hits / span;
       if (cov > maxRun) maxRun = cov;
-      if (cov > 0.62) lineCount++;
+      if (cov > 0.58) lineCount++;
     }
     return { maxRun, lineCount };
   };
 
-  const topFrame = checkHorizontalLineCoverage(0.015, 0.085);
-  const bottomFrame = checkHorizontalLineCoverage(0.915, 0.985);
+  const topFrame = checkHorizontalLineCoverage(0.015, 0.085, 0.62);
+  const bottomFrame = checkHorizontalLineCoverage(0.915, 0.985, 0.62);
   const leftFrame = checkVerticalLineCoverage(0.015, 0.085);
   const rightFrame = checkVerticalLineCoverage(0.915, 0.985);
 
   const hasTrueOuterBox =
-    topFrame.maxRun >= 0.6 &&
-    bottomFrame.maxRun >= 0.6 &&
-    leftFrame.maxRun >= 0.6 &&
-    rightFrame.maxRun >= 0.6;
+    topFrame.maxRun >= 0.58 &&
+    bottomFrame.maxRun >= 0.58 &&
+    leftFrame.maxRun >= 0.58 &&
+    rightFrame.maxRun >= 0.58;
   const hasDoubleOuterBox =
     hasTrueOuterBox &&
     topFrame.lineCount >= 4 &&
@@ -558,16 +783,26 @@ export async function analyzeReferenceDocumentFile(
     leftFrame.lineCount >= 4 &&
     rightFrame.lineCount >= 4;
 
-  // 3. Parcours des pixels pour bounding box, palette, pastel pill, zones 2-colonnes et visuels
+  const hasLeftAccentStripe =
+    !hasTrueOuterBox && leftFrame.maxRun >= 0.58 && rightFrame.maxRun < 0.35;
+
+  // Bande d'accent tout en haut (ex: trait de couleur épais 2-8mm sans gros bandeau)
+  const topAccentStrip = checkHorizontalLineCoverage(0.0, 0.045, 0.72);
+  // Ligne séparatrice sous en-tête (entre 8% et 21% de hauteur)
+  const headerDividerCheck = checkHorizontalLineCoverage(0.08, 0.21, 0.55);
+  // Ligne séparatrice au-dessus du pied de page (entre 82% et 94%)
+  const footerDividerCheck = checkHorizontalLineCoverage(0.82, 0.94, 0.50);
+
+  // 3. Parcours des pixels par bandes réelles
   let minX = w;
   let maxX = 0;
   let minY = h;
   let maxY = 0;
 
-  let headerDarkR = 0;
-  let headerDarkG = 0;
-  let headerDarkB = 0;
-  let headerDarkCount = 0;
+  let headerFilledR = 0;
+  let headerFilledG = 0;
+  let headerFilledB = 0;
+  let headerFilledCount = 0;
 
   let headerSaturatedScore = -1;
   let bestPrimary: [number, number, number] = [11, 37, 69];
@@ -580,10 +815,10 @@ export async function analyzeReferenceDocumentFile(
   let pastelCount = 0;
 
   const headerEndY = Math.round(h * 0.14);
-  const metaStartY = Math.round(h * 0.12);
-  const metaEndY = Math.round(h * 0.37);
-  const titleStartY = Math.round(h * 0.34);
-  const titleEndY = Math.round(h * 0.52);
+  const metaStartY = Math.round(h * 0.13);
+  const metaEndY = Math.round(h * 0.36);
+  const titleStartY = Math.round(h * (pdfTextZones?.titleBandYMin ?? 0.22));
+  const titleEndY = Math.round(h * (pdfTextZones?.titleBandYMax ?? 0.50));
   const sigStartY = Math.round(h * 0.66);
   const footerStartY = Math.round(h * 0.85);
   const step = 2;
@@ -591,11 +826,14 @@ export async function analyzeReferenceDocumentFile(
   let headerLeftInk = 0;
   let headerCenterInk = 0;
   let headerRightInk = 0;
+  let topRightCornerTinyInk = 0;
 
   let metaLeftInk = 0;
   let metaRightInk = 0;
+  let titleLeftInk = 0;
   let titleCenterInk = 0;
-  let titleSideInk = 0;
+  let titleRightInk = 0;
+  let titleFilledBgCount = 0;
   let sigLeftInk = 0;
   let sigRightInk = 0;
   let footerLeftQrInk = 0;
@@ -605,9 +843,11 @@ export async function analyzeReferenceDocumentFile(
   let centerWatermarkSoftCount = 0;
   let bottomStampSaturatedCount = 0;
   let midHorizontalLines = 0;
+  let filledHeaderRows = 0;
 
   for (let y = 0; y < h; y += step) {
     let rowInkCount = 0;
+    let rowBannerColorCount = 0;
     for (let x = 0; x < w; x += step) {
       const idx = (y * w + x) * 4;
       const r = data[idx];
@@ -617,16 +857,16 @@ export async function analyzeReferenceDocumentFile(
       const sat = colorSaturation(r, g, b);
       const lum = luminance(r, g, b);
 
-      // Détection pastille pastel (ex: badge "Vos références" vert menthe / bleu pâle)
+      // Détection réelle d'une pastille pastel dans la zone références (20%-44% H, 5%-46% W)
       if (
         y >= h * 0.20 &&
         y <= h * 0.44 &&
         x >= w * 0.05 &&
         x <= w * 0.46 &&
-        sat >= 0.08 &&
-        sat <= 0.45 &&
-        lum >= 200 &&
-        lum <= 248
+        sat >= 0.09 &&
+        sat <= 0.48 &&
+        lum >= 198 &&
+        lum <= 246
       ) {
         pastelR += r;
         pastelG += g;
@@ -646,41 +886,50 @@ export async function analyzeReferenceDocumentFile(
 
         // Zone en-tête supérieure (0 - 14%)
         if (y < headerEndY) {
-          if (x < w * 0.38) headerLeftInk++;
-          else if (x < w * 0.65) headerCenterInk++;
+          if (x < w * 0.36) headerLeftInk++;
+          else if (x < w * 0.66) headerCenterInk++;
           else headerRightInk++;
 
-          if (lum < 155) {
-            headerDarkR += r;
-            headerDarkG += g;
-            headerDarkB += b;
-            headerDarkCount++;
+          if (x > w * 0.89 && y < h * 0.08 && lum < 120) {
+            topRightCornerTinyInk++;
           }
 
-          const score = sat * 110 + (220 - lum) * 0.35;
-          if (sat > 0.18 && lum < 200 && score > headerSaturatedScore) {
+          if (lum < 175 || (sat > 0.25 && lum < 215)) {
+            rowBannerColorCount++;
+            headerFilledR += r;
+            headerFilledG += g;
+            headerFilledB += b;
+            headerFilledCount++;
+          }
+
+          const score = sat * 115 + (220 - lum) * 0.35;
+          if (sat > 0.16 && lum < 205 && score > headerSaturatedScore) {
             headerSaturatedScore = score;
             bestPrimary = [r, g, b];
           }
-          if (sat > 0.30 && lum >= 100 && lum <= 225 && sat * 100 > accentScore) {
+          if (sat > 0.28 && lum >= 95 && lum <= 228 && sat * 100 > accentScore) {
             accentScore = sat * 100;
             bestAccent = [r, g, b];
           }
         }
 
-        // Zone coordonnées 2 colonnes (12% - 37%)
+        // Zone coordonnées (13% - 36%)
         if (y >= metaStartY && y <= metaEndY) {
-          if (x >= w * 0.05 && x < w * 0.44) metaLeftInk++;
-          if (x >= w * 0.50 && x <= w * 0.93) metaRightInk++;
+          if (x >= w * 0.05 && x < w * 0.46) metaLeftInk++;
+          if (x >= w * 0.50 && x <= w * 0.94) metaRightInk++;
         }
 
-        // Zone titre central (34% - 52%)
+        // Zone titre
         if (y >= titleStartY && y <= titleEndY) {
-          if (x >= w * 0.25 && x <= w * 0.75) titleCenterInk++;
-          else titleSideInk++;
+          if (x < w * 0.35) titleLeftInk++;
+          else if (x <= w * 0.68) titleCenterInk++;
+          else titleRightInk++;
+          if ((sat > 0.14 && lum < 232) || lum < 215) {
+            titleFilledBgCount++;
+          }
         }
 
-        // Zone filigrane (tons doux gris/pastel au centre, loin du texte noir vif)
+        // Filigrane centré doux
         if (
           x > w * 0.25 &&
           x < w * 0.75 &&
@@ -692,7 +941,7 @@ export async function analyzeReferenceDocumentFile(
           centerWatermarkSoftCount++;
         }
 
-        // Zone signatures (66% - 86%)
+        // Signatures (66% - 85%)
         if (y >= sigStartY && y < footerStartY) {
           if (x < w * 0.45) sigLeftInk++;
           if (x >= w * 0.48) sigRightInk++;
@@ -701,7 +950,7 @@ export async function analyzeReferenceDocumentFile(
           }
         }
 
-        // Bandeau pied de page (85% - 98%)
+        // Pied de page (85% - 98%)
         if (y >= footerStartY) {
           if (x < w * 0.22 && lum < 140) footerLeftQrInk++;
           else if (x >= w * 0.22 && x < w * 0.78) footerCenterInk++;
@@ -713,8 +962,33 @@ export async function analyzeReferenceDocumentFile(
         }
       }
     }
+
+    if (y < headerEndY && rowBannerColorCount > (w / step) * 0.65) {
+      filledHeaderRows++;
+    }
     if (y > headerEndY && y < sigStartY && rowInkCount > (w / step) * 0.55) {
       midHorizontalLines++;
+    }
+  }
+
+  // Palette globale si le haut était très minimaliste
+  if (headerSaturatedScore < 0) {
+    for (let y = headerEndY; y < h; y += 6) {
+      for (let x = 0; x < w; x += 6) {
+        const idx = (y * w + x) * 4;
+        const r = data[idx];
+        const g = data[idx + 1];
+        const b = data[idx + 2];
+        const sat = colorSaturation(r, g, b);
+        const lum = luminance(r, g, b);
+        if (sat > 0.22 && lum < 205) {
+          const sc = sat * 100 + (210 - lum) * 0.3;
+          if (sc > headerSaturatedScore) {
+            headerSaturatedScore = sc;
+            bestPrimary = [r, g, b];
+          }
+        }
+      }
     }
   }
 
@@ -725,104 +999,212 @@ export async function analyzeReferenceDocumentFile(
   const marginLeft = maxX > minX ? clampMm((minX / w) * pageWidthMm, 18) : 18;
   const marginRight = maxX > minX ? clampMm(((w - maxX) / w) * pageWidthMm, 18) : 18;
   const marginTop = maxY > minY ? clampMm((minY / h) * pageHeightMm, 14) : 14;
-  const marginBottom = maxY > minY ? clampMm(((h - maxY) / w) * pageHeightMm, 14) : 14;
+  const marginBottom = maxY > minY ? clampMm(((h - maxY) / h) * pageHeightMm, 14) : 14;
 
   // Couleurs extraites
   const primaryColor = rgbToHex(bestPrimary[0], bestPrimary[1], bestPrimary[2]);
   const accentColor =
-    accentScore > 20 ? rgbToHex(bestAccent[0], bestAccent[1], bestAccent[2]) : primaryColor;
+    accentScore > 18 ? rgbToHex(bestAccent[0], bestAccent[1], bestAccent[2]) : primaryColor;
   const highlightTintColor =
     pastelCount >= 28
       ? rgbToHex(pastelR / pastelCount, pastelG / pastelCount, pastelB / pastelCount)
       : mixHexWithWhite(primaryColor, 0.87);
 
-  // Bandeau d'en-tête plein uniquement si l'en-tête supérieur est massivement coloré (>28%)
+  // Bandeau plein vs fine barre d'accent en haut vs en-tête épuré
   const headerAreaPixels = (w * headerEndY) / (step * step);
-  const isFilledHeaderBanner = headerDarkCount > headerAreaPixels * 0.28;
-  const headerBgColor = isFilledHeaderBanner
-    ? rgbToHex(
-        headerDarkR / headerDarkCount,
-        headerDarkG / headerDarkCount,
-        headerDarkB / headerDarkCount
-      )
-    : primaryColor;
+  const bannerHeightMm = Math.round(((filledHeaderRows * step) / h) * pageHeightMm);
+  const isFilledHeaderBanner =
+    headerFilledCount > headerAreaPixels * 0.24 && bannerHeightMm >= 9;
+  const isTopAccentBar = !isFilledHeaderBanner && topAccentStrip.lineCount >= 2 && topAccentStrip.lineCount <= 12;
+
+  const headerBgColor =
+    isFilledHeaderBanner && headerFilledCount > 0
+      ? rgbToHex(
+          headerFilledR / headerFilledCount,
+          headerFilledG / headerFilledCount,
+          headerFilledB / headerFilledCount
+        )
+      : primaryColor;
   const headerTextColor = '#FFFFFF';
 
-  // Style d'encadrement exact
+  // Style d'encadrement réel
   const borderStyle: ReferenceLayoutTemplate['borderStyle'] = hasDoubleOuterBox
     ? 'double'
     : hasTrueOuterBox
     ? 'simple'
-    : midHorizontalLines >= 4 && !pdfTextZones?.hasCenteredTitle
+    : isTopAccentBar || hasLeftAccentStripe
+    ? 'official_band'
+    : midHorizontalLines >= 5 && !pdfTextZones
     ? 'card_blocks'
     : 'none';
 
-  // Style d'en-tête exact
+  // Calcul fidèle du SpatialBlueprint propre À CE FICHIER
+  const bpHeaderLayout: SpatialBlueprint['headerLayout'] = isFilledHeaderBanner
+    ? 'filled_banner'
+    : isTopAccentBar
+    ? 'top_accent_bar'
+    : headerCenterInk > headerLeftInk * 1.35 && headerCenterInk > headerRightInk * 1.35
+    ? 'centered_stack'
+    : headerLeftInk > 45 && headerRightInk > 35
+    ? 'split_lr'
+    : 'left_clean';
+
+  const headerHasDivider =
+    !isFilledHeaderBanner && headerDividerCheck.maxRun >= 0.55 && headerDividerCheck.lineCount >= 1;
+
+  const hasRefPill = pastelCount >= 28;
+
+  const metaLayout: SpatialBlueprint['metaLayout'] =
+    midHorizontalLines >= 2 && metaLeftInk > 60 && metaRightInk > 60 && !hasRefPill && !pdfTextZones?.rightUpperIsLowerThanLeft
+      ? 'boxed_grid'
+      : pdfTextZones
+      ? pdfTextZones.hasLeftUpperBlock && pdfTextZones.hasRightUpperBlock
+        ? pdfTextZones.rightUpperIsLowerThanLeft
+          ? 'two_col_asymmetric'
+          : 'two_col_equal'
+        : pdfTextZones.hasLeftUpperBlock || pdfTextZones.hasLeftRefKeyValues
+        ? 'single_col_left'
+        : 'none'
+      : metaLeftInk > 70 && metaRightInk > 55
+      ? 'two_col_equal'
+      : metaLeftInk > 70
+      ? 'single_col_left'
+      : 'none';
+
+  const titleAlign: SpatialBlueprint['titleAlign'] = pdfTextZones
+    ? pdfTextZones.titleAlign
+    : titleCenterInk > titleLeftInk * 1.25 && titleCenterInk > titleRightInk * 1.25
+    ? 'center'
+    : titleRightInk > titleLeftInk * 1.4
+    ? 'right'
+    : 'left';
+
+  const titleAreaApprox = (w * Math.max(12, titleEndY - titleStartY)) / (step * step);
+  const titleHasBox =
+    titleAreaApprox > 0 && titleFilledBgCount > titleAreaApprox * 0.34;
+  const titleUnderlineCheck = checkHorizontalLineCoverage(
+    Math.min(0.60, (titleEndY / h) - 0.02),
+    Math.min(0.64, (titleEndY / h) + 0.04),
+    0.45
+  );
+  const titleHasUnderline = !titleHasBox && titleUnderlineCheck.lineCount >= 1 && titleUnderlineCheck.lineCount <= 4;
+  const titleUppercase = pdfTextZones
+    ? pdfTextZones.titleUppercase
+    : bpHeaderLayout === 'filled_banner' || hasDoubleOuterBox;
+  const titleHasSubtitle = pdfTextZones ? pdfTextZones.hasSubtitleLine : true;
+
+  const hasTablesDetected = midHorizontalLines >= 4;
+  const bodyLayout: SpatialBlueprint['bodyLayout'] = hasTablesDetected
+    ? 'structured_table'
+    : pdfTextZones?.hasNumberedSections
+    ? 'numbered_sections'
+    : borderStyle === 'card_blocks'
+    ? 'cards'
+    : 'prose_paragraphs';
+
+  const signatureLayout: SpatialBlueprint['signatureLayout'] =
+    sigLeftInk > 35 && sigRightInk > 55
+      ? metaLayout === 'two_col_asymmetric' || hasRefPill
+        ? 'two_col_fait_a_right_sig'
+        : 'two_col_bipartite'
+      : sigLeftInk > 45 && sigRightInk <= 35
+      ? 'left_block'
+      : sigRightInk > 45 && sigLeftInk <= 35
+      ? 'right_block'
+      : isFilledHeaderBanner || hasDoubleOuterBox
+      ? 'three_col_footer'
+      : 'two_col_bipartite';
+
+  const hasFooterDivider = footerDividerCheck.maxRun >= 0.48;
+  const footerLayout: SpatialBlueprint['footerLayout'] =
+    footerLeftQrInk > 50 && footerCenterInk > 25
+      ? 'qr_legal_page'
+      : footerCenterInk > 45
+      ? 'centered_legal'
+      : hasFooterDivider || footerRightInk > 12
+      ? 'rule_with_page'
+      : footerCenterInk + footerRightInk > 8
+      ? 'minimal_page'
+      : 'none';
+
+  const hasTopRightMarker = topRightCornerTinyInk >= 3 && topRightCornerTinyInk <= 65 && !hasTrueOuterBox;
+
+  const spatialBlueprint: SpatialBlueprint = {
+    headerLayout: bpHeaderLayout,
+    headerHasDivider,
+    headerBannerHeightMm: isFilledHeaderBanner ? Math.max(14, Math.min(34, bannerHeightMm || 22)) : 0,
+    metaLayout,
+    hasRefPill,
+    titleAlign,
+    titleHasBox,
+    titleHasUnderline,
+    titleUppercase,
+    titleHasSubtitle,
+    bodyLayout,
+    hasLeftAccentStripe,
+    hasSectionDividers: bodyLayout === 'numbered_sections' && midHorizontalLines >= 2,
+    tableHeaderStyle: isFilledHeaderBanner ? 'filled_primary' : hasRefPill ? 'tinted' : 'bordered_plain',
+    signatureLayout,
+    signatureHasTopBorder: bpHeaderLayout !== 'left_clean' || signatureLayout === 'three_col_footer',
+    footerLayout,
+    hasFooterDivider,
+    hasTopRightMarker
+  };
+
   const headerStyle: ReferenceLayoutTemplate['headerStyle'] = isFilledHeaderBanner
     ? 'bandeau_plein'
-    : borderStyle === 'double' || borderStyle === 'simple'
+    : hasDoubleOuterBox || hasTrueOuterBox
     ? 'encadre_classique'
-    : headerLeftInk > 50 && headerRightInk > 30
+    : bpHeaderLayout === 'split_lr'
     ? 'split_officiel'
     : 'entete_epure';
 
-  // Zones structurelles détectées
-  const hasTwoColumnMeta =
-    Boolean(pdfTextZones?.hasLeftUpperBlock && pdfTextZones?.hasRightUpperBlock) ||
-    (metaLeftInk > 80 && metaRightInk > 60);
-  const hasCenteredTitleBlock =
-    Boolean(pdfTextZones?.hasCenteredTitle) ||
-    (titleCenterInk > 80 && titleCenterInk > titleSideInk * 1.15);
-  const hasRefHighlightBox =
-    pastelCount >= 24 || Boolean(pdfTextZones?.hasLeftRefKeyValues);
-  const hasBottomLegalFooter =
-    Boolean(pdfTextZones?.hasFooterStrip) || footerCenterInk > 40 || footerLeftQrInk > 50;
-
   const layoutArchetype: LayoutArchetype = isFilledHeaderBanner
     ? 'executive_banner'
-    : borderStyle === 'double' || borderStyle === 'simple'
+    : hasDoubleOuterBox || hasTrueOuterBox
     ? 'boxed_certificate'
-    : midHorizontalLines >= 6 && !hasCenteredTitleBlock
+    : hasTablesDetected
     ? 'table_report'
     : 'letterhead_split';
 
   const headerAlign: ReferenceLayoutTemplate['headerAlign'] =
-    layoutArchetype === 'letterhead_split'
-      ? 'left'
-      : headerCenterInk > headerLeftInk * 1.4
+    titleAlign === 'center'
       ? 'center'
+      : bpHeaderLayout === 'split_lr'
+      ? 'split'
       : 'left';
 
   const logoPlacement: ReferenceLayoutTemplate['logoPlacement'] =
     headerRightInk > headerLeftInk * 1.6
       ? 'top_right'
-      : headerCenterInk > headerLeftInk * 1.5
+      : headerCenterInk > headerLeftInk * 1.4
       ? 'top_center'
       : 'top_left';
 
+  const hasTwoColumnMeta = metaLayout === 'two_col_asymmetric' || metaLayout === 'two_col_equal';
+  const hasRefHighlightBox = hasRefPill || Boolean(pdfTextZones?.hasLeftRefKeyValues);
+  const hasCenteredTitleBlock = titleAlign === 'center';
   const signatureZoneStyle: ReferenceLayoutTemplate['signatureZoneStyle'] =
-    layoutArchetype === 'letterhead_split' ||
-    (Boolean(pdfTextZones?.hasBottomLeftFaitA && pdfTextZones?.hasBottomRightSig) ||
-      (sigLeftInk > 30 && sigRightInk > 70))
-      ? 'two_col_fait_a_right_sig'
-      : 'three_col_footer';
+    signatureLayout === 'three_col_footer' ? 'three_col_footer' : 'two_col_fait_a_right_sig';
+  const hasBottomLegalFooter = footerLayout !== 'none';
 
   const blockSpacing: ReferenceLayoutTemplate['blockSpacing'] =
-    layoutArchetype === 'letterhead_split' ? 'compact' : 'standard';
+    pdfTextZones && pdfTextZones.lineCount > 90
+      ? 'compact'
+      : pdfTextZones && pdfTextZones.lineCount < 35
+      ? 'airy'
+      : 'standard';
 
   const fontFamily: ReferenceLayoutTemplate['fontFamily'] =
-    borderStyle === 'double' ||
-    file.name.toLowerCase().includes('notar') ||
-    file.name.toLowerCase().includes('declar')
-      ? 'times'
-      : 'helvetica';
+    pdfTextZones?.detectedFontFamily ||
+    (borderStyle === 'double' ? 'times' : 'helvetica');
 
   // Éléments visuels détectés
   const detectedElements: DetectedRefElement[] = [];
   if (headerLeftInk > 40 || headerCenterInk > 60 || headerRightInk > 40) {
     detectedElements.push('logo');
   }
-  if (sigRightInk > 65 || sigLeftInk > 80) {
+  if (sigRightInk > 55 || sigLeftInk > 65) {
     detectedElements.push('signature');
   }
   if (bottomStampSaturatedCount > 45 || borderStyle === 'double' || borderStyle === 'simple') {
@@ -831,28 +1213,37 @@ export async function analyzeReferenceDocumentFile(
   if (centerWatermarkSoftCount > 260) {
     detectedElements.push('filigrane');
   }
-  if (pageBgHex !== '#FFFFFF' || hasTrueOuterBox) {
+  if (pageBgHex !== '#FFFFFF' || hasTrueOuterBox || hasLeftAccentStripe) {
     detectedElements.push('arrierePlan');
   }
   if (footerLeftQrInk > 55) {
     detectedElements.push('qrcode');
   }
 
-  const hasTablesDetected = midHorizontalLines >= 3;
   const previewThumbnailUrl = createCompressedThumbnail(canvas);
 
-  const archetypeLabel =
-    layoutArchetype === 'letterhead_split'
-      ? 'Lettre Officielle Épurée (2 col.)'
-      : layoutArchetype === 'boxed_certificate'
-      ? 'Certificat Encadré'
-      : layoutArchetype === 'executive_banner'
-      ? 'Bandeau Exécutif'
-      : 'Rapport Tableau';
+  const headerNameMap: Record<SpatialBlueprint['headerLayout'], string> = {
+    filled_banner: 'Bandeau coloré',
+    top_accent_bar: 'Barre haute accent',
+    split_lr: 'En-tête Gauche/Droite',
+    centered_stack: 'En-tête centré',
+    left_clean: 'En-tête épuré gauche'
+  };
+  const titleNameMap: Record<SpatialBlueprint['titleAlign'], string> = {
+    left: 'Titre à gauche',
+    center: 'Titre centré',
+    right: 'Titre à droite'
+  };
+  const bodyNameMap: Record<SpatialBlueprint['bodyLayout'], string> = {
+    prose_paragraphs: 'Prose fluide',
+    numbered_sections: 'Sections numérotées',
+    structured_table: 'Tableau structuré',
+    cards: 'Blocs encadrés'
+  };
 
   const summaryParts = [
     `${pageFormat.toUpperCase()} ${orientation === 'portrait' ? 'Portrait' : 'Paysage'}`,
-    archetypeLabel,
+    `${headerNameMap[bpHeaderLayout]} · ${titleNameMap[titleAlign]} · ${bodyNameMap[bodyLayout]}`,
     `Marges ${marginTop}/${marginLeft} mm`,
     `Couleur ${primaryColor}`,
     `${detectedElements.length} visuel(s)`
@@ -886,7 +1277,12 @@ export async function analyzeReferenceDocumentFile(
     fontFamily,
     blockSpacing,
     logoPlacement,
-    signaturePlacement: signatureZoneStyle === 'two_col_fait_a_right_sig' ? 'bottom_right' : 'bottom_split',
+    signaturePlacement:
+      signatureLayout === 'left_block'
+        ? 'bottom_left'
+        : signatureLayout === 'three_col_footer' || signatureLayout === 'two_col_bipartite'
+        ? 'bottom_split'
+        : 'bottom_right',
     layoutArchetype,
     hasTwoColumnMeta,
     hasRefHighlightBox,
@@ -895,6 +1291,7 @@ export async function analyzeReferenceDocumentFile(
     hasBottomLegalFooter,
     singlePageFit: pdfTextZones ? pdfTextZones.numPages === 1 : true,
     hasTablesDetected,
+    spatialBlueprint,
     detectedElements,
     ignoredMissingElements: [],
     detectedSummary: summaryParts.join(' · ')

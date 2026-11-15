@@ -68,6 +68,7 @@ import {
   JobOfferData,
   buildDefaultJobOfferForPoste,
   downloadJobOfferPdf,
+  publishJobOffer,
   CANADIAN_STANDARD_BENEFITS
 } from '../../services/jobOfferService';
 import {
@@ -84,6 +85,7 @@ import {
 } from '../../services/stampGeneratorService';
 import { PanneauReglagesFichiersImportes } from '../common/PanneauReglagesFichiersImportes';
 import { InteractiveDocumentCanvas } from '../common/InteractiveDocumentCanvas';
+import { EditableDocumentVisual } from '../common/EditableDocumentVisual';
 import { ForcusWordEditor } from './ForcusWordEditor';
 import { OfficialStampGeneratorModal } from './OfficialStampGeneratorModal';
 import { BrandLogo } from '../BrandLogo';
@@ -94,6 +96,9 @@ import {
   loadActorUploadedAssetsFromFirestore,
   saveActorUploadedAssetsToFirestore,
   normalizePdfAssetsConfig,
+  DEFAULT_PDF_ASSETS_CONFIG,
+  ImportedAssetKey,
+  PdfAssetItemSettings,
   PdfImportedAssetsConfig,
   UploadedAssetUrlsMap,
   getSavedActorUploadedAssets,
@@ -331,11 +336,14 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
   const [liveQrCodeUrl, setLiveQrCodeUrl] = useState<string>('');
 
   const [isStampModalOpen, setIsStampModalOpen] = useState(false);
+  const [stampTargetKey, setStampTargetKey] = useState<ImportedAssetKey>('cachet');
+  const [selectedHousingVisual, setSelectedHousingVisual] = useState<string | null>(null);
   const tabsContainerRef = useRef<HTMLDivElement>(null);
 
   const [copiedNotification, setCopiedNotification] = useState<string | null>(null);
   const [isAutoExecuting, setIsAutoExecuting] = useState(false);
   const [isPublishingEntretien, setIsPublishingEntretien] = useState(false);
+  const [isPublishingOffre, setIsPublishingOffre] = useState(false);
 
   const [cricVars, setCricVars] = useState<CricContractVariables>(() =>
     buildDefaultCricContractVariables(settings)
@@ -941,6 +949,52 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
     }
   };
 
+  const handleAddOffreToNosOffres = async () => {
+    setIsPublishingOffre(true);
+    try {
+      const todayIso = new Date().toISOString().split('T')[0];
+      const baseMin = postulant.salaireHoraire || jobOffer.salaireMin || 28.5;
+      const baseMax = Math.round(baseMin * 1.2 * 10) / 10;
+      const offerToPublish: JobOfferData = {
+        ...jobOffer,
+        id: jobOffer.id || `offre-${postulant.codeIdCandidature}`,
+        reference: jobOffer.reference || `OFF-${postulant.codeIdCandidature}`,
+        titrePoste: postulant.intitulePoste || jobOffer.titrePoste,
+        departement: postulant.departement || jobOffer.departement,
+        companyName: postulant.nomEntreprise || jobOffer.companyName || settings.company_name,
+        typeContrat:
+          postulant.typeContrat === 'CDD'
+            ? 'Contrat à Durée Déterminée (CDD) — Temps plein'
+            : 'Contrat à Durée Indéterminée (CDI) — Temps plein',
+        lieuTravail: postulant.adresseEntreprise || jobOffer.lieuTravail,
+        horaires: postulant.horairesTravail || jobOffer.horaires,
+        salaireMin: baseMin,
+        salaireMax: baseMax,
+        remuneration: `De ${baseMin.toFixed(2)} $ CAD à ${baseMax.toFixed(2)} $ CAD / heure (~${postulant.salaireMensuel.toLocaleString('fr-CA')} $ CAD / mois)`,
+        missionsDetaillees:
+          postulant.responsabilitesMissions && postulant.responsabilitesMissions.length > 0
+            ? postulant.responsabilitesMissions
+            : jobOffer.missionsDetaillees,
+        contactEmail: postulant.contactDocEmail || settings.email || jobOffer.contactEmail,
+        contactTelephone: postulant.contactDocPhone || settings.phone || jobOffer.contactTelephone,
+        contactAdresse: postulant.adresseEntreprise || settings.address || jobOffer.contactAdresse,
+        signatureUrl: uploadedAssets.signature || jobOffer.signatureUrl,
+        cachetUrl: uploadedAssets.cachet || postulant.cachetUrl || jobOffer.cachetUrl,
+        datePublicationIso: todayIso,
+        estPublie: true,
+        publishedAt: new Date().toISOString()
+      };
+      const published = await publishJobOffer(offerToPublish);
+      setJobOffer(published);
+      triggerToast(`Offre « ${published.titrePoste} » publiée dans « Nos Offres » avec succès !`);
+    } catch (err) {
+      console.error(err);
+      triggerToast("Erreur lors de l'ajout de l'offre dans « Nos Offres ».");
+    } finally {
+      setIsPublishingOffre(false);
+    }
+  };
+
   const handleDownloadKitPdf = async () => {
     const { doc, filename } = await generatePostulantKitPdf(
       postulant,
@@ -1070,6 +1124,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
     };
     const activeLayout = layoutTemplates[docKeyMap[tabNumber]];
     const effectiveLayout = resolveEffectiveLayout(activeLayout);
+    const bp = effectiveLayout?.spatialBlueprint;
     const title = getTabDocumentTitle(tabNumber);
     const plainContent =
       customVisualText[textKey] ||
@@ -1086,12 +1141,8 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
       .replace(/\n{3,}/g, '\n\n')
       .trim();
 
-    const useLetterheadLayout = Boolean(
-      effectiveLayout &&
-        effectiveLayout.layoutArchetype === 'letterhead_split' &&
-        !customVisualText[textKey]
-    );
-    const structuredModel = useLetterheadLayout
+    const useBlueprintLayout = Boolean(effectiveLayout && bp && !customVisualText[textKey]);
+    const structuredModel = useBlueprintLayout
       ? buildStructuredHousingDocument(tabNumber, housingData, postulant)
       : null;
 
@@ -1104,10 +1155,39 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
       activeLayout
     );
 
-    const sigCfg = assetsConfig.signature;
-    const cachetCfg = assetsConfig.cachet;
-    const logoCfg = assetsConfig.logo;
-    const qrCfg = assetsConfig.qrcodeEmployeur;
+    const activeAssetKeyMap: Partial<
+      Record<'logo' | 'signature' | 'cachet' | 'filigrane' | 'arrierePlan' | 'barcode' | 'qrcode', ImportedAssetKey>
+    > = {
+      logo: actorAssets.logo.key as ImportedAssetKey,
+      signature: actorAssets.signature.key as ImportedAssetKey,
+      cachet: actorAssets.cachet.key as ImportedAssetKey,
+      filigrane: actorAssets.filigrane.key as ImportedAssetKey,
+      arrierePlan: actorAssets.arrierePlan.key as ImportedAssetKey,
+      barcode: actorAssets.barcode.key as ImportedAssetKey,
+      qrcode: actorAssets.qrcode.key as ImportedAssetKey
+    };
+
+    const updateActorAssetItem = (key: ImportedAssetKey, patch: Partial<PdfAssetItemSettings>) => {
+      const currentItem = assetsConfig[key] || DEFAULT_PDF_ASSETS_CONFIG[key] || DEFAULT_PDF_ASSETS_CONFIG.logo;
+      handleUpdateAssetsConfig({
+        ...assetsConfig,
+        [key]: { ...currentItem, ...patch }
+      });
+    };
+
+    const resetActorAssetItem = (key: ImportedAssetKey) => {
+      const def = DEFAULT_PDF_ASSETS_CONFIG[key] || DEFAULT_PDF_ASSETS_CONFIG.logo;
+      handleUpdateAssetsConfig({
+        ...assetsConfig,
+        [key]: { ...def }
+      });
+    };
+
+    const logoCfg = actorAssets.logo.cfg || assetsConfig.logo;
+    const sigCfg = actorAssets.signature.cfg || assetsConfig.signature;
+    const cachetCfg = actorAssets.cachet.cfg || assetsConfig.cachet;
+    const qrCfg = actorAssets.qrcode.cfg || assetsConfig.qrcodeEmployeur;
+    const barcodeCfg = actorAssets.barcode.cfg || assetsConfig.barcodeEmployeur;
 
     return (
       <InteractiveDocumentCanvas
@@ -1116,8 +1196,9 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
         assetsConfig={assetsConfig}
         onChangeAssetsConfig={handleUpdateAssetsConfig}
         uploadedAssetUrls={uploadedAssets}
+        activeAssetKeyMap={activeAssetKeyMap}
         layoutTemplate={activeLayout}
-        hideGenericChrome={useLetterheadLayout}
+        hideGenericChrome={useBlueprintLayout}
         exclusiveVisualSet={{
           logo: actorAssets.logo.url,
           signature: actorAssets.signature.url,
@@ -1136,7 +1217,8 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             postulant,
             customVisualText[textKey],
             activeLayout,
-            uploadedAssets
+            uploadedAssets,
+            assetsConfig
           );
           triggerToast(`Onglet ${tabNumber} exporté au format Word (.docx).`);
         }}
@@ -1152,110 +1234,248 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
           })
         }
       >
-        {useLetterheadLayout && structuredModel && effectiveLayout ? (
+        {useBlueprintLayout && structuredModel && effectiveLayout && bp ? (
           <div
-            contentEditable
-            suppressContentEditableWarning
-            className="flex-1 flex flex-col justify-between outline-none cursor-text min-h-[980px] text-slate-900"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setSelectedHousingVisual(null);
+            }}
+            className="flex-1 flex flex-col justify-between outline-none min-h-[980px] text-slate-900 relative"
             style={{
               fontSize: tabNumber === 11 ? '10.5px' : '11.5px',
-              lineHeight: tabNumber === 11 ? 1.35 : 1.48
+              lineHeight: tabNumber === 11 ? 1.35 : 1.48,
+              borderLeft: bp.hasLeftAccentStripe ? `6px solid ${effectiveLayout.primaryColor}` : undefined,
+              paddingLeft: bp.hasLeftAccentStripe ? '14px' : undefined
             }}
           >
-            <div className="space-y-4">
-              {/* ZONE 1 : En-tête minimal (Logo gauche + petit repère carré droit, zéro bandeau) */}
+            {/* Bandeau fin supérieur si top_accent_bar */}
+            {bp.headerLayout === 'top_accent_bar' && (
               <div
-                className={`flex items-start justify-between ${
-                  effectiveLayout.logoPlacement === 'top_right'
-                    ? 'flex-row-reverse'
-                    : effectiveLayout.logoPlacement === 'top_center'
-                    ? 'flex-col items-center gap-2'
-                    : ''
-                }`}
-              >
-                <div>
+                className="-mx-4 -mt-4 mb-3 h-2"
+                style={{ backgroundColor: effectiveLayout.primaryColor }}
+              />
+            )}
+
+            <div contentEditable suppressContentEditableWarning className="space-y-4 outline-none cursor-text">
+              {/* ZONE 1 : En-tête dynamiquement aligné sur le SpatialBlueprint du fichier importé */}
+              {bp.headerLayout === 'filled_banner' ? (
+                <div
+                  className="p-4 rounded-sm flex items-center justify-between gap-4 text-white"
+                  style={{
+                    backgroundColor: effectiveLayout.headerBgColor || effectiveLayout.primaryColor,
+                    borderBottom: `3px solid ${effectiveLayout.accentColor}`
+                  }}
+                >
+                  <div className="flex items-center gap-3">
+                    {actorAssets.logo.url ? (
+                      <div className="bg-white p-1.5 rounded-sm">
+                        <EditableDocumentVisual
+                          src={actorAssets.logo.url}
+                          alt="Logo officiel"
+                          label="Logo"
+                          settings={logoCfg}
+                          isSelected={selectedHousingVisual === `${tabNumber}_logo`}
+                          onSelect={() => setSelectedHousingVisual(`${tabNumber}_logo`)}
+                          onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.logo.key as ImportedAssetKey, patch)}
+                          onReset={() => resetActorAssetItem(actorAssets.logo.key as ImportedAssetKey)}
+                          defaultWidthPx={150}
+                          defaultHeightPx={48}
+                        />
+                      </div>
+                    ) : (
+                      <div className="font-extrabold text-lg tracking-tight">{postulant.nomEntreprise}</div>
+                    )}
+                  </div>
+                  <div className="text-right text-[10.5px]">
+                    <div className="font-bold">{structuredModel.superLabel}</div>
+                    <div className="opacity-85">Dossier n° {postulant.codeIdCandidature}</div>
+                  </div>
+                </div>
+              ) : bp.headerLayout === 'centered_stack' ? (
+                <div
+                  className="flex flex-col items-center text-center gap-2 pb-3"
+                  style={{
+                    borderBottom: bp.headerHasDivider ? `2px solid ${effectiveLayout.primaryColor}` : undefined
+                  }}
+                >
                   {actorAssets.logo.url ? (
-                    <img
+                    <EditableDocumentVisual
                       src={actorAssets.logo.url}
                       alt="Logo officiel"
-                      className="object-contain"
-                      style={{
-                        maxWidth: `${Math.min(logoCfg?.widthValue || 180, 210)}${logoCfg?.widthUnit || 'px'}`,
-                        maxHeight: `${Math.min(logoCfg?.heightValue || 56, 68)}${logoCfg?.heightUnit || 'px'}`,
-                        opacity: (logoCfg?.opacity ?? 100) / 100
-                      }}
+                      label="Logo"
+                      settings={logoCfg}
+                      isSelected={selectedHousingVisual === `${tabNumber}_logo`}
+                      onSelect={() => setSelectedHousingVisual(`${tabNumber}_logo`)}
+                      onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.logo.key as ImportedAssetKey, patch)}
+                      onReset={() => resetActorAssetItem(actorAssets.logo.key as ImportedAssetKey)}
+                      defaultWidthPx={170}
+                      defaultHeightPx={56}
                     />
                   ) : (
-                    <div
-                      className="font-extrabold text-xl tracking-tight"
-                      style={{ color: effectiveLayout.primaryColor }}
-                    >
+                    <div className="font-extrabold text-xl tracking-tight" style={{ color: effectiveLayout.primaryColor }}>
                       {postulant.nomEntreprise}
                     </div>
                   )}
+                  <div className="text-[10.5px] uppercase tracking-wider text-slate-600">{structuredModel.superLabel}</div>
                 </div>
-                <div className="w-3 h-3 border border-slate-300 flex items-center justify-center shrink-0 mt-1">
-                  <div className="w-1.5 h-1.5 bg-slate-900" />
-                </div>
-              </div>
-
-              {/* ZONE 2 : Expéditeur à gauche / Destinataire décalé à droite */}
-              <div className="grid grid-cols-12 gap-4 pt-2">
-                <div className="col-span-6 space-y-0.5 text-[10.5px] leading-snug text-slate-800">
-                  {structuredModel.senderLines.map((line, i) => (
-                    <div key={i} className={i === 0 ? 'font-bold uppercase tracking-tight' : ''}>
-                      {line}
+              ) : (
+                <div
+                  className={`flex items-start justify-between pb-2 ${
+                    effectiveLayout.logoPlacement === 'top_right'
+                      ? 'flex-row-reverse'
+                      : effectiveLayout.logoPlacement === 'top_center'
+                      ? 'flex-col items-center gap-2'
+                      : ''
+                  }`}
+                  style={{
+                    borderBottom: bp.headerHasDivider
+                      ? `2px solid ${effectiveLayout.accentColor || effectiveLayout.primaryColor}`
+                      : undefined
+                  }}
+                >
+                  <div>
+                    {actorAssets.logo.url ? (
+                      <EditableDocumentVisual
+                        src={actorAssets.logo.url}
+                        alt="Logo officiel"
+                        label="Logo"
+                        settings={logoCfg}
+                        isSelected={selectedHousingVisual === `${tabNumber}_logo`}
+                        onSelect={() => setSelectedHousingVisual(`${tabNumber}_logo`)}
+                        onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.logo.key as ImportedAssetKey, patch)}
+                        onReset={() => resetActorAssetItem(actorAssets.logo.key as ImportedAssetKey)}
+                        defaultWidthPx={180}
+                        defaultHeightPx={56}
+                      />
+                    ) : (
+                      <div className="font-extrabold text-xl tracking-tight" style={{ color: effectiveLayout.primaryColor }}>
+                        {postulant.nomEntreprise}
+                      </div>
+                    )}
+                  </div>
+                  {bp.headerLayout === 'split_lr' ? (
+                    <div className="text-right text-[10.5px] text-slate-700">
+                      <div className="font-bold" style={{ color: effectiveLayout.primaryColor }}>
+                        {structuredModel.superLabel}
+                      </div>
+                      <div>Dossier n° {postulant.codeIdCandidature}</div>
                     </div>
-                  ))}
+                  ) : bp.hasTopRightMarker ? (
+                    <div className="w-3 h-3 border border-slate-300 flex items-center justify-center shrink-0 mt-1">
+                      <div className="w-1.5 h-1.5 bg-slate-900" />
+                    </div>
+                  ) : null}
                 </div>
-                <div className="col-span-6 pt-5 pl-6 space-y-0.5 text-[10.5px] leading-snug text-slate-900">
-                  {structuredModel.recipientLines.map((line, i) => (
+              )}
+
+              {/* ZONE 2 : Métadonnées selon metaLayout */}
+              {(bp.metaLayout === 'two_col_asymmetric' || bp.metaLayout === 'two_col_equal') && (
+                <div className="grid grid-cols-12 gap-4 pt-1">
+                  <div className="col-span-6 space-y-0.5 text-[10.5px] leading-snug text-slate-800">
+                    {structuredModel.senderLines.map((line, i) => (
+                      <div key={i} className={i === 0 ? 'font-bold uppercase tracking-tight' : ''}>
+                        {line}
+                      </div>
+                    ))}
+                  </div>
+                  <div
+                    className={`col-span-6 ${
+                      bp.metaLayout === 'two_col_asymmetric' ? 'pt-5 pl-6' : 'text-right'
+                    } space-y-0.5 text-[10.5px] leading-snug text-slate-900`}
+                  >
+                    {structuredModel.recipientLines.map((line, i) => (
+                      <div key={i} className={i === 0 ? 'font-bold uppercase' : ''}>
+                        {line}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {bp.metaLayout === 'boxed_grid' && (
+                <div className="grid grid-cols-2 border border-slate-300 bg-slate-50/70 text-[10.5px]">
+                  <div className="p-2.5 border-r border-slate-300 space-y-0.5">
+                    {structuredModel.senderLines.map((line, i) => (
+                      <div key={i} className={i === 0 ? 'font-bold uppercase' : ''}>
+                        {line}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="p-2.5 space-y-0.5">
+                    {structuredModel.recipientLines.map((line, i) => (
+                      <div key={i} className={i === 0 ? 'font-bold uppercase' : ''}>
+                        {line}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {bp.metaLayout === 'single_col_left' && (
+                <div className="space-y-0.5 text-[10.5px] leading-snug text-slate-800">
+                  {structuredModel.senderLines.slice(0, 3).map((line, i) => (
                     <div key={i} className={i === 0 ? 'font-bold uppercase' : ''}>
                       {line}
                     </div>
                   ))}
+                  <div className="pt-1 font-semibold text-slate-900">
+                    Bénéficiaire : {structuredModel.recipientLines.join(' · ')}
+                  </div>
                 </div>
-              </div>
+              )}
 
-              {/* ZONE 3 : Pastille pastel "Vos références" + tableau aligné clé : valeur */}
-              <div className="space-y-2 pt-1">
-                <div>
-                  <span
-                    className="inline-block px-2.5 py-0.5 rounded-sm font-bold text-[11px]"
-                    style={{
-                      backgroundColor: effectiveLayout.highlightTintColor || '#D8F3EB',
-                      color: effectiveLayout.primaryColor || '#0B663A'
-                    }}
-                  >
-                    {structuredModel.refPillLabel}
-                  </span>
+              {/* ZONE 3 : Pastille "Vos références" UNIQUEMENT si détectée sur le modèle importé */}
+              {bp.hasRefPill && (
+                <div className="space-y-2 pt-1">
+                  <div>
+                    <span
+                      className="inline-block px-2.5 py-0.5 rounded-sm font-bold text-[11px]"
+                      style={{
+                        backgroundColor: effectiveLayout.highlightTintColor || '#D8F3EB',
+                        color: effectiveLayout.primaryColor || '#0B663A'
+                      }}
+                    >
+                      {structuredModel.refPillLabel}
+                    </span>
+                  </div>
+                  <div className="space-y-1 text-[10.5px]">
+                    {structuredModel.refPairs.map((pair, idx) => (
+                      <div key={idx} className="grid grid-cols-12 items-baseline">
+                        <span className="col-span-4 text-slate-600">{pair.label}</span>
+                        <span className="col-span-8 font-bold text-slate-900">: {pair.value}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="space-y-1 text-[10.5px]">
-                  {structuredModel.refPairs.map((pair, idx) => (
-                    <div key={idx} className="grid grid-cols-12 items-baseline">
-                      <span className="col-span-4 text-slate-600">{pair.label}</span>
-                      <span className="col-span-8 font-bold text-slate-900">: {pair.value}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              )}
 
-              {/* ZONE 4 : Titre principal centré & Sous-titre majuscules */}
+              {/* ZONE 4 : Titre principal & Sous-titre guidés par SpatialBlueprint */}
               <div
-                className="pt-3 pb-2"
+                className={bp.titleHasBox ? 'py-2.5 px-4 rounded-sm my-2' : 'pt-3 pb-2'}
                 style={{
-                  textAlign: effectiveLayout.headerAlign === 'left' ? 'left' : 'center'
+                  textAlign: bp.titleAlign,
+                  backgroundColor: bp.titleHasBox ? effectiveLayout.highlightTintColor : 'transparent',
+                  border: bp.titleHasBox ? `1.5px solid ${effectiveLayout.primaryColor}` : undefined,
+                  borderBottom: bp.titleHasUnderline
+                    ? `2px solid ${effectiveLayout.accentColor}`
+                    : bp.titleHasBox
+                    ? `1.5px solid ${effectiveLayout.primaryColor}`
+                    : undefined
                 }}
               >
-                <h2 className="text-[17px] font-bold text-slate-900 leading-tight">
+                <h2
+                  className={`text-[17px] font-bold leading-tight ${bp.titleUppercase ? 'uppercase' : ''}`}
+                  style={{ color: bp.titleHasBox ? effectiveLayout.primaryColor : '#0f172a' }}
+                >
                   {structuredModel.mainTitle}
                 </h2>
-                <p className="text-[10.5px] tracking-wider uppercase text-slate-600 mt-1">
-                  {structuredModel.mainSubtitle}
-                </p>
+                {bp.titleHasSubtitle && (
+                  <p className="text-[10.5px] tracking-wider uppercase text-slate-600 mt-1">
+                    {structuredModel.mainSubtitle}
+                  </p>
+                )}
               </div>
 
-              {/* ZONE 5 : Lignes d'introduction + paragraphes structurés + grille HIR optionnelle */}
+              {/* ZONE 5 : Lignes d'introduction + paragraphes + tableau */}
               <div className="space-y-2.5 text-[11px] text-slate-800">
                 <div className="space-y-0.5">
                   {structuredModel.introLines.map((line, idx) => {
@@ -1273,7 +1493,19 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                 </div>
 
                 {structuredModel.bodyParagraphs.map((para, idx) => (
-                  <p key={idx} className="leading-[1.48] text-slate-800">
+                  <p
+                    key={idx}
+                    className={
+                      bp.bodyLayout === 'cards'
+                        ? 'p-2.5 rounded border border-slate-200 bg-slate-50/70 leading-[1.45]'
+                        : bp.hasSectionDividers && idx < structuredModel.bodyParagraphs.length - 1
+                        ? 'pb-2 border-b border-dashed border-slate-200 leading-[1.48]'
+                        : 'leading-[1.48] text-slate-800'
+                    }
+                    style={{
+                      borderLeft: bp.bodyLayout === 'cards' ? `3px solid ${effectiveLayout.primaryColor}` : undefined
+                    }}
+                  >
                     {para}
                   </p>
                 ))}
@@ -1283,8 +1515,16 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                     <thead>
                       <tr
                         style={{
-                          backgroundColor: effectiveLayout.highlightTintColor || '#D8F3EB',
-                          color: effectiveLayout.primaryColor || '#0B2545'
+                          backgroundColor:
+                            bp.tableHeaderStyle === 'filled_primary'
+                              ? effectiveLayout.primaryColor
+                              : bp.tableHeaderStyle === 'tinted'
+                              ? effectiveLayout.highlightTintColor || '#D8F3EB'
+                              : '#ffffff',
+                          color:
+                            bp.tableHeaderStyle === 'filled_primary'
+                              ? '#ffffff'
+                              : effectiveLayout.primaryColor || '#0B2545'
                         }}
                       >
                         {structuredModel.summaryTable.headers.map((h, i) => (
@@ -1309,72 +1549,180 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                 )}
               </div>
 
-              {/* ZONE 6 : Fait à (Gauche) + Délégation / Signature / Cachet (Droite) */}
-              <div className="grid grid-cols-12 gap-4 pt-4 items-start">
-                <div className="col-span-6 text-[11px] text-slate-900 pt-1">
-                  {structuredModel.faitALine}
-                </div>
-                <div className="col-span-6 text-left space-y-1">
-                  <p className="font-bold text-[11px] text-slate-900">{structuredModel.signatoryHeading}</p>
-                  <p className="text-[10.5px] text-slate-700">{structuredModel.signatorySubRole}</p>
-                  <div className="flex items-center gap-3 py-1 min-h-[48px]">
-                    {actorAssets.signature.url && (
-                      <img
-                        src={actorAssets.signature.url}
-                        alt="Signature"
-                        className="object-contain"
-                        style={{
-                          maxWidth: `${Math.min(sigCfg?.widthValue || 130, 140)}${sigCfg?.widthUnit || 'px'}`,
-                          maxHeight: `${Math.min(sigCfg?.heightValue || 48, 56)}${sigCfg?.heightUnit || 'px'}`,
-                          opacity: (sigCfg?.opacity ?? 100) / 100
-                        }}
-                      />
-                    )}
-                    {actorAssets.cachet.url && (
-                      <img
-                        src={actorAssets.cachet.url}
-                        alt="Cachet"
-                        className="object-contain"
-                        style={{
-                          maxWidth: `${Math.min(cachetCfg?.widthValue || 80, 90)}${cachetCfg?.widthUnit || 'px'}`,
-                          maxHeight: `${Math.min(cachetCfg?.heightValue || 56, 60)}${cachetCfg?.heightUnit || 'px'}`,
-                          opacity: (cachetCfg?.opacity ?? 92) / 100
-                        }}
-                      />
-                    )}
+              {/* ZONE 6 : Signatures avec visuels éditables Word-2013 */}
+              <div
+                className="pt-4 mt-2"
+                style={{
+                  borderTop: bp.signatureHasTopBorder ? '1px solid #cbd5e1' : undefined
+                }}
+              >
+                {bp.signatureLayout === 'left_block' ? (
+                  <div className="space-y-1.5 text-[11px] text-slate-900">
+                    <div>{structuredModel.faitALine}</div>
+                    <p className="font-bold">{structuredModel.signatoryHeading}</p>
+                    <p className="text-[10.5px] text-slate-700">{structuredModel.signatorySubRole}</p>
+                    <div className="flex items-center gap-3 py-1 min-h-[48px]">
+                      {actorAssets.signature.url && (
+                        <EditableDocumentVisual
+                          src={actorAssets.signature.url}
+                          alt="Signature"
+                          label="Signature"
+                          settings={sigCfg}
+                          isSelected={selectedHousingVisual === `${tabNumber}_sig`}
+                          onSelect={() => setSelectedHousingVisual(`${tabNumber}_sig`)}
+                          onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.signature.key as ImportedAssetKey, patch)}
+                          onReset={() => resetActorAssetItem(actorAssets.signature.key as ImportedAssetKey)}
+                          defaultWidthPx={130}
+                          defaultHeightPx={48}
+                        />
+                      )}
+                      {actorAssets.cachet.url && (
+                        <EditableDocumentVisual
+                          src={actorAssets.cachet.url}
+                          alt="Cachet"
+                          label="Cachet"
+                          settings={cachetCfg}
+                          isSelected={selectedHousingVisual === `${tabNumber}_cachet`}
+                          onSelect={() => setSelectedHousingVisual(`${tabNumber}_cachet`)}
+                          onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.cachet.key as ImportedAssetKey, patch)}
+                          onReset={() => resetActorAssetItem(actorAssets.cachet.key as ImportedAssetKey)}
+                          defaultWidthPx={80}
+                          defaultHeightPx={56}
+                        />
+                      )}
+                    </div>
+                    <p className="font-bold">{structuredModel.signatoryPrintedName}</p>
                   </div>
-                  <p className="font-bold text-[11px] text-slate-900">{structuredModel.signatoryPrintedName}</p>
-                </div>
+                ) : bp.signatureLayout === 'right_block' ? (
+                  <div className="flex flex-col items-end text-right space-y-1.5 text-[11px] text-slate-900">
+                    <div>{structuredModel.faitALine}</div>
+                    <p className="font-bold">{structuredModel.signatoryHeading}</p>
+                    <div className="flex items-center justify-end gap-3 py-1 min-h-[48px]">
+                      {actorAssets.signature.url && (
+                        <EditableDocumentVisual
+                          src={actorAssets.signature.url}
+                          alt="Signature"
+                          label="Signature"
+                          settings={sigCfg}
+                          isSelected={selectedHousingVisual === `${tabNumber}_sig`}
+                          onSelect={() => setSelectedHousingVisual(`${tabNumber}_sig`)}
+                          onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.signature.key as ImportedAssetKey, patch)}
+                          onReset={() => resetActorAssetItem(actorAssets.signature.key as ImportedAssetKey)}
+                          defaultWidthPx={130}
+                          defaultHeightPx={48}
+                        />
+                      )}
+                      {actorAssets.cachet.url && (
+                        <EditableDocumentVisual
+                          src={actorAssets.cachet.url}
+                          alt="Cachet"
+                          label="Cachet"
+                          settings={cachetCfg}
+                          isSelected={selectedHousingVisual === `${tabNumber}_cachet`}
+                          onSelect={() => setSelectedHousingVisual(`${tabNumber}_cachet`)}
+                          onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.cachet.key as ImportedAssetKey, patch)}
+                          onReset={() => resetActorAssetItem(actorAssets.cachet.key as ImportedAssetKey)}
+                          defaultWidthPx={80}
+                          defaultHeightPx={56}
+                        />
+                      )}
+                    </div>
+                    <p className="font-bold">{structuredModel.signatoryPrintedName}</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-12 gap-4 items-start">
+                    <div className="col-span-6 text-[11px] text-slate-900 pt-1">{structuredModel.faitALine}</div>
+                    <div className="col-span-6 text-left space-y-1">
+                      <p className="font-bold text-[11px] text-slate-900">{structuredModel.signatoryHeading}</p>
+                      <p className="text-[10.5px] text-slate-700">{structuredModel.signatorySubRole}</p>
+                      <div className="flex items-center gap-3 py-1 min-h-[48px]">
+                        {actorAssets.signature.url && (
+                          <EditableDocumentVisual
+                            src={actorAssets.signature.url}
+                            alt="Signature"
+                            label="Signature"
+                            settings={sigCfg}
+                            isSelected={selectedHousingVisual === `${tabNumber}_sig`}
+                            onSelect={() => setSelectedHousingVisual(`${tabNumber}_sig`)}
+                            onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.signature.key as ImportedAssetKey, patch)}
+                            onReset={() => resetActorAssetItem(actorAssets.signature.key as ImportedAssetKey)}
+                            defaultWidthPx={130}
+                            defaultHeightPx={48}
+                          />
+                        )}
+                        {actorAssets.cachet.url && (
+                          <EditableDocumentVisual
+                            src={actorAssets.cachet.url}
+                            alt="Cachet"
+                            label="Cachet"
+                            settings={cachetCfg}
+                            isSelected={selectedHousingVisual === `${tabNumber}_cachet`}
+                            onSelect={() => setSelectedHousingVisual(`${tabNumber}_cachet`)}
+                            onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.cachet.key as ImportedAssetKey, patch)}
+                            onReset={() => resetActorAssetItem(actorAssets.cachet.key as ImportedAssetKey)}
+                            defaultWidthPx={80}
+                            defaultHeightPx={56}
+                          />
+                        )}
+                      </div>
+                      <p className="font-bold text-[11px] text-slate-900">{structuredModel.signatoryPrintedName}</p>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
-            {/* ZONE 7 : Pied de page légal discret (QR gauche + 3 lignes légales + 1/1 à droite) */}
-            <div className="pt-6 mt-6 flex items-end justify-between gap-4">
-              <div className="flex items-center gap-2 shrink-0">
-                {actorAssets.qrcode.url && (
-                  <img
-                    src={actorAssets.qrcode.url}
-                    alt="QR"
-                    className="object-contain"
-                    style={{
-                      maxWidth: `${Math.min(qrCfg?.widthValue || 44, 52)}px`,
-                      maxHeight: `${Math.min(qrCfg?.heightValue || 44, 52)}px`
-                    }}
-                  />
+            {/* ZONE 7 : Pied de page légal piloté par footerLayout + QR/Barcode éditables */}
+            {bp.footerLayout !== 'none' && (
+              <div
+                className={`pt-4 mt-6 flex items-end gap-4 ${
+                  bp.footerLayout === 'centered_legal' ? 'justify-center text-center' : 'justify-between'
+                }`}
+                style={{
+                  borderTop: bp.hasFooterDivider ? '1px solid #cbd5e1' : undefined
+                }}
+              >
+                {bp.footerLayout === 'qr_legal_page' && actorAssets.qrcode.url && (
+                  <div className="shrink-0">
+                    <EditableDocumentVisual
+                      src={actorAssets.qrcode.url}
+                      alt="QR Code"
+                      label="QR Code"
+                      settings={qrCfg}
+                      isSelected={selectedHousingVisual === `${tabNumber}_qr`}
+                      onSelect={() => setSelectedHousingVisual(`${tabNumber}_qr`)}
+                      onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.qrcode.key as ImportedAssetKey, patch)}
+                      onReset={() => resetActorAssetItem(actorAssets.qrcode.key as ImportedAssetKey)}
+                      defaultWidthPx={44}
+                      defaultHeightPx={44}
+                    />
+                  </div>
+                )}
+                <div className="flex-1 text-[8.5px] leading-snug text-slate-500">
+                  {bp.footerLayout !== 'minimal_page' &&
+                    structuredModel.footerLegalLines.map((line, i) => <div key={i}>{line}</div>)}
+                </div>
+                {bp.footerLayout !== 'centered_legal' && (
+                  <div className="flex items-center gap-2 shrink-0 text-[10px] text-slate-600 font-semibold">
+                    {bp.footerLayout === 'qr_legal_page' && actorAssets.barcode.url && (
+                      <EditableDocumentVisual
+                        src={actorAssets.barcode.url}
+                        alt="Code-Barres"
+                        label="Code-Barres"
+                        settings={barcodeCfg}
+                        isSelected={selectedHousingVisual === `${tabNumber}_bc`}
+                        onSelect={() => setSelectedHousingVisual(`${tabNumber}_bc`)}
+                        onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.barcode.key as ImportedAssetKey, patch)}
+                        onReset={() => resetActorAssetItem(actorAssets.barcode.key as ImportedAssetKey)}
+                        defaultWidthPx={75}
+                        defaultHeightPx={26}
+                      />
+                    )}
+                    <span>1/1</span>
+                  </div>
                 )}
               </div>
-              <div className="flex-1 text-[8.5px] leading-snug text-slate-500">
-                {structuredModel.footerLegalLines.map((line, i) => (
-                  <div key={i}>{line}</div>
-                ))}
-              </div>
-              <div className="flex items-center gap-2 shrink-0 text-[10px] text-slate-600 font-semibold">
-                {actorAssets.barcode.url && (
-                  <img src={actorAssets.barcode.url} alt="Code" className="h-6 object-contain" />
-                )}
-                <span>1/1</span>
-              </div>
-            </div>
+            )}
           </div>
         ) : (
           <div
@@ -1448,6 +1796,17 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
           >
             <Globe className="w-4 h-4" />
             <span>{isPublishingEntretien ? 'Publication...' : 'Publier Entretien'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleAddOffreToNosOffres}
+            disabled={isPublishingOffre}
+            className="min-h-[42px] px-4 py-2 rounded-lg bg-[#0066B3] hover:bg-[#0284c7] text-white font-semibold text-xs sm:text-sm flex items-center gap-2 cursor-pointer disabled:opacity-50 whitespace-nowrap"
+            title="Publier directement l'offre 05. Offre & CNP sur la page Nos Offres"
+          >
+            <Briefcase className="w-4 h-4 text-amber-300" />
+            <span>{isPublishingOffre ? 'Ajout...' : 'Ajouté Offre'}</span>
           </button>
 
           <button
@@ -2469,6 +2828,12 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             }}
             uploadedAssets={uploadedAssets}
             onUploadAsset={(key, url) => handleUploadAsset(key, url)}
+            assetsConfig={assetsConfig}
+            onChangeAssetsConfig={handleUpdateAssetsConfig}
+            onOpenStampGenerator={(targetKey) => {
+              setStampTargetKey(targetKey);
+              setIsStampModalOpen(true);
+            }}
             layoutTemplates={layoutTemplates}
             onUpdateLayoutTemplate={(docKey, tpl) =>
               setLayoutTemplates((prev) => {
@@ -2531,7 +2896,8 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                 postulant,
                 customVisualText[textKeyMap[docKey]],
                 layoutTemplates[docKey],
-                uploadedAssets
+                uploadedAssets,
+                assetsConfig
               );
               triggerToast(`Document Word (.docx) généré avec la mise en page imitée et visuels intégrés.`);
             }}
@@ -2550,7 +2916,10 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
               </p>
               <button
                 type="button"
-                onClick={() => setIsStampModalOpen(true)}
+                onClick={() => {
+                  setStampTargetKey('cachet');
+                  setIsStampModalOpen(true);
+                }}
                 className="min-h-[38px] px-4 py-2 bg-[#0B2545] hover:bg-[#134074] text-white rounded-lg text-xs font-bold flex items-center gap-2 cursor-pointer whitespace-nowrap"
               >
                 <Sparkles className="w-4 h-4 text-amber-300" />
@@ -3536,10 +3905,12 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
         onClose={() => setIsStampModalOpen(false)}
         settings={settings}
         onApplyStamp={(dataUrl) => {
-          setPostulant((prev) => ({ ...prev, cachetUrl: dataUrl }));
-          handleUploadAsset('cachet', dataUrl);
+          if (stampTargetKey === 'cachet') {
+            setPostulant((prev) => ({ ...prev, cachetUrl: dataUrl }));
+          }
+          handleUploadAsset(stampTargetKey, dataUrl);
           setIsStampModalOpen(false);
-          triggerToast('Tampon officiel appliqué et propagé au dossier.');
+          triggerToast('Tampon officiel appliqué, lié à l’acteur actif et synchronisé dans Firestore.');
         }}
       />
     </div>

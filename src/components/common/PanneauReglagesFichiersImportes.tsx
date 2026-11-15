@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Sliders,
   RotateCcw,
@@ -21,7 +21,8 @@ import {
   QrCode,
   Barcode,
   Trash2,
-  AlertCircle
+  AlertCircle,
+  Stamp
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import {
@@ -32,7 +33,8 @@ import {
   saveActorUploadedAssetsToFirestore,
   ActorScopeId,
   ImportedAssetKey,
-  UploadedAssetUrlsMap
+  UploadedAssetUrlsMap,
+  AssetWrapMode
 } from '../../services/departmentsAndEmailService';
 import {
   removeImageBackground,
@@ -52,6 +54,9 @@ interface PanneauReglagesFichiersImportesProps {
   title?: string;
   moduleTitle?: string;
   verificationCodeRef?: string;
+  lockedActorScope?: ActorScopeId;
+  onOpenStampGenerator?: (cachetAssetKey: AssetTabKey) => void;
+  compact?: boolean;
 }
 
 interface SubTabDef {
@@ -169,19 +174,34 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
   uploadedAssetUrls = {},
   title,
   moduleTitle,
-  verificationCodeRef = 'ENT-BC-2026-AUTH'
+  verificationCodeRef = 'ENT-BC-2026-AUTH',
+  lockedActorScope,
+  onOpenStampGenerator,
+  compact = false
 }) => {
   const effectiveConfig = propAssetsConfig || initialConfig || DEFAULT_PDF_ASSETS_CONFIG;
   const notifyChange = onChangeConfig || onConfigChange || (() => {});
   const displayTitle = title || moduleTitle || 'Visuels, Tampons & Signatures des 6 Parties';
 
-  const [activeScope, setActiveScope] = useState<ActorScopeId>('employeur');
-  const [activeTab, setActiveTab] = useState<AssetTabKey>('logo');
+  const initialScope: ActorScopeId = lockedActorScope || 'employeur';
+  const initialTabs = (SCOPE_TABS.find((s) => s.id === initialScope) || SCOPE_TABS[0]).tabs;
+
+  const [activeScope, setActiveScope] = useState<ActorScopeId>(initialScope);
+  const [activeTab, setActiveTab] = useState<AssetTabKey>(initialTabs[0].key);
   const [isSaving, setIsSaving] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessingUpload, setIsProcessingUpload] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
   const [localFallbackUrls, setLocalFallbackUrls] = useState<UploadedAssetUrlsMap>({});
+
+  useEffect(() => {
+    if (!lockedActorScope) return;
+    setActiveScope(lockedActorScope);
+    const scopeObj = SCOPE_TABS.find((s) => s.id === lockedActorScope);
+    if (scopeObj && !scopeObj.tabs.some((t) => t.key === activeTab)) {
+      setActiveTab(scopeObj.tabs[0].key);
+    }
+  }, [lockedActorScope]);
 
   const mergedUrls: UploadedAssetUrlsMap = { ...localFallbackUrls, ...uploadedAssetUrls };
   const currentScopeDef = SCOPE_TABS.find((s) => s.id === activeScope) || SCOPE_TABS[0];
@@ -335,7 +355,7 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
   const activeImageSrc = mergedUrls[activeTab];
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-6 space-y-6 shadow-xs">
+    <div className={`rounded-2xl border border-slate-200 bg-white ${compact ? 'p-4 space-y-4' : 'p-6 space-y-6'} shadow-xs`}>
       {/* En-tête simple et lisible */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-200 pb-4">
         <div className="flex items-start gap-3">
@@ -345,7 +365,9 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
           <div>
             <h5 className="text-base font-bold text-[#0B2545]">{displayTitle}</h5>
             <p className="text-sm text-slate-600 mt-0.5">
-              Choisissez une partie (1 à 6), importez vos logos, signatures ou sceaux, et ajustez leur rendu en direct.
+              {lockedActorScope
+                ? currentScopeDef.bindingHint
+                : 'Choisissez une partie (1 à 6), importez vos logos, signatures ou sceaux, et ajustez leur rendu en direct.'}
             </p>
           </div>
         </div>
@@ -371,13 +393,15 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
             <span>Réinitialiser cet élément</span>
           </button>
 
-          <button
-            type="button"
-            onClick={handleResetAll}
-            className="min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-600 cursor-pointer whitespace-nowrap"
-          >
-            Tout réinitialiser
-          </button>
+          {!lockedActorScope && (
+            <button
+              type="button"
+              onClick={handleResetAll}
+              className="min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-600 cursor-pointer whitespace-nowrap"
+            >
+              Tout réinitialiser
+            </button>
+          )}
 
           <button
             type="button"
@@ -391,52 +415,64 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
         </div>
       </div>
 
-      {/* ÉTAPE 1 : CHOIX DE LA PARTIE / ACTEUR */}
-      <div className="space-y-2.5">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs font-bold text-slate-700 uppercase tracking-wide">
-            Étape 1 · Sélectionnez la partie concernée
+      {/* ÉTAPE 1 : CHOIX DE LA PARTIE / ACTEUR (ou Badge Liaison Directe) */}
+      {lockedActorScope ? (
+        <div className="px-4 py-2.5 rounded-xl bg-blue-50 border border-blue-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div className="flex items-center gap-2 font-bold text-[#0B2545]">
+            <currentScopeDef.icon className="w-4 h-4 text-[#0066B3]" />
+            <span>Panneau lié exclusivement à : {currentScopeDef.shortLabel}</span>
+          </div>
+          <span className="font-mono text-[11px] font-semibold text-[#0066B3]">
+            Sync direct ↔ Aperçu RÉSULTAT CORRESPONDANT AU CDA FPR
           </span>
-          <span className="text-xs text-[#0066B3] font-medium">{currentScopeDef.bindingHint}</span>
         </div>
+      ) : (
+        <div className="space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-bold text-slate-700 uppercase tracking-wide">
+              Étape 1 · Sélectionnez la partie concernée
+            </span>
+            <span className="text-xs text-[#0066B3] font-medium">{currentScopeDef.bindingHint}</span>
+          </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 p-1.5 bg-slate-100 rounded-xl">
-          {SCOPE_TABS.map((scope) => {
-            const Icon = scope.icon;
-            const isCurrent = activeScope === scope.id;
-            const activeFilesCount = scope.tabs.filter((t) => Boolean(mergedUrls[t.key])).length;
-            return (
-              <button
-                key={scope.id}
-                type="button"
-                onClick={() => {
-                  setActiveScope(scope.id);
-                  setActiveTab(scope.tabs[0].key);
-                }}
-                className={`min-h-[44px] px-3 py-2 rounded-lg text-xs font-semibold flex items-center justify-between gap-2 transition-all cursor-pointer text-left ${
-                  isCurrent
-                    ? 'bg-[#0B2545] text-white shadow-xs'
-                    : 'text-slate-700 hover:bg-white hover:text-slate-950'
-                }`}
-              >
-                <span className="flex items-center gap-2 truncate">
-                  <Icon className={`w-4 h-4 shrink-0 ${isCurrent ? 'text-amber-300' : 'text-slate-500'}`} />
-                  <span className="truncate">{scope.shortLabel}</span>
-                </span>
-                {activeFilesCount > 0 && (
-                  <span
-                    className={`text-[11px] font-mono tabular-nums shrink-0 ${
-                      isCurrent ? 'text-amber-300' : 'text-emerald-700 font-bold'
-                    }`}
-                  >
-                    {activeFilesCount}/7
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 p-1.5 bg-slate-100 rounded-xl">
+            {SCOPE_TABS.map((scope) => {
+              const Icon = scope.icon;
+              const isCurrent = activeScope === scope.id;
+              const activeFilesCount = scope.tabs.filter((t) => Boolean(mergedUrls[t.key])).length;
+              return (
+                <button
+                  key={scope.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveScope(scope.id);
+                    setActiveTab(scope.tabs[0].key);
+                  }}
+                  className={`min-h-[44px] px-3 py-2 rounded-lg text-xs font-semibold flex items-center justify-between gap-2 transition-all cursor-pointer text-left ${
+                    isCurrent
+                      ? 'bg-[#0B2545] text-white shadow-xs'
+                      : 'text-slate-700 hover:bg-white hover:text-slate-950'
+                  }`}
+                >
+                  <span className="flex items-center gap-2 truncate">
+                    <Icon className={`w-4 h-4 shrink-0 ${isCurrent ? 'text-amber-300' : 'text-slate-500'}`} />
+                    <span className="truncate">{scope.shortLabel}</span>
                   </span>
-                )}
-              </button>
-            );
-          })}
+                  {activeFilesCount > 0 && (
+                    <span
+                      className={`text-[11px] font-mono tabular-nums shrink-0 ${
+                        isCurrent ? 'text-amber-300' : 'text-emerald-700 font-bold'
+                      }`}
+                    >
+                      {activeFilesCount}/7
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* ÉTAPE 2 : CHOIX DU VISUEL (7 ÉLÉMENTS) */}
       <div className="space-y-2.5">
@@ -531,6 +567,17 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
+          {activeSubTabDef.key.toLowerCase().includes('cachet') && onOpenStampGenerator && (
+            <button
+              type="button"
+              onClick={() => onOpenStampGenerator(activeTab)}
+              className="min-h-[40px] px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold inline-flex items-center gap-2 cursor-pointer whitespace-nowrap shadow-xs"
+            >
+              <Stamp className="w-4 h-4" />
+              <span>Créer un Tampon</span>
+            </button>
+          )}
+
           {activeSubTabDef.isAuthTool === 'barcode' && (
             <button
               type="button"
@@ -828,6 +875,25 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
               onChange={(e) => updateSetting('zIndex', parseInt(e.target.value, 10))}
               className="w-full accent-[#0B2545] cursor-pointer"
             />
+          </div>
+
+          <div>
+            <label className="block text-xs text-slate-600 mb-1">
+              Habillage Word (Disposition)
+            </label>
+            <select
+              value={currentCfg.wrapMode || 'inline'}
+              onChange={(e) => updateSetting('wrapMode', e.target.value as AssetWrapMode)}
+              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-800"
+            >
+              <option value="inline">Aligné sur le texte</option>
+              <option value="square">Carré</option>
+              <option value="tight">Rapproché</option>
+              <option value="through">Au travers</option>
+              <option value="top_bottom">Haut et bas</option>
+              <option value="behind_text">Derrière le texte</option>
+              <option value="in_front">Devant le texte</option>
+            </select>
           </div>
         </div>
       </div>

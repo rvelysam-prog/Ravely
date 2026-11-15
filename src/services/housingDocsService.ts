@@ -28,20 +28,27 @@ import {
   ImageRun,
   ShadingType,
   PageOrientation,
+  TextWrappingType,
+  HorizontalPositionRelativeFrom,
+  VerticalPositionRelativeFrom,
   convertMillimetersToTwip
 } from 'docx';
+import type { IFloating } from 'docx';
 import { SiteSettings } from '../types';
 import { PostulantInfo } from './postulantDossierService';
 import {
   PdfImportedAssetsConfig,
+  PdfAssetItemSettings,
   UploadedAssetUrlsMap,
   renderAssetWithSettingsForPdf,
-  ActorScopeId
+  ActorScopeId,
+  AssetWrapMode
 } from './departmentsAndEmailService';
 import { generateSmallStackedBarcodeCanvasDataUrl } from './contractGenerationService';
 import QRCode from 'qrcode';
 import {
   ReferenceLayoutTemplate,
+  SpatialBlueprint,
   hexToRgbTuple,
   resolveEffectiveLayout
 } from './layoutImitationService';
@@ -738,6 +745,7 @@ export function generateHousingTabEmailHtml(
   const accentColor = effectiveLayout?.headerBgColor || primaryColor;
   const accentBorderColor = effectiveLayout?.accentColor || primaryColor;
   const tintBg = effectiveLayout?.highlightTintColor || '#e2f5ee';
+  const bp: SpatialBlueprint | undefined = effectiveLayout?.spatialBlueprint;
   const pageBg = effectiveLayout?.pageBgColor || '#ffffff';
   const bodyColor = effectiveLayout?.bodyTextColor || '#1e293b';
   const fontStack =
@@ -753,7 +761,6 @@ export function generateHousingTabEmailHtml(
       ? '34px 36px'
       : '28px 32px';
 
-  const isLetterheadSplit = effectiveLayout?.layoutArchetype === 'letterhead_split';
   const outerBorder =
     effectiveLayout?.borderStyle === 'double'
       ? `4px double ${effectiveLayout.borderColor || primaryColor}`
@@ -761,7 +768,8 @@ export function generateHousingTabEmailHtml(
       ? `2px solid ${effectiveLayout.borderColor || primaryColor}`
       : '1px solid #e2e8f0';
 
-  if (isLetterheadSplit && !customText?.trim()) {
+  // Rendu guidé exclusivement par le SpatialBlueprint mesuré sur le fichier importé
+  if (effectiveLayout && bp && !customText?.trim()) {
     const model = buildStructuredHousingDocument(tabNumber, data, p);
     const logoAlign =
       effectiveLayout.logoPlacement === 'top_right'
@@ -769,28 +777,206 @@ export function generateHousingTabEmailHtml(
         : effectiveLayout.logoPlacement === 'top_center'
         ? 'center'
         : 'left';
+    const titleText = bp.titleUppercase ? model.mainTitle.toUpperCase() : model.mainTitle;
 
-    const refRowsHtml = model.refPairs
-      .map(
-        (pair) => `
+    const topAccentStripeHtml =
+      bp.headerLayout === 'top_accent_bar'
+        ? `<tr><td style="height: 8px; background-color: ${primaryColor}; padding: 0; font-size: 0; line-height: 0;">&nbsp;</td></tr>`
+        : '';
+
+    let headerRowHtml = '';
+    if (bp.headerLayout === 'filled_banner') {
+      headerRowHtml = `
         <tr>
-          <td style="padding: 2px 12px 2px 0; color: #334155; font-size: 11px; white-space: nowrap;">${pair.label}</td>
-          <td style="padding: 2px 0; color: #0f172a; font-size: 11px; font-weight: bold;">: ${pair.value}</td>
-        </tr>`
-      )
-      .join('');
+          <td style="background-color: ${accentColor}; color: #ffffff; padding: 18px 24px; border-bottom: 3px solid ${accentBorderColor};">
+            <table width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td align="${logoAlign}" valign="middle">
+                  ${
+                    logoSrc
+                      ? `<img src="${logoSrc}" alt="Logo Officiel" style="max-height: 46px; max-width: 170px; background: #ffffff; padding: 4px; border-radius: 4px; display: inline-block;" />`
+                      : `<strong style="font-size: 14px; color: #ffffff;">${p.nomEntreprise}</strong>`
+                  }
+                </td>
+                <td align="right" valign="middle" style="font-size: 11px; color: #e2e8f0;">
+                  <div style="font-weight: bold; color: #ffffff;">${model.superLabel}</div>
+                  <div>Réf : ${p.codeIdCandidature}</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>`;
+    } else if (bp.headerLayout === 'centered_stack') {
+      headerRowHtml = `
+        <tr>
+          <td align="center" style="padding: 20px 28px 14px 28px; ${
+            bp.headerHasDivider ? `border-bottom: 2px solid ${primaryColor};` : ''
+          }">
+            ${
+              logoSrc
+                ? `<div style="margin-bottom: 8px;"><img src="${logoSrc}" alt="Logo" style="max-height: 52px; max-width: 190px; display: inline-block;" /></div>`
+                : `<div style="font-size: 15px; font-weight: bold; color: ${primaryColor}; margin-bottom: 6px;">${p.nomEntreprise}</div>`
+            }
+            <div style="font-size: 10.5px; letter-spacing: 0.7px; color: #64748b; text-transform: uppercase;">${model.superLabel}</div>
+          </td>
+        </tr>`;
+    } else if (bp.headerLayout === 'split_lr') {
+      headerRowHtml = `
+        <tr>
+          <td style="padding: 18px 28px 14px 28px; ${
+            bp.headerHasDivider ? `border-bottom: 2px solid ${primaryColor};` : ''
+          }">
+            <table width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td align="left" valign="middle">
+                  ${
+                    logoSrc
+                      ? `<img src="${logoSrc}" alt="Logo" style="max-height: 50px; max-width: 180px; display: block;" />`
+                      : `<strong style="font-size: 15px; color: ${primaryColor};">${p.nomEntreprise}</strong>`
+                  }
+                </td>
+                <td align="right" valign="middle" style="font-size: 11px; color: #475569;">
+                  <div style="font-weight: bold; color: ${primaryColor};">${model.superLabel}</div>
+                  <div>Dossier n° ${p.codeIdCandidature}</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>`;
+    } else {
+      headerRowHtml = `
+        <tr>
+          <td style="padding: 18px 28px 14px 28px; ${
+            bp.headerHasDivider ? `border-bottom: 1.5px solid ${primaryColor};` : ''
+          }">
+            <table width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td align="${logoAlign}" valign="middle">
+                  ${
+                    logoSrc
+                      ? `<img src="${logoSrc}" alt="Logo" style="max-height: 50px; max-width: 180px; display: inline-block;" />`
+                      : `<strong style="font-size: 15px; color: ${primaryColor};">${p.nomEntreprise}</strong>`
+                  }
+                </td>
+                ${
+                  bp.hasTopRightMarker
+                    ? `<td align="right" valign="top" style="width: 24px;"><span style="display: inline-block; width: 10px; height: 10px; border: 1px solid #94a3b8;"></span></td>`
+                    : ''
+                }
+              </tr>
+            </table>
+          </td>
+        </tr>`;
+    }
 
-    const introHtml = model.introLines
-      .map((l) => `<p style="margin: 0 0 4px 0; font-size: 12px; color: ${bodyColor};">${l}</p>`)
-      .join('');
+    let metaRowHtml = '';
+    if (bp.metaLayout === 'two_col_asymmetric' || bp.metaLayout === 'two_col_equal') {
+      const rightPadTop = bp.metaLayout === 'two_col_asymmetric' ? 'padding-top: 14px;' : '';
+      metaRowHtml = `
+        <tr>
+          <td style="padding: 10px 28px 14px 28px;">
+            <table width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td width="52%" valign="top" style="font-size: 11px; line-height: 1.45; color: #334155;">
+                  ${model.senderLines.map((l, i) => `<div>${i === 0 ? `<strong>${l}</strong>` : l}</div>`).join('')}
+                </td>
+                <td width="48%" valign="top" style="${rightPadTop} font-size: 11px; line-height: 1.45; color: #0f172a;">
+                  ${model.recipientLines.map((l, i) => `<div>${i === 0 ? `<strong>${l}</strong>` : l}</div>`).join('')}
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>`;
+    } else if (bp.metaLayout === 'boxed_grid') {
+      metaRowHtml = `
+        <tr>
+          <td style="padding: 10px 28px 14px 28px;">
+            <table width="100%" cellpadding="8" cellspacing="0" border="0" style="border: 1px solid #cbd5e1; background-color: #f8fafc;">
+              <tr>
+                <td width="50%" valign="top" style="border-right: 1px solid #cbd5e1; font-size: 11px; line-height: 1.45; color: #334155;">
+                  ${model.senderLines.map((l, i) => `<div>${i === 0 ? `<strong>${l}</strong>` : l}</div>`).join('')}
+                </td>
+                <td width="50%" valign="top" style="font-size: 11px; line-height: 1.45; color: #0f172a;">
+                  ${model.recipientLines.map((l, i) => `<div>${i === 0 ? `<strong>${l}</strong>` : l}</div>`).join('')}
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>`;
+    } else if (bp.metaLayout === 'single_col_left') {
+      metaRowHtml = `
+        <tr>
+          <td style="padding: 8px 28px 12px 28px; font-size: 11px; line-height: 1.45; color: #334155;">
+            ${model.senderLines.slice(0, 3).map((l, i) => `<div>${i === 0 ? `<strong>${l}</strong>` : l}</div>`).join('')}
+            <div style="margin-top: 6px;"><strong>Pour :</strong> ${model.recipientLines.join(' · ')}</div>
+          </td>
+        </tr>`;
+    }
+
+    const refPillRowHtml = bp.hasRefPill
+      ? `
+        <tr>
+          <td style="padding: 0 28px 18px 28px;">
+            <span style="display: inline-block; background-color: ${tintBg}; color: ${primaryColor}; font-weight: bold; font-size: 11px; padding: 3px 10px; border-radius: 3px; margin-bottom: 6px;">${model.refPillLabel}</span>
+            <table cellpadding="0" cellspacing="0" border="0">
+              ${model.refPairs
+                .map(
+                  (pair) => `
+                <tr>
+                  <td style="padding: 2px 12px 2px 0; color: #334155; font-size: 11px; white-space: nowrap;">${pair.label}</td>
+                  <td style="padding: 2px 0; color: #0f172a; font-size: 11px; font-weight: bold;">: ${pair.value}</td>
+                </tr>`
+                )
+                .join('')}
+            </table>
+          </td>
+        </tr>`
+      : '';
+
+    const titleBoxCss = bp.titleHasBox
+      ? `border: 1.5px solid ${primaryColor}; background-color: ${tintBg}; padding: 10px 14px;`
+      : bp.titleHasUnderline
+      ? `border-bottom: 2px solid ${accentBorderColor}; padding-bottom: 8px;`
+      : '';
+
+    const titleRowHtml = `
+      <tr>
+        <td align="${bp.titleAlign}" style="padding: 10px 28px 16px 28px;">
+          <div style="${titleBoxCss}">
+            <h1 style="margin: 0; font-size: 17px; font-weight: bold; color: #0f172a; font-family: ${fontStack};">${titleText}</h1>
+            ${
+              bp.titleHasSubtitle
+                ? `<p style="margin: 4px 0 0 0; font-size: 11px; letter-spacing: 0.5px; color: #475569;">${model.mainSubtitle}</p>`
+                : ''
+            }
+          </div>
+        </td>
+      </tr>`;
 
     const bodyParagraphsHtml = model.bodyParagraphs
-      .map((para) => `<p style="margin: 8px 0; font-size: 12px; line-height: 1.55; color: ${bodyColor};">${para}</p>`)
+      .map((para, idx) => {
+        if (bp.bodyLayout === 'cards') {
+          return `<div style="margin: 8px 0; padding: 8px 12px; border: 1px solid #cbd5e1; border-left: 3px solid ${primaryColor}; background-color: #f8fafc; font-size: 11.5px; line-height: 1.5; color: ${bodyColor};">${para}</div>`;
+        }
+        const divider =
+          bp.hasSectionDividers && idx < model.bodyParagraphs.length - 1
+            ? 'border-bottom: 1px dashed #e2e8f0; padding-bottom: 7px;'
+            : '';
+        return `<p style="margin: 7px 0; font-size: 12px; line-height: 1.55; color: ${bodyColor}; ${divider}">${para}</p>`;
+      })
       .join('');
+
+    const thBg =
+      bp.tableHeaderStyle === 'filled_primary'
+        ? primaryColor
+        : bp.tableHeaderStyle === 'tinted'
+        ? tintBg
+        : '#ffffff';
+    const thColor = bp.tableHeaderStyle === 'filled_primary' ? '#ffffff' : primaryColor;
 
     const tableHtml = model.summaryTable
       ? `<table width="100%" cellpadding="5" cellspacing="0" border="0" style="border-collapse: collapse; margin: 12px 0; font-family: ${fontStack}; font-size: 10.5px;">
-          <tr style="background-color: ${tintBg}; color: ${primaryColor};">
+          <tr style="background-color: ${thBg}; color: ${thColor};">
             ${model.summaryTable.headers.map((h) => `<th align="left" style="border: 1px solid #cbd5e1; padding: 5px;">${h}</th>`).join('')}
           </tr>
           ${model.summaryTable.rows
@@ -804,6 +990,75 @@ export function generateHousingTabEmailHtml(
         </table>`
       : '';
 
+    const sigRowHtml = `
+      <tr>
+        <td style="padding: 14px 28px 20px 28px; ${
+          bp.signatureHasTopBorder ? 'border-top: 1px solid #cbd5e1;' : ''
+        }">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              ${
+                bp.signatureLayout === 'left_block'
+                  ? `<td valign="top" style="font-size: 11.5px; color: #0f172a;">
+                      <div style="margin-bottom: 6px;">${model.faitALine}</div>
+                      <div style="font-weight: bold; margin-bottom: 4px;">${model.signatoryHeading}</div>
+                      <div style="color: #475569; font-size: 11px; margin-bottom: 6px;">${model.signatorySubRole}</div>
+                      <div>
+                        ${sigSrc ? `<img src="${sigSrc}" alt="Signature" style="max-height: 48px; vertical-align: middle; margin-right: 8px;" />` : ''}
+                        ${cachetSrc ? `<img src="${cachetSrc}" alt="Cachet" style="max-height: 52px; vertical-align: middle;" />` : ''}
+                      </div>
+                      <div style="margin-top: 4px; font-weight: bold;">${model.signatoryPrintedName}</div>
+                    </td>`
+                  : bp.signatureLayout === 'right_block'
+                  ? `<td align="right" valign="top" style="font-size: 11.5px; color: #0f172a;">
+                      <div style="margin-bottom: 6px;">${model.faitALine}</div>
+                      <div style="font-weight: bold; margin-bottom: 4px;">${model.signatoryHeading}</div>
+                      <div>
+                        ${sigSrc ? `<img src="${sigSrc}" alt="Signature" style="max-height: 48px; vertical-align: middle; margin-right: 8px;" />` : ''}
+                        ${cachetSrc ? `<img src="${cachetSrc}" alt="Cachet" style="max-height: 52px; vertical-align: middle;" />` : ''}
+                      </div>
+                      <div style="margin-top: 4px; font-weight: bold;">${model.signatoryPrintedName}</div>
+                    </td>`
+                  : `<td width="52%" valign="top" style="font-size: 11.5px; color: ${bodyColor}; padding-top: 4px;">
+                      ${model.faitALine}
+                    </td>
+                    <td width="48%" valign="top" style="font-size: 11.5px; color: #0f172a;">
+                      <div style="font-weight: bold; margin-bottom: 4px;">${model.signatoryHeading}</div>
+                      <div style="color: #475569; font-size: 11px; margin-bottom: 6px;">${model.signatorySubRole}</div>
+                      <div>
+                        ${sigSrc ? `<img src="${sigSrc}" alt="Signature" style="max-height: 48px; vertical-align: middle; margin-right: 8px;" />` : ''}
+                        ${cachetSrc ? `<img src="${cachetSrc}" alt="Cachet" style="max-height: 52px; vertical-align: middle;" />` : ''}
+                      </div>
+                      <div style="margin-top: 4px; font-weight: bold;">${model.signatoryPrintedName}</div>
+                    </td>`
+              }
+            </tr>
+          </table>
+        </td>
+      </tr>`;
+
+    const footerRowHtml =
+      bp.footerLayout === 'none'
+        ? ''
+        : `
+      <tr>
+        <td style="padding: 12px 28px; ${bp.hasFooterDivider ? 'border-top: 1px solid #e2e8f0;' : ''}">
+          ${
+            bp.footerLayout === 'centered_legal'
+              ? `<div style="text-align: center; font-size: 9.5px; color: #64748b;">${model.footerLegalLines.join(' · ')}</div>`
+              : bp.footerLayout === 'rule_with_page' || bp.footerLayout === 'minimal_page'
+              ? `<table width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="font-size: 9.5px; color: #64748b;">${bp.footerLayout === 'rule_with_page' ? `${p.nomEntreprise} · ${p.codeIdCandidature}` : ''}</td><td align="right" style="font-size: 10px; font-weight: bold; color: #475569;">1/1</td></tr></table>`
+              : `<table width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td width="52" valign="middle">${qrSrc ? `<img src="${qrSrc}" alt="QR" style="width: 44px; height: 44px; display: block;" />` : ''}</td>
+                    <td valign="middle" style="font-size: 9px; line-height: 1.35; color: #64748b; padding: 0 8px;">${model.footerLegalLines.map((l) => `<div>${l}</div>`).join('')}</td>
+                    <td width="32" align="right" valign="bottom" style="font-size: 10px; font-weight: bold; color: #475569;">1/1</td>
+                  </tr>
+                </table>`
+          }
+        </td>
+      </tr>`;
+
     return `<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -815,93 +1070,23 @@ export function generateHousingTabEmailHtml(
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
     <tr>
       <td align="center">
-        <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" style="max-width: 640px; width: 100%; background-color: ${pageBg}; border: ${outerBorder}; padding: ${padPx};">
+        <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" style="max-width: 640px; width: 100%; background-color: ${pageBg}; border: ${outerBorder}; ${
+      bp.hasLeftAccentStripe ? `border-left: 6px solid ${primaryColor};` : ''
+    }">
+          ${topAccentStripeHtml}
+          ${headerRowHtml}
+          ${metaRowHtml}
+          ${refPillRowHtml}
+          ${titleRowHtml}
           <tr>
-            <td style="padding-bottom: 18px;">
-              <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                <tr>
-                  <td align="${logoAlign}" valign="middle">
-                    ${logoSrc ? `<img src="${logoSrc}" alt="Logo Officiel" style="max-height: 50px; max-width: 180px; display: inline-block;" />` : `<strong style="font-size: 15px; color: ${primaryColor};">${p.nomEntreprise}</strong>`}
-                  </td>
-                  <td align="right" valign="top" style="width: 24px;">
-                    <span style="display: inline-block; width: 10px; height: 10px; border: 1px solid #94a3b8;"></span>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding-bottom: 16px;">
-              <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                <tr>
-                  <td width="52%" valign="top" style="font-size: 11px; line-height: 1.45; color: #334155;">
-                    ${model.senderLines.map((l, i) => `<div>${i === 0 ? `<strong>${l}</strong>` : l}</div>`).join('')}
-                  </td>
-                  <td width="48%" valign="top" style="padding-top: 14px; font-size: 11px; line-height: 1.45; color: #0f172a;">
-                    ${model.recipientLines.map((l, i) => `<div>${i === 0 ? `<strong>${l}</strong>` : l}</div>`).join('')}
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding-bottom: 20px;">
-              <span style="display: inline-block; background-color: ${tintBg}; color: ${primaryColor}; font-weight: bold; font-size: 11px; padding: 3px 10px; border-radius: 3px; margin-bottom: 6px;">${model.refPillLabel}</span>
-              <table cellpadding="0" cellspacing="0" border="0">
-                ${refRowsHtml}
-              </table>
-            </td>
-          </tr>
-          <tr>
-            <td align="center" style="padding: 10px 0 22px 0;">
-              <h1 style="margin: 0; font-size: 18px; font-weight: bold; color: #0f172a; font-family: ${fontStack};">${model.mainTitle}</h1>
-              <p style="margin: 4px 0 0 0; font-size: 11.5px; letter-spacing: 0.6px; color: #475569;">${model.mainSubtitle}</p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding-bottom: 22px;">
-              <div style="margin-bottom: 10px;">${introHtml}</div>
+            <td style="padding: 4px 28px 18px 28px;">
+              <div style="margin-bottom: 10px;">${model.introLines.map((l) => `<p style="margin: 0 0 4px 0; font-size: 12px; color: ${bodyColor};">${l}</p>`).join('')}</div>
               ${bodyParagraphsHtml}
               ${tableHtml}
             </td>
           </tr>
-          <tr>
-            <td style="padding-bottom: 26px;">
-              <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                <tr>
-                  <td width="52%" valign="top" style="font-size: 11.5px; color: ${bodyColor}; padding-top: 4px;">
-                    ${model.faitALine}
-                  </td>
-                  <td width="48%" valign="top" style="font-size: 11.5px; color: #0f172a;">
-                    <div style="font-weight: bold; margin-bottom: 6px;">${model.signatoryHeading}</div>
-                    <div style="color: #475569; font-size: 11px; margin-bottom: 8px;">${model.signatorySubRole}</div>
-                    <div>
-                      ${sigSrc ? `<img src="${sigSrc}" alt="Signature" style="max-height: 48px; vertical-align: middle; margin-right: 8px;" />` : ''}
-                      ${cachetSrc ? `<img src="${cachetSrc}" alt="Cachet" style="max-height: 52px; vertical-align: middle;" />` : ''}
-                    </div>
-                    <div style="margin-top: 6px; font-weight: bold;">${model.signatoryPrintedName}</div>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding-top: 12px; border-top: 1px solid #e2e8f0;">
-              <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                <tr>
-                  <td width="52" valign="middle">
-                    ${qrSrc ? `<img src="${qrSrc}" alt="QR" style="width: 44px; height: 44px; display: block;" />` : ''}
-                  </td>
-                  <td valign="middle" style="font-size: 9px; line-height: 1.35; color: #64748b; padding: 0 8px;">
-                    ${model.footerLegalLines.map((l) => `<div>${l}</div>`).join('')}
-                  </td>
-                  <td width="32" align="right" valign="bottom" style="font-size: 10px; font-weight: bold; color: #475569;">
-                    1/1
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
+          ${sigRowHtml}
+          ${footerRowHtml}
         </table>
       </td>
     </tr>
@@ -1103,111 +1288,335 @@ export async function generateHousingTabPdf(
 
   drawPageFrame();
 
-  if (effectiveLayout && effectiveLayout.layoutArchetype === 'letterhead_split' && !customText?.trim()) {
+  const bp = effectiveLayout?.spatialBlueprint;
+
+  if (effectiveLayout && bp && !customText?.trim()) {
     const model = buildStructuredHousingDocument(tabNumber, data, p);
     const tintRgb = hexToRgbTuple(effectiveLayout.highlightTintColor);
-    let y = Math.max(12, marginTop);
+    const headerTextRgb = hexToRgbTuple(effectiveLayout.headerTextColor || '#FFFFFF');
+    const spacingMult =
+      effectiveLayout.blockSpacing === 'compact'
+        ? 0.85
+        : effectiveLayout.blockSpacing === 'airy'
+        ? 1.25
+        : 1.0;
 
-    // Zone 1 : Logo propre + petit repère discret en haut à droite
-    if (actorAssets.logo.url) {
-      try {
-        const lCfg = actorAssets.logo.cfg || assetsConfig.logo;
-        const rendered = await renderAssetWithSettingsForPdf(actorAssets.logo.url, lCfg);
-        const wMm = Math.min(46, Math.max(18, (lCfg.widthValue || 160) * 0.21));
-        const hMm = Math.min(18, Math.max(9, (lCfg.heightValue || 56) * 0.22));
-        const logoX =
-          effectiveLayout.logoPlacement === 'top_right'
-            ? pageWidth - marginRight - wMm
-            : effectiveLayout.logoPlacement === 'top_center'
-            ? (pageWidth - wMm) / 2
-            : marginLeft;
-        doc.addImage(rendered.dataUrl, 'PNG', logoX, y, wMm, hMm);
-      } catch {}
-    } else {
-      doc.setFont(pdfFont, 'bold');
-      doc.setFontSize(13);
-      doc.setTextColor(...primaryRgb);
-      doc.text(p.nomEntreprise, marginLeft, y + 6);
+    if (bp.hasLeftAccentStripe) {
+      doc.setFillColor(...primaryRgb);
+      doc.rect(0, 0, 3.5, pageHeight, 'F');
     }
 
-    doc.setDrawColor(148, 163, 184);
-    doc.setLineWidth(0.25);
-    doc.rect(pageWidth - marginRight - 4, y + 1, 3.2, 3.2);
-    doc.setFillColor(15, 23, 42);
-    doc.rect(pageWidth - marginRight - 3.3, y + 1.7, 1.5, 1.5, 'F');
+    let y = Math.max(10, marginTop);
 
-    y += 22;
+    // ZONE 1 : EN-TÊTE FIDÈLE AU SPATIAL BLUEPRINT DU MODÈLE IMPORTÉ
+    if (bp.headerLayout === 'filled_banner') {
+      const banH = Math.max(16, Math.min(34, bp.headerBannerHeightMm || 24));
+      doc.setFillColor(...headerRgb);
+      doc.rect(bp.hasLeftAccentStripe ? 3.5 : 0, 0, pageWidth - (bp.hasLeftAccentStripe ? 3.5 : 0), banH, 'F');
+      doc.setFillColor(...accentRgb);
+      doc.rect(bp.hasLeftAccentStripe ? 3.5 : 0, banH, pageWidth, 1.2, 'F');
 
-    // Zone 2 : Bloc 2 colonnes Expéditeur / Destinataire
-    const rightColX = pageWidth * 0.56;
-    const rightColW = pageWidth - marginRight - rightColX;
-    const leftColW = rightColX - marginLeft - 8;
+      let logoWUsed = 0;
+      if (actorAssets.logo.url) {
+        try {
+          const lCfg = actorAssets.logo.cfg || assetsConfig.logo;
+          const rendered = await renderAssetWithSettingsForPdf(actorAssets.logo.url, lCfg);
+          const wMm = Math.min(42, Math.max(16, (lCfg.widthValue || 150) * 0.2));
+          const hMm = Math.min(banH - 6, Math.max(8, (lCfg.heightValue || 50) * 0.21));
+          const logoX =
+            effectiveLayout.logoPlacement === 'top_right'
+              ? pageWidth - marginRight - wMm - 2
+              : marginLeft;
+          doc.setFillColor(255, 255, 255);
+          doc.roundedRect(logoX, (banH - hMm) / 2 - 1, wMm + 2.5, hMm + 2, 1.2, 1.2, 'F');
+          doc.addImage(rendered.dataUrl, 'PNG', logoX + 1.25, (banH - hMm) / 2, wMm, hMm);
+          logoWUsed = wMm + 6;
+        } catch {}
+      }
 
-    let yLeft = y;
-    doc.setFontSize(8.5);
-    model.senderLines.forEach((line, idx) => {
-      doc.setFont(pdfFont, idx === 0 ? 'bold' : 'normal');
-      const lineRgb: [number, number, number] = idx === 0 ? [15, 23, 42] : [51, 65, 85];
-      doc.setTextColor(...lineRgb);
-      const wrapped = doc.splitTextToSize(line, leftColW);
-      doc.text(wrapped, marginLeft, yLeft);
-      yLeft += wrapped.length * 3.9;
-    });
-
-    let yRight = y + 6;
-    model.recipientLines.forEach((line, idx) => {
-      doc.setFont(pdfFont, idx === 0 ? 'bold' : 'normal');
-      doc.setTextColor(15, 23, 42);
-      const wrapped = doc.splitTextToSize(line, rightColW);
-      doc.text(wrapped, rightColX, yRight);
-      yRight += wrapped.length * 4.0;
-    });
-
-    y = Math.max(yLeft, yRight) + 5;
-
-    // Zone 3 : Pastille teintée "Vos références" + paires clé : valeur
-    const pillW = Math.min(54, doc.getTextWidth(model.refPillLabel) + 8);
-    doc.setFillColor(...tintRgb);
-    doc.roundedRect(marginLeft, y - 3.2, pillW, 5.2, 0.8, 0.8, 'F');
-    doc.setFont(pdfFont, 'bold');
-    doc.setFontSize(8.5);
-    doc.setTextColor(...primaryRgb);
-    doc.text(model.refPillLabel, marginLeft + 2.5, y + 0.3);
-    y += 5.5;
-
-    doc.setFontSize(8.2);
-    for (const pair of model.refPairs) {
+      const txtX =
+        effectiveLayout.logoPlacement === 'top_center'
+          ? pageWidth / 2
+          : effectiveLayout.logoPlacement === 'top_right'
+          ? marginLeft
+          : marginLeft + logoWUsed;
+      doc.setTextColor(...headerTextRgb);
+      doc.setFont(pdfFont, 'bold');
+      doc.setFontSize(9.5);
+      doc.text(model.superLabel, txtX, banH * 0.42, {
+        align: effectiveLayout.logoPlacement === 'top_center' ? 'center' : 'left'
+      });
       doc.setFont(pdfFont, 'normal');
-      doc.setTextColor(51, 65, 85);
-      doc.text(pair.label, marginLeft, y);
+      doc.setFontSize(7.8);
+      doc.text(`Dossier : ${p.codeIdCandidature} · ${p.nomComplet}`, txtX, banH * 0.72, {
+        align: effectiveLayout.logoPlacement === 'top_center' ? 'center' : 'left'
+      });
+      y = Math.max(banH + 8, marginTop + banH);
+    } else if (bp.headerLayout === 'top_accent_bar') {
+      doc.setFillColor(...primaryRgb);
+      doc.rect(0, 0, pageWidth, 3.8, 'F');
+      y = Math.max(11, marginTop);
+      if (actorAssets.logo.url) {
+        try {
+          const lCfg = actorAssets.logo.cfg || assetsConfig.logo;
+          const rendered = await renderAssetWithSettingsForPdf(actorAssets.logo.url, lCfg);
+          const wMm = Math.min(44, Math.max(16, (lCfg.widthValue || 155) * 0.2));
+          const hMm = Math.min(17, Math.max(8, (lCfg.heightValue || 54) * 0.22));
+          const logoX =
+            effectiveLayout.logoPlacement === 'top_right'
+              ? pageWidth - marginRight - wMm
+              : effectiveLayout.logoPlacement === 'top_center'
+              ? (pageWidth - wMm) / 2
+              : marginLeft;
+          doc.addImage(rendered.dataUrl, 'PNG', logoX, y, wMm, hMm);
+          y += hMm + 4;
+        } catch {
+          y += 12;
+        }
+      } else {
+        doc.setFont(pdfFont, 'bold');
+        doc.setFontSize(11.5);
+        doc.setTextColor(...primaryRgb);
+        doc.text(p.nomEntreprise.toUpperCase(), marginLeft, y + 5);
+        y += 11;
+      }
+      if (bp.headerHasDivider) {
+        doc.setDrawColor(...accentRgb);
+        doc.setLineWidth(0.5);
+        doc.line(marginLeft, y, pageWidth - marginRight, y);
+        y += 5;
+      }
+    } else if (bp.headerLayout === 'centered_stack') {
+      if (actorAssets.logo.url) {
+        try {
+          const lCfg = actorAssets.logo.cfg || assetsConfig.logo;
+          const rendered = await renderAssetWithSettingsForPdf(actorAssets.logo.url, lCfg);
+          const wMm = Math.min(42, Math.max(16, (lCfg.widthValue || 155) * 0.2));
+          const hMm = Math.min(17, Math.max(8, (lCfg.heightValue || 54) * 0.22));
+          doc.addImage(rendered.dataUrl, 'PNG', (pageWidth - wMm) / 2, y, wMm, hMm);
+          y += hMm + 4;
+        } catch {}
+      } else {
+        doc.setFont(pdfFont, 'bold');
+        doc.setFontSize(12);
+        doc.setTextColor(...primaryRgb);
+        doc.text(p.nomEntreprise.toUpperCase(), pageWidth / 2, y + 5, { align: 'center' });
+        y += 9;
+      }
       doc.setFont(pdfFont, 'bold');
-      doc.setTextColor(15, 23, 42);
-      const valWrapped = doc.splitTextToSize(`: ${pair.value}`, contentWidth - 46);
-      doc.text(valWrapped, marginLeft + 44, y);
-      y += Math.max(4.1, valWrapped.length * 3.8);
+      doc.setFontSize(8.5);
+      doc.setTextColor(71, 85, 105);
+      doc.text(model.superLabel, pageWidth / 2, y + 2, { align: 'center' });
+      y += 6;
+      if (bp.headerHasDivider) {
+        doc.setDrawColor(...primaryRgb);
+        doc.setLineWidth(0.55);
+        doc.line(marginLeft, y, pageWidth - marginRight, y);
+        y += 5;
+      }
+    } else if (bp.headerLayout === 'split_lr') {
+      if (actorAssets.logo.url) {
+        try {
+          const lCfg = actorAssets.logo.cfg || assetsConfig.logo;
+          const rendered = await renderAssetWithSettingsForPdf(actorAssets.logo.url, lCfg);
+          const wMm = Math.min(44, Math.max(16, (lCfg.widthValue || 155) * 0.2));
+          const hMm = Math.min(17, Math.max(8, (lCfg.heightValue || 54) * 0.22));
+          doc.addImage(rendered.dataUrl, 'PNG', marginLeft, y, wMm, hMm);
+        } catch {}
+      } else {
+        doc.setFont(pdfFont, 'bold');
+        doc.setFontSize(12);
+        doc.setTextColor(...primaryRgb);
+        doc.text(p.nomEntreprise, marginLeft, y + 6);
+      }
+      doc.setFont(pdfFont, 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(...primaryRgb);
+      doc.text(model.superLabel, pageWidth - marginRight, y + 5, { align: 'right' });
+      doc.setFont(pdfFont, 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(71, 85, 105);
+      doc.text(`Réf. ${p.codeIdCandidature}`, pageWidth - marginRight, y + 10, { align: 'right' });
+      y += 20;
+      if (bp.headerHasDivider) {
+        doc.setDrawColor(...primaryRgb);
+        doc.setLineWidth(0.5);
+        doc.line(marginLeft, y, pageWidth - marginRight, y);
+        y += 5;
+      }
+    } else {
+      // left_clean
+      if (actorAssets.logo.url) {
+        try {
+          const lCfg = actorAssets.logo.cfg || assetsConfig.logo;
+          const rendered = await renderAssetWithSettingsForPdf(actorAssets.logo.url, lCfg);
+          const wMm = Math.min(46, Math.max(18, (lCfg.widthValue || 160) * 0.21));
+          const hMm = Math.min(18, Math.max(9, (lCfg.heightValue || 56) * 0.22));
+          const logoX =
+            effectiveLayout.logoPlacement === 'top_right'
+              ? pageWidth - marginRight - wMm
+              : effectiveLayout.logoPlacement === 'top_center'
+              ? (pageWidth - wMm) / 2
+              : marginLeft;
+          doc.addImage(rendered.dataUrl, 'PNG', logoX, y, wMm, hMm);
+        } catch {}
+      } else {
+        doc.setFont(pdfFont, 'bold');
+        doc.setFontSize(13);
+        doc.setTextColor(...primaryRgb);
+        doc.text(p.nomEntreprise, marginLeft, y + 6);
+      }
+
+      if (bp.hasTopRightMarker) {
+        doc.setDrawColor(148, 163, 184);
+        doc.setLineWidth(0.25);
+        doc.rect(pageWidth - marginRight - 4, y + 1, 3.2, 3.2);
+        doc.setFillColor(15, 23, 42);
+        doc.rect(pageWidth - marginRight - 3.3, y + 1.7, 1.5, 1.5, 'F');
+      }
+      y += 20;
+      if (bp.headerHasDivider) {
+        doc.setDrawColor(...primaryRgb);
+        doc.setLineWidth(0.4);
+        doc.line(marginLeft, y, pageWidth - marginRight, y);
+        y += 5;
+      }
     }
 
-    y += 8;
+    // ZONE 2 : MÉTADONNÉES (2 colonnes, grille encadrée, 1 colonne ou aucune)
+    if (bp.metaLayout === 'two_col_asymmetric' || bp.metaLayout === 'two_col_equal') {
+      const rightColX = pageWidth * (bp.metaLayout === 'two_col_asymmetric' ? 0.56 : 0.52);
+      const rightColW = pageWidth - marginRight - rightColX;
+      const leftColW = rightColX - marginLeft - 8;
 
-    // Zone 4 : Titre principal centré + sous-titre centré
+      let yLeft = y;
+      doc.setFontSize(8.4);
+      model.senderLines.forEach((line, idx) => {
+        doc.setFont(pdfFont, idx === 0 ? 'bold' : 'normal');
+        const lineRgb: [number, number, number] = idx === 0 ? [15, 23, 42] : [51, 65, 85];
+        doc.setTextColor(...lineRgb);
+        const wrapped = doc.splitTextToSize(line, leftColW);
+        doc.text(wrapped, marginLeft, yLeft);
+        yLeft += wrapped.length * 3.8;
+      });
+
+      let yRight = bp.metaLayout === 'two_col_asymmetric' ? y + 6 : y;
+      model.recipientLines.forEach((line, idx) => {
+        doc.setFont(pdfFont, idx === 0 ? 'bold' : 'normal');
+        doc.setTextColor(15, 23, 42);
+        const wrapped = doc.splitTextToSize(line, rightColW);
+        doc.text(wrapped, rightColX, yRight);
+        yRight += wrapped.length * 3.9;
+      });
+      y = Math.max(yLeft, yRight) + 5 * spacingMult;
+    } else if (bp.metaLayout === 'boxed_grid') {
+      const boxH = 22;
+      doc.setFillColor(248, 250, 252);
+      doc.setDrawColor(203, 213, 225);
+      doc.setLineWidth(0.3);
+      doc.rect(marginLeft, y, contentWidth, boxH, 'FD');
+      doc.line(marginLeft + contentWidth / 2, y, marginLeft + contentWidth / 2, y + boxH);
+
+      let yL = y + 4.5;
+      doc.setFontSize(8);
+      model.senderLines.slice(0, 4).forEach((l, idx) => {
+        doc.setFont(pdfFont, idx === 0 ? 'bold' : 'normal');
+        doc.setTextColor(30, 41, 59);
+        doc.text(doc.splitTextToSize(l, contentWidth / 2 - 5)[0] || '', marginLeft + 2.5, yL);
+        yL += 4;
+      });
+      let yR = y + 4.5;
+      model.recipientLines.slice(0, 4).forEach((l, idx) => {
+        doc.setFont(pdfFont, idx === 0 ? 'bold' : 'normal');
+        doc.setTextColor(15, 23, 42);
+        doc.text(doc.splitTextToSize(l, contentWidth / 2 - 5)[0] || '', marginLeft + contentWidth / 2 + 2.5, yR);
+        yR += 4;
+      });
+      y += boxH + 6 * spacingMult;
+    } else if (bp.metaLayout === 'single_col_left') {
+      doc.setFontSize(8.2);
+      doc.setFont(pdfFont, 'bold');
+      doc.setTextColor(15, 23, 42);
+      doc.text(`${model.senderLines[0]} — Pour : ${model.recipientLines[0]}`, marginLeft, y);
+      y += 4.2;
+      doc.setFont(pdfFont, 'normal');
+      doc.setTextColor(71, 85, 105);
+      doc.text(`${model.senderLines.slice(1, 3).join(' · ')}`, marginLeft, y);
+      y += 6 * spacingMult;
+    }
+
+    // ZONE 3 : PASTILLE RÉFÉRENCES (UNIQUEMENT SI DÉTECTÉE DANS LE MODÈLE)
+    if (bp.hasRefPill) {
+      const pillW = Math.min(54, doc.getTextWidth(model.refPillLabel) + 8);
+      doc.setFillColor(...tintRgb);
+      doc.roundedRect(marginLeft, y - 3.2, pillW, 5.2, 0.8, 0.8, 'F');
+      doc.setFont(pdfFont, 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(...primaryRgb);
+      doc.text(model.refPillLabel, marginLeft + 2.5, y + 0.3);
+      y += 5.5;
+
+      doc.setFontSize(8.2);
+      for (const pair of model.refPairs) {
+        doc.setFont(pdfFont, 'normal');
+        doc.setTextColor(51, 65, 85);
+        doc.text(pair.label, marginLeft, y);
+        doc.setFont(pdfFont, 'bold');
+        doc.setTextColor(15, 23, 42);
+        const valWrapped = doc.splitTextToSize(`: ${pair.value}`, contentWidth - 46);
+        doc.text(valWrapped, marginLeft + 44, y);
+        y += Math.max(4.1, valWrapped.length * 3.8);
+      }
+      y += 6 * spacingMult;
+    }
+
+    // ZONE 4 : TITRE PRINCIPAL SELON ALIGNEMENT / CADRE / SOULIGNEMENT
+    const titleStr = bp.titleUppercase ? model.mainTitle.toUpperCase() : model.mainTitle;
+    const titleX =
+      bp.titleAlign === 'center'
+        ? pageWidth / 2
+        : bp.titleAlign === 'right'
+        ? pageWidth - marginRight
+        : marginLeft;
+
     doc.setFont(pdfFont, 'bold');
-    doc.setFontSize(13.5);
+    doc.setFontSize(13);
+    const titleWrapped = doc.splitTextToSize(titleStr, contentWidth - 10);
+    const titleBlockH = titleWrapped.length * 5.2 + (bp.titleHasSubtitle ? 5.5 : 2);
+
+    if (bp.titleHasBox) {
+      doc.setFillColor(...tintRgb);
+      doc.setDrawColor(...primaryRgb);
+      doc.setLineWidth(0.45);
+      doc.rect(marginLeft, y - 4, contentWidth, titleBlockH + 4.5, 'FD');
+    }
+
     doc.setTextColor(15, 23, 42);
-    const titleWrapped = doc.splitTextToSize(model.mainTitle, contentWidth - 12);
-    doc.text(titleWrapped, pageWidth / 2, y, { align: 'center' });
-    y += titleWrapped.length * 5.4 + 1;
+    doc.text(titleWrapped, titleX, y, { align: bp.titleAlign });
+    y += titleWrapped.length * 5.2 + 1;
 
-    doc.setFont(pdfFont, 'normal');
-    doc.setFontSize(9.5);
-    doc.setTextColor(71, 85, 105);
-    doc.text(model.mainSubtitle, pageWidth / 2, y, { align: 'center' });
-    y += 10;
+    if (bp.titleHasSubtitle) {
+      doc.setFont(pdfFont, 'normal');
+      doc.setFontSize(9.2);
+      doc.setTextColor(71, 85, 105);
+      doc.text(model.mainSubtitle, titleX, y, { align: bp.titleAlign });
+      y += 5;
+    }
 
-    // Zone 5 : Corps du texte épuré (calibré sur 1 page)
-    const bottomReserve = 62;
+    if (bp.titleHasUnderline) {
+      doc.setDrawColor(...accentRgb);
+      doc.setLineWidth(0.75);
+      doc.line(marginLeft, y, pageWidth - marginRight, y);
+      y += 4;
+    } else {
+      y += 5 * spacingMult;
+    }
+
+    // ZONE 5 : CORPS DU DOCUMENT
+    const bottomReserve = bp.footerLayout === 'none' ? 46 : 60;
     const availableBodyH = Math.max(45, pageHeight - marginBottom - bottomReserve - y);
     const bodyFontSize = model.summaryTable ? 8.0 : 8.7;
-    const bodyStep = model.summaryTable ? 3.5 : 4.0;
+    const bodyStep = (model.summaryTable ? 3.5 : 4.0) * spacingMult;
 
     doc.setFontSize(bodyFontSize);
     for (const intro of model.introLines) {
@@ -1219,17 +1628,46 @@ export async function generateHousingTabPdf(
     }
     y += 2;
 
-    for (const para of model.bodyParagraphs) {
+    for (let pIdx = 0; pIdx < model.bodyParagraphs.length; pIdx++) {
+      const para = model.bodyParagraphs[pIdx];
       if (y > pageHeight - bottomReserve && !effectiveLayout.singlePageFit) {
         doc.addPage();
         drawPageFrame();
         y = Math.max(16, marginTop);
       }
-      doc.setFont(pdfFont, 'normal');
-      doc.setTextColor(...bodyRgb);
-      const wrapped = doc.splitTextToSize(para, contentWidth);
-      doc.text(wrapped, marginLeft, y);
-      y += wrapped.length * bodyStep + 2.2;
+
+      if (bp.bodyLayout === 'cards') {
+        const wrapped = doc.splitTextToSize(para, contentWidth - 6);
+        const cardH = wrapped.length * bodyStep + 4;
+        doc.setFillColor(248, 250, 252);
+        doc.setDrawColor(203, 213, 225);
+        doc.rect(marginLeft, y - 3, contentWidth, cardH, 'FD');
+        doc.setFillColor(...primaryRgb);
+        doc.rect(marginLeft, y - 3, 1.4, cardH, 'F');
+        doc.setFont(pdfFont, 'normal');
+        doc.setTextColor(...bodyRgb);
+        doc.text(wrapped, marginLeft + 3.5, y + 0.5);
+        y += cardH + 2.5;
+      } else {
+        const isNumberedHeading = bp.bodyLayout === 'numbered_sections' && /^[1-9]\.\s/.test(para);
+        if (isNumberedHeading) {
+          doc.setFont(pdfFont, 'bold');
+          doc.setTextColor(...primaryRgb);
+        } else {
+          doc.setFont(pdfFont, 'normal');
+          doc.setTextColor(...bodyRgb);
+        }
+        const wrapped = doc.splitTextToSize(para, contentWidth);
+        doc.text(wrapped, marginLeft, y);
+        y += wrapped.length * bodyStep + 2.2 * spacingMult;
+
+        if (bp.hasSectionDividers && pIdx < model.bodyParagraphs.length - 1) {
+          doc.setDrawColor(226, 232, 240);
+          doc.setLineWidth(0.2);
+          doc.line(marginLeft, y - 1, pageWidth - marginRight, y - 1);
+          y += 1.5;
+        }
+      }
     }
 
     if (model.summaryTable) {
@@ -1237,11 +1675,22 @@ export async function generateHousingTabPdf(
       const rowFontSize = availableBodyH < 75 ? 6.9 : 7.4;
       const rowPadY = availableBodyH < 75 ? 3.8 : 4.4;
 
-      doc.setFillColor(...tintRgb);
-      doc.rect(marginLeft, y, contentWidth, 5.4, 'F');
+      if (bp.tableHeaderStyle === 'filled_primary') {
+        doc.setFillColor(...primaryRgb);
+        doc.rect(marginLeft, y, contentWidth, 5.4, 'F');
+        doc.setTextColor(255, 255, 255);
+      } else if (bp.tableHeaderStyle === 'tinted') {
+        doc.setFillColor(...tintRgb);
+        doc.rect(marginLeft, y, contentWidth, 5.4, 'F');
+        doc.setTextColor(...primaryRgb);
+      } else {
+        doc.setDrawColor(100, 116, 139);
+        doc.setLineWidth(0.3);
+        doc.rect(marginLeft, y, contentWidth, 5.4, 'S');
+        doc.setTextColor(15, 23, 42);
+      }
       doc.setFont(pdfFont, 'bold');
       doc.setFontSize(rowFontSize);
-      doc.setTextColor(...primaryRgb);
       let cx = marginLeft + 1.5;
       model.summaryTable.headers.forEach((h, i) => {
         doc.text(h, cx, y + 3.7);
@@ -1280,93 +1729,174 @@ export async function generateHousingTabPdf(
       y += 3;
     }
 
-    // Zone 6 : Bloc 2 colonnes "Fait à" à gauche + Signataire / Signature / Cachet à droite
+    // ZONE 6 : SIGNATURES SELON LE LAYOUT DU FICHIER MODÈLE
     if (y > pageHeight - 56) {
       doc.addPage();
       drawPageFrame();
       y = Math.max(16, marginTop);
     }
-    const sigRowY = Math.max(y + 5, pageHeight - marginBottom - 56);
-    const sigRightX = pageWidth * 0.56;
+    const sigRowY = Math.max(y + 5, pageHeight - marginBottom - (bp.footerLayout === 'none' ? 42 : 54));
 
-    doc.setFont(pdfFont, 'normal');
-    doc.setFontSize(8.6);
-    doc.setTextColor(...bodyRgb);
-    doc.text(model.faitALine, marginLeft, sigRowY + 2);
-
-    doc.setFont(pdfFont, 'bold');
-    doc.setFontSize(8.6);
-    doc.setTextColor(15, 23, 42);
-    doc.text(model.signatoryHeading, sigRightX, sigRowY + 2);
-    doc.setFont(pdfFont, 'normal');
-    doc.setFontSize(8.2);
-    doc.setTextColor(71, 85, 105);
-    doc.text(model.signatorySubRole, sigRightX, sigRowY + 6.5);
-
-    let sigImgOffsetY = sigRowY + 9;
-    if (actorAssets.signature.url) {
-      try {
-        const sCfg = actorAssets.signature.cfg || assetsConfig.signature;
-        const rendered = await renderAssetWithSettingsForPdf(actorAssets.signature.url, sCfg);
-        doc.addImage(rendered.dataUrl, 'PNG', sigRightX, sigImgOffsetY, 30, 14);
-      } catch {}
-    }
-    if (actorAssets.cachet.url) {
-      try {
-        const cCfg = actorAssets.cachet.cfg || assetsConfig.cachet;
-        const rendered = await renderAssetWithSettingsForPdf(actorAssets.cachet.url, cCfg);
-        doc.addImage(rendered.dataUrl, 'PNG', sigRightX + 32, sigImgOffsetY - 1, 20, 17);
-      } catch {}
-    }
-    sigImgOffsetY += 17;
-
-    doc.setFont(pdfFont, 'normal');
-    doc.setFontSize(8.5);
-    doc.setTextColor(15, 23, 42);
-    doc.text(model.signatoryPrintedName, sigRightX, sigImgOffsetY);
-
-    // Zone 7 : Pied de page épuré (QR gauche + mentions légales centre + 1/1 droite)
-    const bottomFooterY = pageHeight - marginBottom - 15;
-    doc.setDrawColor(226, 232, 240);
-    doc.setLineWidth(0.2);
-    doc.line(marginLeft, bottomFooterY - 2, pageWidth - marginRight, bottomFooterY - 2);
-
-    try {
-      const qrUrl =
-        actorAssets.qrcode.url ||
-        (await QRCode.toDataURL(`VERIFY:${p.codeIdCandidature}:TAB${tabNumber}:${p.nomComplet}`, {
-          width: 120,
-          margin: 1
-        }));
-      doc.addImage(qrUrl, 'PNG', marginLeft, bottomFooterY, 13, 13);
-    } catch {}
-
-    let legalX = marginLeft + 17;
-    if (actorAssets.barcode.url) {
-      try {
-        const bCfg = actorAssets.barcode.cfg || assetsConfig.barcodeEmployeur || assetsConfig.logo;
-        const rendered = await renderAssetWithSettingsForPdf(actorAssets.barcode.url, bCfg);
-        doc.addImage(rendered.dataUrl, 'PNG', legalX, bottomFooterY + 1, 26, 10);
-        legalX += 29;
-      } catch {}
+    if (bp.signatureHasTopBorder) {
+      doc.setDrawColor(203, 213, 225);
+      doc.setLineWidth(0.3);
+      doc.line(marginLeft, sigRowY - 3, pageWidth - marginRight, sigRowY - 3);
     }
 
-    doc.setFont(pdfFont, 'normal');
-    doc.setFontSize(6.5);
-    doc.setTextColor(100, 116, 139);
-    const legalMaxW = pageWidth - marginRight - legalX - 14;
-    let ly = bottomFooterY + 3.2;
-    for (const legalLine of model.footerLegalLines) {
-      const wrappedLegal = doc.splitTextToSize(legalLine, legalMaxW)[0] || '';
-      doc.text(wrappedLegal, legalX, ly);
-      ly += 3.5;
+    if (bp.signatureLayout === 'three_col_footer') {
+      doc.setFont(pdfFont, 'bold');
+      doc.setFontSize(7.8);
+      doc.setTextColor(51, 65, 85);
+      doc.text('SIGNATURE OFFICIELLE', marginLeft, sigRowY + 2);
+      doc.text('CACHET / SCEAU', marginLeft + 64, sigRowY + 2);
+      doc.text(model.faitALine, marginLeft + 122, sigRowY + 2);
+
+      if (actorAssets.signature.url) {
+        try {
+          const sCfg = actorAssets.signature.cfg || assetsConfig.signature;
+          const rendered = await renderAssetWithSettingsForPdf(actorAssets.signature.url, sCfg);
+          doc.addImage(rendered.dataUrl, 'PNG', marginLeft, sigRowY + 5, 32, 15);
+        } catch {}
+      }
+      if (actorAssets.cachet.url) {
+        try {
+          const cCfg = actorAssets.cachet.cfg || assetsConfig.cachet;
+          const rendered = await renderAssetWithSettingsForPdf(actorAssets.cachet.url, cCfg);
+          doc.addImage(rendered.dataUrl, 'PNG', marginLeft + 64, sigRowY + 5, 24, 18);
+        } catch {}
+      }
+      doc.setFont(pdfFont, 'bold');
+      doc.setFontSize(8.2);
+      doc.setTextColor(15, 23, 42);
+      doc.text(model.signatoryPrintedName, marginLeft + 122, sigRowY + 12);
+    } else if (bp.signatureLayout === 'left_block' || bp.signatureLayout === 'right_block') {
+      const isRight = bp.signatureLayout === 'right_block';
+      const anchorX = isRight ? pageWidth - marginRight : marginLeft;
+      const alignOpt = isRight ? ('right' as const) : ('left' as const);
+      doc.setFont(pdfFont, 'normal');
+      doc.setFontSize(8.5);
+      doc.setTextColor(...bodyRgb);
+      doc.text(model.faitALine, anchorX, sigRowY + 2, { align: alignOpt });
+      doc.setFont(pdfFont, 'bold');
+      doc.setTextColor(15, 23, 42);
+      doc.text(model.signatoryHeading, anchorX, sigRowY + 6.5, { align: alignOpt });
+      const imgStartX = isRight ? pageWidth - marginRight - 54 : marginLeft;
+      if (actorAssets.signature.url) {
+        try {
+          const sCfg = actorAssets.signature.cfg || assetsConfig.signature;
+          const rendered = await renderAssetWithSettingsForPdf(actorAssets.signature.url, sCfg);
+          doc.addImage(rendered.dataUrl, 'PNG', imgStartX, sigRowY + 9, 30, 14);
+        } catch {}
+      }
+      if (actorAssets.cachet.url) {
+        try {
+          const cCfg = actorAssets.cachet.cfg || assetsConfig.cachet;
+          const rendered = await renderAssetWithSettingsForPdf(actorAssets.cachet.url, cCfg);
+          doc.addImage(rendered.dataUrl, 'PNG', imgStartX + 32, sigRowY + 8, 20, 17);
+        } catch {}
+      }
+      doc.text(model.signatoryPrintedName, anchorX, sigRowY + 26, { align: alignOpt });
+    } else {
+      const sigRightX = pageWidth * (bp.signatureLayout === 'two_col_bipartite' ? 0.52 : 0.56);
+      doc.setFont(pdfFont, 'normal');
+      doc.setFontSize(8.6);
+      doc.setTextColor(...bodyRgb);
+      doc.text(model.faitALine, marginLeft, sigRowY + 2);
+
+      doc.setFont(pdfFont, 'bold');
+      doc.setFontSize(8.6);
+      doc.setTextColor(15, 23, 42);
+      doc.text(model.signatoryHeading, sigRightX, sigRowY + 2);
+      doc.setFont(pdfFont, 'normal');
+      doc.setFontSize(8.2);
+      doc.setTextColor(71, 85, 105);
+      doc.text(model.signatorySubRole, sigRightX, sigRowY + 6.5);
+
+      let sigImgOffsetY = sigRowY + 9;
+      if (actorAssets.signature.url) {
+        try {
+          const sCfg = actorAssets.signature.cfg || assetsConfig.signature;
+          const rendered = await renderAssetWithSettingsForPdf(actorAssets.signature.url, sCfg);
+          doc.addImage(rendered.dataUrl, 'PNG', sigRightX, sigImgOffsetY, 30, 14);
+        } catch {}
+      }
+      if (actorAssets.cachet.url) {
+        try {
+          const cCfg = actorAssets.cachet.cfg || assetsConfig.cachet;
+          const rendered = await renderAssetWithSettingsForPdf(actorAssets.cachet.url, cCfg);
+          doc.addImage(rendered.dataUrl, 'PNG', sigRightX + 32, sigImgOffsetY - 1, 20, 17);
+        } catch {}
+      }
+      sigImgOffsetY += 17;
+
+      doc.setFont(pdfFont, 'normal');
+      doc.setFontSize(8.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text(model.signatoryPrintedName, sigRightX, sigImgOffsetY);
     }
 
-    const totalPages = doc.getNumberOfPages();
-    doc.setFont(pdfFont, 'bold');
-    doc.setFontSize(7.5);
-    doc.setTextColor(71, 85, 105);
-    doc.text(`1/${totalPages}`, pageWidth - marginRight, bottomFooterY + 11, { align: 'right' });
+    // ZONE 7 : PIED DE PAGE FIDÈLE AU BLUEPRINT
+    if (bp.footerLayout !== 'none') {
+      const bottomFooterY = pageHeight - marginBottom - 14;
+      if (bp.hasFooterDivider) {
+        doc.setDrawColor(226, 232, 240);
+        doc.setLineWidth(0.2);
+        doc.line(marginLeft, bottomFooterY - 2, pageWidth - marginRight, bottomFooterY - 2);
+      }
+
+      const totalPages = doc.getNumberOfPages();
+      if (bp.footerLayout === 'qr_legal_page') {
+        try {
+          const qrUrl =
+            actorAssets.qrcode.url ||
+            (await QRCode.toDataURL(`VERIFY:${p.codeIdCandidature}:TAB${tabNumber}:${p.nomComplet}`, {
+              width: 120,
+              margin: 1
+            }));
+          doc.addImage(qrUrl, 'PNG', marginLeft, bottomFooterY, 13, 13);
+        } catch {}
+
+        let legalX = marginLeft + 17;
+        if (actorAssets.barcode.url) {
+          try {
+            const bCfg = actorAssets.barcode.cfg || assetsConfig.barcodeEmployeur || assetsConfig.logo;
+            const rendered = await renderAssetWithSettingsForPdf(actorAssets.barcode.url, bCfg);
+            doc.addImage(rendered.dataUrl, 'PNG', legalX, bottomFooterY + 1, 26, 10);
+            legalX += 29;
+          } catch {}
+        }
+
+        doc.setFont(pdfFont, 'normal');
+        doc.setFontSize(6.5);
+        doc.setTextColor(100, 116, 139);
+        const legalMaxW = pageWidth - marginRight - legalX - 14;
+        let ly = bottomFooterY + 3.2;
+        for (const legalLine of model.footerLegalLines) {
+          const wrappedLegal = doc.splitTextToSize(legalLine, legalMaxW)[0] || '';
+          doc.text(wrappedLegal, legalX, ly);
+          ly += 3.5;
+        }
+        doc.setFont(pdfFont, 'bold');
+        doc.setFontSize(7.5);
+        doc.setTextColor(71, 85, 105);
+        doc.text(`1/${totalPages}`, pageWidth - marginRight, bottomFooterY + 11, { align: 'right' });
+      } else if (bp.footerLayout === 'centered_legal') {
+        doc.setFont(pdfFont, 'normal');
+        doc.setFontSize(7);
+        doc.setTextColor(100, 116, 139);
+        doc.text(model.footerLegalLines[0] || '', pageWidth / 2, bottomFooterY + 4, { align: 'center' });
+        doc.text(`1/${totalPages}`, pageWidth - marginRight, bottomFooterY + 9, { align: 'right' });
+      } else {
+        doc.setFont(pdfFont, 'normal');
+        doc.setFontSize(7.5);
+        doc.setTextColor(100, 116, 139);
+        if (bp.footerLayout === 'rule_with_page') {
+          doc.text(`${p.nomEntreprise} · Réf ${p.codeIdCandidature}`, marginLeft, bottomFooterY + 5);
+        }
+        doc.setFont(pdfFont, 'bold');
+        doc.text(`1/${totalPages}`, pageWidth - marginRight, bottomFooterY + 5, { align: 'right' });
+      }
+    }
 
     const safeSlug = p.nomComplet.replace(/[^a-zA-Z0-9]+/g, '_');
     const filename = `Onglet_${tabNumber}_${safeSlug}_${p.codeIdCandidature}.pdf`;
@@ -1604,15 +2134,71 @@ const NO_CELL_BORDERS = {
   right: { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' }
 };
 
+function mapWrapModeToDocxWrapping(mode?: AssetWrapMode) {
+  switch (mode) {
+    case 'square':
+      return TextWrappingType.SQUARE;
+    case 'tight':
+      return TextWrappingType.TIGHT;
+    case 'through':
+      return TextWrappingType.THROUGH;
+    case 'top_bottom':
+      return TextWrappingType.TOP_AND_BOTTOM;
+    case 'behind_text':
+    case 'in_front':
+    default:
+      return TextWrappingType.NONE;
+  }
+}
+
+function buildDocxFloatingFromAsset(cfg?: PdfAssetItemSettings): IFloating | undefined {
+  if (!cfg?.wrapMode || cfg.wrapMode === 'inline') return undefined;
+  return {
+    horizontalPosition: {
+      relative: HorizontalPositionRelativeFrom.MARGIN,
+      offset: Math.round((cfg.offsetX || 0) * 9525)
+    },
+    verticalPosition: {
+      relative: VerticalPositionRelativeFrom.PARAGRAPH,
+      offset: Math.round((cfg.offsetY || 0) * 9525)
+    },
+    wrap: {
+      type: mapWrapModeToDocxWrapping(cfg.wrapMode)
+    },
+    behindDocument: cfg.wrapMode === 'behind_text',
+    allowOverlap: true,
+    zIndex: cfg.zIndex
+  };
+}
+
+function buildConfiguredImageRun(
+  bytes: Uint8Array,
+  defaultW: number,
+  defaultH: number,
+  cfg?: PdfAssetItemSettings
+): ImageRun {
+  const w = cfg?.widthUnit === 'px' && cfg.widthValue ? Math.max(24, Math.min(540, Math.round(cfg.widthValue))) : defaultW;
+  const h = cfg?.heightUnit === 'px' && cfg.heightValue ? Math.max(18, Math.min(480, Math.round(cfg.heightValue))) : defaultH;
+  const floating = buildDocxFloatingFromAsset(cfg);
+  return new ImageRun({
+    data: bytes,
+    type: 'png',
+    transformation: { width: w, height: h },
+    ...(floating ? { floating } : {})
+  });
+}
+
 export async function downloadHousingTabWordDocx(
   tabNumber: HousingTabNumber,
   data: HousingAndNotaryData,
   p: PostulantInfo,
   customText?: string,
   layoutTemplate?: ReferenceLayoutTemplate,
-  uploadedAssets?: UploadedAssetUrlsMap
+  uploadedAssets?: UploadedAssetUrlsMap,
+  assetsConfig?: PdfImportedAssetsConfig
 ): Promise<void> {
   const effectiveLayout = resolveEffectiveLayout(layoutTemplate);
+  const bp = effectiveLayout?.spatialBlueprint;
   const wordFont =
     effectiveLayout?.fontFamily === 'times'
       ? 'Times New Roman'
@@ -1620,9 +2206,17 @@ export async function downloadHousingTabWordDocx(
       ? 'Courier New'
       : 'Arial';
   const headingHex = (effectiveLayout?.primaryColor || '#0B2545').replace('#', '').toUpperCase();
+  const headerBgHex = (effectiveLayout?.headerBgColor || effectiveLayout?.primaryColor || '#0B2545')
+    .replace('#', '')
+    .toUpperCase();
   const tintHex = (effectiveLayout?.highlightTintColor || '#E2F5EE').replace('#', '').toUpperCase();
 
   const actor = getExclusiveActorForTab(tabNumber);
+  const logoCfg = assetsConfig?.[`${actor}_logo` as keyof PdfImportedAssetsConfig] as PdfAssetItemSettings | undefined;
+  const sigCfg = assetsConfig?.[`${actor}_signature` as keyof PdfImportedAssetsConfig] as PdfAssetItemSettings | undefined;
+  const cachetCfg = assetsConfig?.[`${actor}_cachet` as keyof PdfImportedAssetsConfig] as PdfAssetItemSettings | undefined;
+  const qrCfg = assetsConfig?.[`${actor}_qrcode` as keyof PdfImportedAssetsConfig] as PdfAssetItemSettings | undefined;
+
   const logoBytes = uploadedAssets?.[`${actor}_logo` as keyof UploadedAssetUrlsMap]
     ? await dataUrlToPngBytes(uploadedAssets[`${actor}_logo` as keyof UploadedAssetUrlsMap] || '')
     : null;
@@ -1651,73 +2245,152 @@ export async function downloadHousingTabWordDocx(
     left: convertMillimetersToTwip(effectiveLayout?.marginsMm?.left ?? 18)
   };
 
-  if (effectiveLayout?.layoutArchetype === 'letterhead_split' && !customText?.trim()) {
+  if (effectiveLayout && bp && !customText?.trim()) {
     const model = buildStructuredHousingDocument(tabNumber, data, p);
     const children: (Paragraph | Table)[] = [];
 
-    // 1. Logo en haut
-    children.push(
-      new Paragraph({
-        alignment:
-          effectiveLayout.logoPlacement === 'top_right'
-            ? AlignmentType.RIGHT
-            : effectiveLayout.logoPlacement === 'top_center'
-            ? AlignmentType.CENTER
-            : AlignmentType.LEFT,
-        spacing: { after: 220 },
-        children: logoBytes
-          ? [
-              new ImageRun({
-                data: logoBytes,
-                type: 'png',
-                transformation: { width: 145, height: 48 }
-              })
-            ]
-          : [
-              new TextRun({
-                text: p.nomEntreprise.toUpperCase(),
-                bold: true,
-                size: 28,
-                color: headingHex,
-                font: wordFont
-              })
-            ]
-      })
-    );
-
-    // 2. Tableau 2 colonnes Expéditeur / Destinataire sans bordures
-    children.push(
-      new Table({
-        width: { size: 100, type: WidthType.PERCENTAGE },
-        borders: NO_CELL_BORDERS,
-        rows: [
-          new TableRow({
-            children: [
-              new TableCell({
-                width: { size: 54, type: WidthType.PERCENTAGE },
-                borders: NO_CELL_BORDERS,
-                children: model.senderLines.map(
-                  (line, idx) =>
+    // 1. En-tête fidèle au SpatialBlueprint
+    if (bp.headerLayout === 'filled_banner') {
+      children.push(
+        new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          borders: NO_CELL_BORDERS,
+          rows: [
+            new TableRow({
+              children: [
+                new TableCell({
+                  width: { size: 36, type: WidthType.PERCENTAGE },
+                  borders: NO_CELL_BORDERS,
+                  shading: { type: ShadingType.CLEAR, color: 'auto', fill: headerBgHex },
+                  children: [
                     new Paragraph({
-                      spacing: { after: 30 },
-                      children: [
-                        new TextRun({
-                          text: line,
-                          bold: idx === 0,
-                          size: 18,
-                          font: wordFont,
-                          color: '334155'
-                        })
-                      ]
+                      spacing: { before: 120, after: 120 },
+                      children: logoBytes
+                        ? [buildConfiguredImageRun(logoBytes, 125, 42, logoCfg)]
+                        : [new TextRun({ text: `  ${p.nomEntreprise.toUpperCase()}`, bold: true, size: 22, color: 'FFFFFF', font: wordFont })]
                     })
-                )
-              }),
-              new TableCell({
-                width: { size: 46, type: WidthType.PERCENTAGE },
-                borders: NO_CELL_BORDERS,
-                children: [
-                  new Paragraph({ spacing: { before: 120 }, children: [] }),
-                  ...model.recipientLines.map(
+                  ]
+                }),
+                new TableCell({
+                  width: { size: 64, type: WidthType.PERCENTAGE },
+                  borders: NO_CELL_BORDERS,
+                  shading: { type: ShadingType.CLEAR, color: 'auto', fill: headerBgHex },
+                  children: [
+                    new Paragraph({
+                      alignment: AlignmentType.RIGHT,
+                      spacing: { before: 120, after: 40 },
+                      children: [new TextRun({ text: `${model.superLabel}  `, bold: true, size: 19, color: 'FFFFFF', font: wordFont })]
+                    }),
+                    new Paragraph({
+                      alignment: AlignmentType.RIGHT,
+                      spacing: { after: 120 },
+                      children: [new TextRun({ text: `Dossier : ${p.codeIdCandidature}  `, size: 16, color: 'E2E8F0', font: wordFont })]
+                    })
+                  ]
+                })
+              ]
+            })
+          ]
+        }),
+        new Paragraph({ spacing: { after: 160 }, children: [] })
+      );
+    } else if (bp.headerLayout === 'split_lr') {
+      children.push(
+        new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          borders: bp.headerHasDivider
+            ? { ...NO_CELL_BORDERS, bottom: { style: BorderStyle.SINGLE, size: 8, color: headingHex } }
+            : NO_CELL_BORDERS,
+          rows: [
+            new TableRow({
+              children: [
+                new TableCell({
+                  width: { size: 50, type: WidthType.PERCENTAGE },
+                  borders: NO_CELL_BORDERS,
+                  children: [
+                    new Paragraph({
+                      spacing: { after: 100 },
+                      children: logoBytes
+                        ? [buildConfiguredImageRun(logoBytes, 135, 44, logoCfg)]
+                        : [new TextRun({ text: p.nomEntreprise.toUpperCase(), bold: true, size: 26, color: headingHex, font: wordFont })]
+                    })
+                  ]
+                }),
+                new TableCell({
+                  width: { size: 50, type: WidthType.PERCENTAGE },
+                  borders: NO_CELL_BORDERS,
+                  children: [
+                    new Paragraph({
+                      alignment: AlignmentType.RIGHT,
+                      children: [new TextRun({ text: model.superLabel, bold: true, size: 18, color: headingHex, font: wordFont })]
+                    }),
+                    new Paragraph({
+                      alignment: AlignmentType.RIGHT,
+                      spacing: { after: 100 },
+                      children: [new TextRun({ text: `Réf. ${p.codeIdCandidature}`, size: 16, color: '475569', font: wordFont })]
+                    })
+                  ]
+                })
+              ]
+            })
+          ]
+        }),
+        new Paragraph({ spacing: { after: 140 }, children: [] })
+      );
+    } else {
+      children.push(
+        new Paragraph({
+          alignment:
+            bp.headerLayout === 'centered_stack' || effectiveLayout.logoPlacement === 'top_center'
+              ? AlignmentType.CENTER
+              : effectiveLayout.logoPlacement === 'top_right'
+              ? AlignmentType.RIGHT
+              : AlignmentType.LEFT,
+          border:
+            bp.headerLayout === 'top_accent_bar'
+              ? { top: { style: BorderStyle.SINGLE, size: 24, color: headingHex } }
+              : bp.headerHasDivider
+              ? { bottom: { style: BorderStyle.SINGLE, size: 6, color: headingHex } }
+              : undefined,
+          spacing: { after: 200 },
+          children: logoBytes
+            ? [buildConfiguredImageRun(logoBytes, 145, 48, logoCfg)]
+            : [
+                new TextRun({
+                  text: p.nomEntreprise.toUpperCase(),
+                  bold: true,
+                  size: 28,
+                  color: headingHex,
+                  font: wordFont
+                })
+              ]
+        })
+      );
+    }
+
+    // 2. Métadonnées Expéditeur / Destinataire selon bp.metaLayout
+    if (bp.metaLayout === 'two_col_asymmetric' || bp.metaLayout === 'two_col_equal' || bp.metaLayout === 'boxed_grid') {
+      const boxBorders =
+        bp.metaLayout === 'boxed_grid'
+          ? {
+              top: { style: BorderStyle.SINGLE, size: 4, color: 'CBD5E1' },
+              bottom: { style: BorderStyle.SINGLE, size: 4, color: 'CBD5E1' },
+              left: { style: BorderStyle.SINGLE, size: 4, color: 'CBD5E1' },
+              right: { style: BorderStyle.SINGLE, size: 4, color: 'CBD5E1' }
+            }
+          : NO_CELL_BORDERS;
+      children.push(
+        new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          borders: boxBorders,
+          rows: [
+            new TableRow({
+              children: [
+                new TableCell({
+                  width: { size: 52, type: WidthType.PERCENTAGE },
+                  borders: boxBorders,
+                  shading: bp.metaLayout === 'boxed_grid' ? { type: ShadingType.CLEAR, color: 'auto', fill: 'F8FAFC' } : undefined,
+                  children: model.senderLines.map(
                     (line, idx) =>
                       new Paragraph({
                         spacing: { after: 30 },
@@ -1727,112 +2400,176 @@ export async function downloadHousingTabWordDocx(
                             bold: idx === 0,
                             size: 18,
                             font: wordFont,
-                            color: '0F172A'
+                            color: '334155'
                           })
                         ]
                       })
                   )
-                ]
-              })
-            ]
-          })
-        ]
-      })
-    );
+                }),
+                new TableCell({
+                  width: { size: 48, type: WidthType.PERCENTAGE },
+                  borders: boxBorders,
+                  shading: bp.metaLayout === 'boxed_grid' ? { type: ShadingType.CLEAR, color: 'auto', fill: 'F8FAFC' } : undefined,
+                  children: [
+                    ...(bp.metaLayout === 'two_col_asymmetric' ? [new Paragraph({ spacing: { before: 120 }, children: [] })] : []),
+                    ...model.recipientLines.map(
+                      (line, idx) =>
+                        new Paragraph({
+                          spacing: { after: 30 },
+                          children: [
+                            new TextRun({
+                              text: line,
+                              bold: idx === 0,
+                              size: 18,
+                              font: wordFont,
+                              color: '0F172A'
+                            })
+                          ]
+                        })
+                    )
+                  ]
+                })
+              ]
+            })
+          ]
+        })
+      );
+    } else if (bp.metaLayout === 'single_col_left') {
+      children.push(
+        new Paragraph({
+          spacing: { after: 120 },
+          children: [
+            new TextRun({
+              text: `${model.senderLines[0]} — Pour : ${model.recipientLines[0]}`,
+              bold: true,
+              size: 18,
+              font: wordFont,
+              color: '0F172A'
+            })
+          ]
+        })
+      );
+    }
 
-    // 3. Pastille "Vos références" teintée + paires clé : valeur
-    children.push(
-      new Paragraph({ spacing: { before: 140, after: 60 }, children: [] }),
-      new Table({
-        width: { size: 32, type: WidthType.PERCENTAGE },
-        borders: NO_CELL_BORDERS,
-        rows: [
-          new TableRow({
-            children: [
-              new TableCell({
-                borders: NO_CELL_BORDERS,
-                shading: { type: ShadingType.CLEAR, color: 'auto', fill: tintHex },
-                children: [
-                  new Paragraph({
-                    spacing: { before: 40, after: 40 },
-                    children: [
-                      new TextRun({
-                        text: `  ${model.refPillLabel}`,
-                        bold: true,
-                        size: 18,
-                        font: wordFont,
-                        color: headingHex
-                      })
-                    ]
-                  })
-                ]
-              })
-            ]
-          })
-        ]
-      }),
-      new Paragraph({ spacing: { after: 40 }, children: [] }),
-      new Table({
-        width: { size: 78, type: WidthType.PERCENTAGE },
-        borders: NO_CELL_BORDERS,
-        rows: model.refPairs.map(
-          (pair) =>
+    // 3. Pastille "Vos références" uniquement si bp.hasRefPill
+    if (bp.hasRefPill) {
+      children.push(
+        new Paragraph({ spacing: { before: 120, after: 60 }, children: [] }),
+        new Table({
+          width: { size: 32, type: WidthType.PERCENTAGE },
+          borders: NO_CELL_BORDERS,
+          rows: [
             new TableRow({
               children: [
                 new TableCell({
-                  width: { size: 36, type: WidthType.PERCENTAGE },
                   borders: NO_CELL_BORDERS,
+                  shading: { type: ShadingType.CLEAR, color: 'auto', fill: tintHex },
                   children: [
                     new Paragraph({
-                      spacing: { after: 20 },
-                      children: [new TextRun({ text: pair.label, size: 17, font: wordFont, color: '475569' })]
-                    })
-                  ]
-                }),
-                new TableCell({
-                  width: { size: 64, type: WidthType.PERCENTAGE },
-                  borders: NO_CELL_BORDERS,
-                  children: [
-                    new Paragraph({
-                      spacing: { after: 20 },
-                      children: [new TextRun({ text: `: ${pair.value}`, bold: true, size: 17, font: wordFont, color: '0F172A' })]
+                      spacing: { before: 40, after: 40 },
+                      children: [
+                        new TextRun({
+                          text: `  ${model.refPillLabel}`,
+                          bold: true,
+                          size: 18,
+                          font: wordFont,
+                          color: headingHex
+                        })
+                      ]
                     })
                   ]
                 })
               ]
             })
-        )
-      })
-    );
+          ]
+        }),
+        new Paragraph({ spacing: { after: 40 }, children: [] }),
+        new Table({
+          width: { size: 78, type: WidthType.PERCENTAGE },
+          borders: NO_CELL_BORDERS,
+          rows: model.refPairs.map(
+            (pair) =>
+              new TableRow({
+                children: [
+                  new TableCell({
+                    width: { size: 36, type: WidthType.PERCENTAGE },
+                    borders: NO_CELL_BORDERS,
+                    children: [
+                      new Paragraph({
+                        spacing: { after: 20 },
+                        children: [new TextRun({ text: pair.label, size: 17, font: wordFont, color: '475569' })]
+                      })
+                    ]
+                  }),
+                  new TableCell({
+                    width: { size: 64, type: WidthType.PERCENTAGE },
+                    borders: NO_CELL_BORDERS,
+                    children: [
+                      new Paragraph({
+                        spacing: { after: 20 },
+                        children: [new TextRun({ text: `: ${pair.value}`, bold: true, size: 17, font: wordFont, color: '0F172A' })]
+                      })
+                    ]
+                  })
+                ]
+              })
+          )
+        })
+      );
+    }
 
-    // 4. Titre centré + Sous-titre centré
+    // 4. Titre principal aligné / encadré / souligné selon bp
+    const docTitle = bp.titleUppercase ? model.mainTitle.toUpperCase() : model.mainTitle;
+    const docxTitleAlign =
+      bp.titleAlign === 'center'
+        ? AlignmentType.CENTER
+        : bp.titleAlign === 'right'
+        ? AlignmentType.RIGHT
+        : AlignmentType.LEFT;
+
     children.push(
       new Paragraph({
-        alignment: AlignmentType.CENTER,
-        spacing: { before: 260, after: 60 },
+        alignment: docxTitleAlign,
+        border: bp.titleHasBox
+          ? {
+              top: { style: BorderStyle.SINGLE, size: 8, color: headingHex },
+              bottom: { style: BorderStyle.SINGLE, size: 8, color: headingHex },
+              left: { style: BorderStyle.SINGLE, size: 8, color: headingHex },
+              right: { style: BorderStyle.SINGLE, size: 8, color: headingHex }
+            }
+          : bp.titleHasUnderline
+          ? { bottom: { style: BorderStyle.SINGLE, size: 12, color: headingHex } }
+          : undefined,
+        shading: bp.titleHasBox ? { type: ShadingType.CLEAR, color: 'auto', fill: tintHex } : undefined,
+        spacing: { before: 220, after: 60 },
         children: [
           new TextRun({
-            text: model.mainTitle,
+            text: docTitle,
             bold: true,
             size: 28,
             font: wordFont,
             color: '0F172A'
           })
         ]
-      }),
-      new Paragraph({
-        alignment: AlignmentType.CENTER,
-        spacing: { after: 220 },
-        children: [
-          new TextRun({
-            text: model.mainSubtitle,
-            size: 20,
-            font: wordFont,
-            color: '475569'
-          })
-        ]
       })
     );
+
+    if (bp.titleHasSubtitle) {
+      children.push(
+        new Paragraph({
+          alignment: docxTitleAlign,
+          spacing: { after: 200 },
+          children: [
+            new TextRun({
+              text: model.mainSubtitle,
+              size: 20,
+              font: wordFont,
+              color: '475569'
+            })
+          ]
+        })
+      );
+    }
 
     // 5. Corps propre
     for (const intro of model.introLines) {
@@ -1846,15 +2583,42 @@ export async function downloadHousingTabWordDocx(
     children.push(new Paragraph({ spacing: { after: 60 }, children: [] }));
 
     for (const para of model.bodyParagraphs) {
+      const isSection = bp.bodyLayout === 'numbered_sections' && /^[1-9]\.\s/.test(para);
       children.push(
         new Paragraph({
           spacing: { after: 110 },
-          children: [new TextRun({ text: para, size: 18, font: wordFont, color: '1E293B' })]
+          border:
+            bp.bodyLayout === 'cards'
+              ? {
+                  left: { style: BorderStyle.SINGLE, size: 18, color: headingHex },
+                  top: { style: BorderStyle.SINGLE, size: 2, color: 'E2E8F0' },
+                  bottom: { style: BorderStyle.SINGLE, size: 2, color: 'E2E8F0' },
+                  right: { style: BorderStyle.SINGLE, size: 2, color: 'E2E8F0' }
+                }
+              : bp.hasSectionDividers
+              ? { bottom: { style: BorderStyle.DASHED, size: 2, color: 'CBD5E1' } }
+              : undefined,
+          children: [
+            new TextRun({
+              text: para,
+              bold: isSection,
+              size: 18,
+              font: wordFont,
+              color: isSection ? headingHex : '1E293B'
+            })
+          ]
         })
       );
     }
 
     if (model.summaryTable) {
+      const hdrFill =
+        bp.tableHeaderStyle === 'filled_primary'
+          ? headingHex
+          : bp.tableHeaderStyle === 'tinted'
+          ? tintHex
+          : 'FFFFFF';
+      const hdrColor = bp.tableHeaderStyle === 'filled_primary' ? 'FFFFFF' : headingHex;
       children.push(
         new Table({
           width: { size: 100, type: WidthType.PERCENTAGE },
@@ -1863,14 +2627,14 @@ export async function downloadHousingTabWordDocx(
               children: model.summaryTable.headers.map(
                 (h) =>
                   new TableCell({
-                    shading: { type: ShadingType.CLEAR, color: 'auto', fill: tintHex },
+                    shading: { type: ShadingType.CLEAR, color: 'auto', fill: hdrFill },
                     borders: {
                       top: { style: BorderStyle.SINGLE, size: 1, color: 'CBD5E1' },
                       bottom: { style: BorderStyle.SINGLE, size: 1, color: 'CBD5E1' },
                       left: { style: BorderStyle.SINGLE, size: 1, color: 'CBD5E1' },
                       right: { style: BorderStyle.SINGLE, size: 1, color: 'CBD5E1' }
                     },
-                    children: [new Paragraph({ children: [new TextRun({ text: h, bold: true, size: 16, font: wordFont, color: headingHex })] })]
+                    children: [new Paragraph({ children: [new TextRun({ text: h, bold: true, size: 16, font: wordFont, color: hdrColor })] })]
                   })
               )
             }),
@@ -1908,7 +2672,7 @@ export async function downloadHousingTabWordDocx(
       );
     }
 
-    // 6. Signature 2 colonnes
+    // 6. Signature selon bp.signatureLayout + wrapMode sur Signature & Cachet
     const sigChildren: Paragraph[] = [
       new Paragraph({
         spacing: { after: 30 },
@@ -1922,11 +2686,11 @@ export async function downloadHousingTabWordDocx(
 
     const sigRuns: (ImageRun | TextRun)[] = [];
     if (sigBytes) {
-      sigRuns.push(new ImageRun({ data: sigBytes, type: 'png', transformation: { width: 95, height: 40 } }));
+      sigRuns.push(buildConfiguredImageRun(sigBytes, 95, 40, sigCfg));
       sigRuns.push(new TextRun({ text: '   ' }));
     }
     if (cachetBytes) {
-      sigRuns.push(new ImageRun({ data: cachetBytes, type: 'png', transformation: { width: 64, height: 55 } }));
+      sigRuns.push(buildConfiguredImageRun(cachetBytes, 64, 55, cachetCfg));
     }
     if (sigRuns.length > 0) {
       sigChildren.push(new Paragraph({ spacing: { after: 60 }, children: sigRuns }));
@@ -1938,80 +2702,117 @@ export async function downloadHousingTabWordDocx(
       })
     );
 
-    children.push(
-      new Paragraph({ spacing: { before: 180 }, children: [] }),
-      new Table({
-        width: { size: 100, type: WidthType.PERCENTAGE },
-        borders: NO_CELL_BORDERS,
-        rows: [
-          new TableRow({
-            children: [
-              new TableCell({
-                width: { size: 52, type: WidthType.PERCENTAGE },
-                borders: NO_CELL_BORDERS,
-                children: [
-                  new Paragraph({
-                    children: [new TextRun({ text: model.faitALine, size: 18, font: wordFont, color: '1E293B' })]
-                  })
-                ]
-              }),
-              new TableCell({
-                width: { size: 48, type: WidthType.PERCENTAGE },
-                borders: NO_CELL_BORDERS,
-                children: sigChildren
-              })
-            ]
-          })
-        ]
-      })
-    );
-
-    // 7. Pied de page légal + QR code
-    children.push(
-      new Paragraph({ spacing: { before: 220 }, children: [] }),
-      new Table({
-        width: { size: 100, type: WidthType.PERCENTAGE },
-        borders: NO_CELL_BORDERS,
-        rows: [
-          new TableRow({
-            children: [
-              new TableCell({
-                width: { size: 14, type: WidthType.PERCENTAGE },
-                borders: NO_CELL_BORDERS,
-                children: [
-                  new Paragraph({
-                    children: qrBytes
-                      ? [new ImageRun({ data: qrBytes, type: 'png', transformation: { width: 46, height: 46 } })]
-                      : []
-                  })
-                ]
-              }),
-              new TableCell({
-                width: { size: 78, type: WidthType.PERCENTAGE },
-                borders: NO_CELL_BORDERS,
-                children: model.footerLegalLines.map(
-                  (line) =>
+    if (bp.signatureLayout === 'left_block' || bp.signatureLayout === 'right_block') {
+      children.push(
+        new Paragraph({
+          alignment: bp.signatureLayout === 'right_block' ? AlignmentType.RIGHT : AlignmentType.LEFT,
+          spacing: { before: 180, after: 80 },
+          children: [new TextRun({ text: model.faitALine, size: 18, font: wordFont, color: '1E293B' })]
+        }),
+        ...sigChildren
+      );
+    } else {
+      children.push(
+        new Paragraph({ spacing: { before: 180 }, children: [] }),
+        new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          borders: bp.signatureHasTopBorder
+            ? { ...NO_CELL_BORDERS, top: { style: BorderStyle.SINGLE, size: 4, color: 'CBD5E1' } }
+            : NO_CELL_BORDERS,
+          rows: [
+            new TableRow({
+              children: [
+                new TableCell({
+                  width: { size: 52, type: WidthType.PERCENTAGE },
+                  borders: NO_CELL_BORDERS,
+                  children: [
                     new Paragraph({
-                      spacing: { after: 20 },
-                      children: [new TextRun({ text: line, size: 14, font: wordFont, color: '64748B' })]
+                      children: [new TextRun({ text: model.faitALine, size: 18, font: wordFont, color: '1E293B' })]
                     })
-                )
-              }),
-              new TableCell({
-                width: { size: 8, type: WidthType.PERCENTAGE },
-                borders: NO_CELL_BORDERS,
+                  ]
+                }),
+                new TableCell({
+                  width: { size: 48, type: WidthType.PERCENTAGE },
+                  borders: NO_CELL_BORDERS,
+                  children: sigChildren
+                })
+              ]
+            })
+          ]
+        })
+      );
+    }
+
+    // 7. Pied de page selon bp.footerLayout
+    if (bp.footerLayout !== 'none') {
+      children.push(new Paragraph({ spacing: { before: 200 }, children: [] }));
+      if (bp.footerLayout === 'qr_legal_page') {
+        children.push(
+          new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            borders: bp.hasFooterDivider
+              ? { ...NO_CELL_BORDERS, top: { style: BorderStyle.SINGLE, size: 4, color: 'E2E8F0' } }
+              : NO_CELL_BORDERS,
+            rows: [
+              new TableRow({
                 children: [
-                  new Paragraph({
-                    alignment: AlignmentType.RIGHT,
-                    children: [new TextRun({ text: '1/1', bold: true, size: 16, font: wordFont, color: '475569' })]
+                  new TableCell({
+                    width: { size: 14, type: WidthType.PERCENTAGE },
+                    borders: NO_CELL_BORDERS,
+                    children: [
+                      new Paragraph({
+                        children: qrBytes
+                          ? [buildConfiguredImageRun(qrBytes, 46, 46, qrCfg)]
+                          : []
+                      })
+                    ]
+                  }),
+                  new TableCell({
+                    width: { size: 78, type: WidthType.PERCENTAGE },
+                    borders: NO_CELL_BORDERS,
+                    children: model.footerLegalLines.map(
+                      (line) =>
+                        new Paragraph({
+                          spacing: { after: 20 },
+                          children: [new TextRun({ text: line, size: 14, font: wordFont, color: '64748B' })]
+                        })
+                    )
+                  }),
+                  new TableCell({
+                    width: { size: 8, type: WidthType.PERCENTAGE },
+                    borders: NO_CELL_BORDERS,
+                    children: [
+                      new Paragraph({
+                        alignment: AlignmentType.RIGHT,
+                        children: [new TextRun({ text: '1/1', bold: true, size: 16, font: wordFont, color: '475569' })]
+                      })
+                    ]
                   })
                 ]
               })
             ]
           })
-        ]
-      })
-    );
+        );
+      } else {
+        children.push(
+          new Paragraph({
+            alignment: bp.footerLayout === 'centered_legal' ? AlignmentType.CENTER : AlignmentType.RIGHT,
+            border: bp.hasFooterDivider ? { top: { style: BorderStyle.SINGLE, size: 4, color: 'E2E8F0' } } : undefined,
+            children: [
+              new TextRun({
+                text:
+                  bp.footerLayout === 'centered_legal'
+                    ? `${model.footerLegalLines[0] || ''}  —  1/1`
+                    : `${p.nomEntreprise} · Réf ${p.codeIdCandidature}  —  1/1`,
+                size: 15,
+                font: wordFont,
+                color: '64748B'
+              })
+            ]
+          })
+        );
+      }
+    }
 
     const wordDoc = new DocxDocument({
       sections: [

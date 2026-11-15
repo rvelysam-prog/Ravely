@@ -25,7 +25,8 @@ import { HousingAndNotaryData, HousingTabNumber } from '../../services/housingDo
 import { FichesDocEsData } from '../../services/fichesEtDocEsService';
 import {
   ImportedAssetKey,
-  UploadedAssetUrlsMap
+  UploadedAssetUrlsMap,
+  PdfImportedAssetsConfig
 } from '../../services/departmentsAndEmailService';
 import { readAndOptimizeImageFile } from '../../services/imageTransparencyService';
 import { generateSmallStackedBarcodeCanvasDataUrl } from '../../services/contractGenerationService';
@@ -37,13 +38,17 @@ import {
   LayoutTargetDocKey,
   LayoutTemplatesMap,
   ReferenceLayoutTemplate,
+  SpatialBlueprint,
   analyzeReferenceDocumentFile,
+  buildBlueprintFromLegacyTemplate,
   getActorLabelForDocKey,
+  getActorScopeForDocKey,
   getMissingVisualAssetsForTemplate,
   resolveEffectiveLayout,
   saveLayoutTemplateToFirestore,
   deleteLayoutTemplateFromFirestore
 } from '../../services/layoutImitationService';
+import { PanneauReglagesFichiersImportes } from '../common/PanneauReglagesFichiersImportes';
 
 interface HousingAndDocEsStepWizardProps {
   activeDocKey: LayoutTargetDocKey;
@@ -54,6 +59,9 @@ interface HousingAndDocEsStepWizardProps {
   onChangeDocEsData: (updated: FichesDocEsData) => void;
   uploadedAssets: UploadedAssetUrlsMap;
   onUploadAsset: (key: ImportedAssetKey, dataUrl: string) => void;
+  assetsConfig?: PdfImportedAssetsConfig;
+  onChangeAssetsConfig?: (newConfig: PdfImportedAssetsConfig) => void;
+  onOpenStampGenerator?: (targetCachetKey: ImportedAssetKey) => void;
   layoutTemplates: LayoutTemplatesMap;
   onUpdateLayoutTemplate: (docKey: LayoutTargetDocKey, template: ReferenceLayoutTemplate | undefined) => void;
   verificationCodeRef: string;
@@ -151,6 +159,9 @@ export const HousingAndDocEsStepWizard: React.FC<HousingAndDocEsStepWizardProps>
   onChangeDocEsData,
   uploadedAssets,
   onUploadAsset,
+  assetsConfig,
+  onChangeAssetsConfig,
+  onOpenStampGenerator,
   layoutTemplates,
   onUpdateLayoutTemplate,
   verificationCodeRef,
@@ -220,6 +231,27 @@ export const HousingAndDocEsStepWizard: React.FC<HousingAndDocEsStepWizardProps>
     };
     onUpdateLayoutTemplate(activeDocKey, updated);
     await saveLayoutTemplateToFirestore(activeDocKey, updated);
+  };
+
+  const handleUpdateBlueprintField = async (
+    patch: Partial<SpatialBlueprint>
+  ) => {
+    if (!activeTemplate) return;
+    const baseBp =
+      resolveEffectiveLayout(activeTemplate)?.spatialBlueprint ||
+      buildBlueprintFromLegacyTemplate(activeTemplate);
+    const updatedBp: SpatialBlueprint = { ...baseBp, ...patch };
+    await handleUpdateTemplateField({
+      spatialBlueprint: updatedBp,
+      hasTwoColumnMeta: updatedBp.metaLayout.startsWith('two_col'),
+      hasRefHighlightBox: updatedBp.hasRefPill,
+      hasCenteredTitleBlock: updatedBp.titleAlign === 'center',
+      signatureZoneStyle:
+        updatedBp.signatureLayout === 'three_col_footer'
+          ? 'three_col_footer'
+          : 'two_col_fait_a_right_sig',
+      hasBottomLegalFooter: updatedBp.footerLayout !== 'none'
+    });
   };
 
   const handleToggleDetectedElement = async (el: DetectedRefElement) => {
@@ -714,6 +746,165 @@ export const HousingAndDocEsStepWizard: React.FC<HousingAndDocEsStepWizardProps>
                       </div>
                     </div>
 
+                    {/* Réglages détaillés du SpatialBlueprint mesuré (propre au fichier importé) */}
+                    {(() => {
+                      const bp =
+                        resolveEffectiveLayout(activeTemplate)?.spatialBlueprint ||
+                        buildBlueprintFromLegacyTemplate(activeTemplate);
+                      return (
+                        <div className="pt-3 border-t border-slate-100 space-y-3">
+                          <div className="text-[11px] font-bold uppercase tracking-wide text-[#0066B3]">
+                            Empreinte Spatiale exacte du document importé
+                          </div>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 text-xs">
+                            <div>
+                              <label className="block font-semibold text-slate-600 mb-1">Zone En-tête</label>
+                              <select
+                                value={bp.headerLayout}
+                                onChange={(e) =>
+                                  handleUpdateBlueprintField({
+                                    headerLayout: e.target.value as SpatialBlueprint['headerLayout']
+                                  })
+                                }
+                                className="w-full px-2 py-1.5 border border-slate-300 rounded-lg bg-white text-[11px] font-semibold"
+                              >
+                                <option value="filled_banner">Bandeau plein coloré</option>
+                                <option value="top_accent_bar">Barre d’accent en haut</option>
+                                <option value="split_lr">Séparé Gauche / Droite</option>
+                                <option value="left_clean">Épuré à gauche</option>
+                                <option value="centered_stack">Empilé centré</option>
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="block font-semibold text-slate-600 mb-1">Métadonnées</label>
+                              <select
+                                value={bp.metaLayout}
+                                onChange={(e) =>
+                                  handleUpdateBlueprintField({
+                                    metaLayout: e.target.value as SpatialBlueprint['metaLayout']
+                                  })
+                                }
+                                className="w-full px-2 py-1.5 border border-slate-300 rounded-lg bg-white text-[11px] font-semibold"
+                              >
+                                <option value="two_col_asymmetric">2 Col. Asymétriques</option>
+                                <option value="two_col_equal">2 Col. Équilibrées</option>
+                                <option value="single_col_left">1 Colonne Gauche</option>
+                                <option value="boxed_grid">Grille Encadrée</option>
+                                <option value="none">Aucune métadonnée</option>
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="block font-semibold text-slate-600 mb-1">Alignement Titre</label>
+                              <select
+                                value={bp.titleAlign}
+                                onChange={(e) =>
+                                  handleUpdateBlueprintField({
+                                    titleAlign: e.target.value as SpatialBlueprint['titleAlign']
+                                  })
+                                }
+                                className="w-full px-2 py-1.5 border border-slate-300 rounded-lg bg-white text-[11px] font-semibold"
+                              >
+                                <option value="left">Gauche</option>
+                                <option value="center">Centré</option>
+                                <option value="right">Droite</option>
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="block font-semibold text-slate-600 mb-1">Corps / Articles</label>
+                              <select
+                                value={bp.bodyLayout}
+                                onChange={(e) =>
+                                  handleUpdateBlueprintField({
+                                    bodyLayout: e.target.value as SpatialBlueprint['bodyLayout']
+                                  })
+                                }
+                                className="w-full px-2 py-1.5 border border-slate-300 rounded-lg bg-white text-[11px] font-semibold"
+                              >
+                                <option value="prose_paragraphs">Paragraphes fluides</option>
+                                <option value="numbered_sections">Sections numérotées</option>
+                                <option value="structured_table">Tableau structuré</option>
+                                <option value="cards">Blocs encadrés</option>
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="block font-semibold text-slate-600 mb-1">Zone Signatures</label>
+                              <select
+                                value={bp.signatureLayout}
+                                onChange={(e) =>
+                                  handleUpdateBlueprintField({
+                                    signatureLayout: e.target.value as SpatialBlueprint['signatureLayout']
+                                  })
+                                }
+                                className="w-full px-2 py-1.5 border border-slate-300 rounded-lg bg-white text-[11px] font-semibold"
+                              >
+                                <option value="two_col_fait_a_right_sig">Fait à + Délégation droite</option>
+                                <option value="two_col_bipartite">Bipartite (2 parties)</option>
+                                <option value="three_col_footer">Grille 3 colonnes</option>
+                                <option value="right_block">Bloc unique à droite</option>
+                                <option value="left_block">Bloc unique à gauche</option>
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="block font-semibold text-slate-600 mb-1">Pied de page</label>
+                              <select
+                                value={bp.footerLayout}
+                                onChange={(e) =>
+                                  handleUpdateBlueprintField({
+                                    footerLayout: e.target.value as SpatialBlueprint['footerLayout']
+                                  })
+                                }
+                                className="w-full px-2 py-1.5 border border-slate-300 rounded-lg bg-white text-[11px] font-semibold"
+                              >
+                                <option value="qr_legal_page">QR + Mentions + Page</option>
+                                <option value="centered_legal">Mentions centrées</option>
+                                <option value="rule_with_page">Filet + N° de page</option>
+                                <option value="minimal_page">N° de page minimal</option>
+                                <option value="none">Aucun pied de page</option>
+                              </select>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2 text-[11px]">
+                            {(
+                              [
+                                { key: 'hasRefPill', label: 'Pastille Références' },
+                                { key: 'titleHasBox', label: 'Titre encadré' },
+                                { key: 'titleHasUnderline', label: 'Titre souligné' },
+                                { key: 'titleUppercase', label: 'Titre en MAJUSCULES' },
+                                { key: 'hasLeftAccentStripe', label: 'Bande verticale gauche' },
+                                { key: 'hasSectionDividers', label: 'Séparateurs de sections' },
+                                { key: 'hasTopRightMarker', label: 'Repère haut-droit' }
+                              ] as const
+                            ).map((toggle) => (
+                              <label
+                                key={toggle.key}
+                                className={`px-2 py-1 rounded-md border inline-flex items-center gap-1.5 cursor-pointer font-semibold ${
+                                  bp[toggle.key]
+                                    ? 'bg-blue-50 border-[#0066B3] text-[#0B2545]'
+                                    : 'bg-slate-50 border-slate-200 text-slate-500'
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(bp[toggle.key])}
+                                  onChange={(e) =>
+                                    handleUpdateBlueprintField({ [toggle.key]: e.target.checked })
+                                  }
+                                  className="rounded text-[#0066B3]"
+                                />
+                                <span>{toggle.label}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
                     {/* Palette extraite */}
                     <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center gap-4 text-xs">
                       <span className="font-bold text-slate-700 flex items-center gap-1.5">
@@ -886,6 +1077,19 @@ export const HousingAndDocEsStepWizard: React.FC<HousingAndDocEsStepWizardProps>
                 </p>
               </div>
             )}
+
+            {/* LIAISON DIRECTE : PANNEAU VISUELS & TAMPONS DE CET ONGLET */}
+            <PanneauReglagesFichiersImportes
+              lockedActorScope={getActorScopeForDocKey(activeDocKey)}
+              assetsConfig={assetsConfig}
+              onChangeConfig={onChangeAssetsConfig}
+              uploadedAssetUrls={uploadedAssets}
+              onUploadAsset={(key, dataUrl) => onUploadAsset(key, dataUrl)}
+              verificationCodeRef={verificationCodeRef}
+              onOpenStampGenerator={onOpenStampGenerator}
+              compact={true}
+              title={`Visuels & Tampons liés — ${activeDef.tabLabel}`}
+            />
           </div>
         )}
 

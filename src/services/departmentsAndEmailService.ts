@@ -1447,6 +1447,14 @@ const LS_LOCAL_MAIL_LOGS_KEY = 'atlantic_local_mail_logs_cache_v1';
 export type AssetUnit = 'px' | '%';
 export type HorizontalAlign = 'left' | 'center' | 'right';
 export type VerticalAlign = 'top' | 'middle' | 'bottom';
+export type AssetWrapMode =
+  | 'inline'
+  | 'square'
+  | 'tight'
+  | 'through'
+  | 'top_bottom'
+  | 'behind_text'
+  | 'in_front';
 export type ActorScopeId =
   | 'employeur'
   | 'prestataire'
@@ -1515,6 +1523,7 @@ export interface PdfAssetItemSettings {
   alignY: VerticalAlign;
   rotation: number;
   zIndex: number;
+  wrapMode?: AssetWrapMode;
   dataUrl?: string;
 }
 
@@ -1774,7 +1783,17 @@ function sanitizeAssetItem(
     zIndex:
       typeof item.zIndex === 'number' && !Number.isNaN(item.zIndex)
         ? Math.max(-10, Math.min(50, item.zIndex))
-        : fallback.zIndex
+        : fallback.zIndex,
+    wrapMode:
+      item.wrapMode === 'inline' ||
+      item.wrapMode === 'square' ||
+      item.wrapMode === 'tight' ||
+      item.wrapMode === 'through' ||
+      item.wrapMode === 'top_bottom' ||
+      item.wrapMode === 'behind_text' ||
+      item.wrapMode === 'in_front'
+        ? item.wrapMode
+        : fallback.wrapMode || 'inline'
   };
 }
 
