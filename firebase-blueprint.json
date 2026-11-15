@@ -373,6 +373,27 @@
         }
       },
       "required": ["id", "title"]
+    },
+    "DocumentLayoutTemplate": {
+      "title": "DocumentLayoutTemplate",
+      "description": "Modèle de mise en page importé (PDF/Image) analysé pour imitation visuelle des documents",
+      "type": "object",
+      "properties": {
+        "docKey": {
+          "type": "string",
+          "enum": ["t9", "t10", "t11", "t12", "doc_es"],
+          "maxLength": 32
+        },
+        "sourceFileName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "updatedAt": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": ["docKey", "sourceFileName"]
     }
   },
   "firestore": {
@@ -399,6 +420,10 @@
     "/public_documents/{docId}": {
       "schema": "PublicDocument",
       "description": "Collection des documents publics partagés via Document Studio"
+    },
+    "/document_layout_templates/{templateId}": {
+      "schema": "DocumentLayoutTemplate",
+      "description": "Modèles de mise en page importés et réutilisables (Onglets 9-12 et DOC ES)"
     }
   }
 }

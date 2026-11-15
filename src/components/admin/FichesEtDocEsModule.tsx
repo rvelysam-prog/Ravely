@@ -29,12 +29,14 @@ import {
   saveFichesDocEsData
 } from '../../services/fichesEtDocEsService';
 import { downloadWordDocument } from '../../services/cricContractService';
+import { ReferenceLayoutTemplate, resolveEffectiveLayout } from '../../services/layoutImitationService';
 
 interface FichesEtDocEsModuleProps {
   postulant: PostulantInfo;
   docEsData: FichesDocEsData;
   onChangeDocEsData: (updated: FichesDocEsData) => void;
   settings: SiteSettings;
+  layoutTemplate?: ReferenceLayoutTemplate;
   onOpenInWebmail?: (html: string) => void;
   onToast: (msg: string) => void;
 }
@@ -44,6 +46,7 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
   docEsData,
   onChangeDocEsData,
   settings,
+  layoutTemplate,
   onOpenInWebmail,
   onToast
 }) => {
@@ -233,11 +236,22 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
   );
 
   const activeModel = modelsCatalog.find((m) => m.id === selectedModelId) || modelsCatalog[0];
+  const effectiveLayout = resolveEffectiveLayout(layoutTemplate);
+  const isCleanLetterhead = Boolean(
+    effectiveLayout &&
+      (effectiveLayout.layoutArchetype === 'letterhead_split' ||
+        effectiveLayout.borderStyle === 'none' ||
+        effectiveLayout.headerStyle === 'entete_epure')
+  );
   const renderedContent = renderDocEsPlainText(selectedModelId, postulant, docEsData, settings);
+  const cleanPreviewContent = renderedContent.content
+    .replace(/^[=\-_]{4,}\s*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 
   // Téléchargement PDF
   const handleDownloadPdf = () => {
-    const { doc, filename } = generateSingleDocEsPdf(selectedModelId, postulant, docEsData, settings);
+    const { doc, filename } = generateSingleDocEsPdf(selectedModelId, postulant, docEsData, settings, layoutTemplate);
     doc.save(filename);
     onToast(`Document PDF ${activeModel.number} téléchargé avec succès !`);
   };
@@ -245,10 +259,24 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
   // Téléchargement Word (.docx)
   const handleDownloadWord = () => {
     const title = activeModel.title;
+    const primary = effectiveLayout?.primaryColor || '#0B2545';
+    const tint = effectiveLayout?.highlightTintColor || '#D8F3EB';
+    const fontCss =
+      effectiveLayout?.fontFamily === 'times'
+        ? 'Georgia, "Times New Roman", serif'
+        : effectiveLayout?.fontFamily === 'courier'
+        ? '"Courier New", monospace'
+        : 'Calibri, Segoe UI, Arial, sans-serif';
     downloadWordDocument(
       `DOC_ES_${activeModel.number.replace(/\s+/g, '_')}_${postulant.nom.toUpperCase()}`,
       title,
-      `<h1>${title}</h1><h3>${renderedContent.subtitle}</h3><pre style="white-space: pre-wrap; font-family: Segoe UI, Arial, sans-serif; font-size: 11pt; line-height: 1.6;">${renderedContent.content}</pre>`
+      `<div style="font-family: ${fontCss}; color: ${effectiveLayout?.bodyTextColor || '#1e293b'};">
+        <p style="font-weight:bold; color:${primary}; margin-bottom:4px;">${postulant.nomEntreprise}</p>
+        <p style="display:inline-block; background:${tint}; color:${primary}; padding:3px 8px; font-weight:bold; font-size:10pt;">Vos références · ${docEsData.referenceDossier}</p>
+        <h1 style="text-align:${effectiveLayout?.headerAlign === 'left' ? 'left' : 'center'}; color:#0f172a; font-size:16pt; margin:14px 0 4px 0;">${title}</h1>
+        <p style="text-align:${effectiveLayout?.headerAlign === 'left' ? 'left' : 'center'}; color:#475569; font-size:10pt; text-transform:uppercase; margin:0 0 14px 0;">${renderedContent.subtitle}</p>
+        <div style="white-space: pre-wrap; font-family: ${fontCss}; font-size: 10.5pt; line-height: 1.55;">${cleanPreviewContent}</div>
+      </div>`
     );
     onToast(`Document Word (.docx) exporté !`);
   };
@@ -496,42 +524,162 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
           {/* VUE 1 : APERÇU STRUCTURÉ (READ-ONLY PROPRE & FLUIDE)                     */}
           {/* ========================================================================= */}
           {viewMode === 'preview' && (
-            <div className="bg-white border border-slate-300 rounded-2xl p-6 shadow-sm font-sans space-y-4">
+            <div
+              className="rounded-sm shadow-sm space-y-4 transition-all"
+              style={{
+                backgroundColor: effectiveLayout?.pageBgColor || '#ffffff',
+                border:
+                  effectiveLayout?.borderStyle === 'double'
+                    ? `4px double ${effectiveLayout.borderColor || '#0B2545'}`
+                    : effectiveLayout?.borderStyle === 'simple'
+                    ? `2px solid ${effectiveLayout.borderColor || '#0B2545'}`
+                    : '1px solid #e2e8f0',
+                padding:
+                  effectiveLayout?.blockSpacing === 'compact'
+                    ? '24px'
+                    : effectiveLayout?.blockSpacing === 'airy'
+                    ? '36px'
+                    : '28px',
+                fontFamily:
+                  effectiveLayout?.fontFamily === 'times'
+                    ? 'Georgia, "Times New Roman", serif'
+                    : effectiveLayout?.fontFamily === 'courier'
+                    ? '"Courier New", monospace'
+                    : 'system-ui, -apple-system, sans-serif',
+                color: effectiveLayout?.bodyTextColor || '#1e293b'
+              }}
+            >
               {/* En-tête de page officiel */}
-              <div className="border-b-2 border-[#D4A017] pb-3 flex items-center justify-between">
-                <div>
-                  <h4 className="font-bold text-sm text-[#0B2545]">{postulant.nomEntreprise}</h4>
-                  <p className="text-[11px] text-slate-500">
-                    Système de Gestion Documentaire ATS · {activeModel.number}
-                  </p>
+              {isCleanLetterhead ? (
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h4
+                        className="font-extrabold text-lg tracking-tight"
+                        style={{ color: effectiveLayout?.primaryColor || '#0B2545' }}
+                      >
+                        {postulant.nomEntreprise}
+                      </h4>
+                      <p className="text-[11px] text-slate-600">{postulant.adresseEntreprise}</p>
+                    </div>
+                    <div className="w-3 h-3 border border-slate-300 flex items-center justify-center shrink-0">
+                      <div className="w-1.5 h-1.5 bg-slate-900" />
+                    </div>
+                  </div>
+                  <div className="space-y-1 text-[11px]">
+                    <span
+                      className="inline-block px-2.5 py-0.5 rounded-sm font-bold"
+                      style={{
+                        backgroundColor: effectiveLayout?.highlightTintColor || '#D8F3EB',
+                        color: effectiveLayout?.primaryColor || '#0B663A'
+                      }}
+                    >
+                      Vos références
+                    </span>
+                    <div className="text-slate-700">
+                      N° Dossier : <strong className="text-slate-900">{docEsData.referenceDossier}</strong> · Date : <strong className="text-slate-900">{postulant.dateEffet}</strong>
+                    </div>
+                  </div>
                 </div>
-                <div className="text-right text-[11px] text-slate-600">
-                  <span className="font-bold text-blue-900 block">Réf : {docEsData.referenceDossier}</span>
-                  <span>Date : {postulant.dateEffet}</span>
+              ) : (
+                <div
+                  className="pb-3 flex items-center justify-between"
+                  style={{ borderBottom: `2px solid ${effectiveLayout?.accentColor || '#D4A017'}` }}
+                >
+                  <div>
+                    <h4
+                      className="font-bold text-sm"
+                      style={{ color: effectiveLayout?.primaryColor || '#0B2545' }}
+                    >
+                      {postulant.nomEntreprise}
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      Système de Gestion Documentaire ATS · {activeModel.number}
+                    </p>
+                  </div>
+                  <div className="text-right text-[11px] text-slate-600">
+                    <span
+                      className="font-bold block"
+                      style={{ color: effectiveLayout?.primaryColor || '#1e3a8a' }}
+                    >
+                      Réf : {docEsData.referenceDossier}
+                    </span>
+                    <span>Date : {postulant.dateEffet}</span>
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Titre et sous-titre */}
-              <div className="text-center py-2 bg-slate-50 rounded-xl border border-slate-200">
-                <h3 className="font-black text-sm text-[#0B2545] uppercase tracking-wide">
+              <div
+                className={isCleanLetterhead ? 'py-2' : 'py-2 px-4 rounded-xl border border-slate-200'}
+                style={{
+                  textAlign: effectiveLayout?.headerAlign === 'left' ? 'left' : 'center',
+                  backgroundColor: isCleanLetterhead
+                    ? 'transparent'
+                    : effectiveLayout?.headerStyle === 'bandeau_plein'
+                    ? effectiveLayout.headerBgColor
+                    : '#f8fafc'
+                }}
+              >
+                <h3
+                  className={isCleanLetterhead ? 'font-bold text-base tracking-tight' : 'font-black text-sm uppercase tracking-wide'}
+                  style={{
+                    color:
+                      !isCleanLetterhead && effectiveLayout?.headerStyle === 'bandeau_plein'
+                        ? '#ffffff'
+                        : isCleanLetterhead
+                        ? '#0f172a'
+                        : effectiveLayout?.primaryColor || '#0B2545'
+                  }}
+                >
                   {renderedContent.title}
                 </h3>
                 {renderedContent.subtitle && (
-                  <p className="text-[11px] text-slate-500 italic mt-0.5">{renderedContent.subtitle}</p>
+                  <p
+                    className={`text-[11px] mt-0.5 ${isCleanLetterhead ? 'uppercase tracking-wider' : 'italic'}`}
+                    style={{
+                      color:
+                        !isCleanLetterhead && effectiveLayout?.headerStyle === 'bandeau_plein'
+                          ? '#e2e8f0'
+                          : '#64748b'
+                    }}
+                  >
+                    {renderedContent.subtitle}
+                  </p>
                 )}
               </div>
 
-              {/* Contenu formaté avec balises dynamiques remplacées */}
-              <pre className="text-xs text-slate-800 font-mono whitespace-pre-wrap leading-relaxed bg-slate-50/60 p-4 rounded-xl border border-slate-200 overflow-x-auto">
-                {renderedContent.content}
-              </pre>
+              {/* Contenu formaté propre sans lignes ===== */}
+              <div
+                className={
+                  isCleanLetterhead
+                    ? 'text-xs whitespace-pre-wrap leading-relaxed'
+                    : 'text-xs whitespace-pre-wrap leading-relaxed bg-slate-50/60 p-4 rounded-xl border border-slate-200 overflow-x-auto'
+                }
+                style={{
+                  color: effectiveLayout?.bodyTextColor || '#1e293b',
+                  fontFamily:
+                    effectiveLayout?.fontFamily === 'times'
+                      ? 'Georgia, "Times New Roman", serif'
+                      : effectiveLayout?.fontFamily === 'courier'
+                      ? 'ui-monospace, SFMono-Regular, Menlo, monospace'
+                      : 'system-ui, -apple-system, sans-serif'
+                }}
+              >
+                {cleanPreviewContent}
+              </div>
 
               {/* Pied de page certifié */}
               <div className="pt-3 border-t border-slate-200 flex items-center justify-between text-[10px] text-slate-500">
                 <span>{postulant.nomEntreprise} · {postulant.adresseEntreprise}</span>
-                <span className="font-bold text-emerald-700 flex items-center gap-1">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  Conforme EIMT &amp; Droit du Travail Canada
+                <span className="font-bold text-slate-600 flex items-center gap-2">
+                  {!isCleanLetterhead && (
+                    <span className="text-emerald-700 inline-flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Conforme EIMT &amp; Droit du Travail Canada
+                    </span>
+                  )}
+                  {isCleanLetterhead && <span>1/1</span>}
                 </span>
               </div>
             </div>

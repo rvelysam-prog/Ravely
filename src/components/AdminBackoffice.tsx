@@ -1538,6 +1538,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
       {activeTab === 'job_offers' && (
         <PostulantNouveauMasterModule
           settings={settings}
+          employees={employees}
           onOpenInWebmail={(content) => {
             setWebmailInitialContent({
               htmlBody: content,

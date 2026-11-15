@@ -90,13 +90,15 @@ import { BrandLogo } from '../BrandLogo';
 import {
   getSavedPdfAssetsConfig,
   loadPdfAssetsConfigFromFirestore,
+  savePdfAssetsConfigToFirestore,
   loadActorUploadedAssetsFromFirestore,
   saveActorUploadedAssetsToFirestore,
   normalizePdfAssetsConfig,
   PdfImportedAssetsConfig,
   UploadedAssetUrlsMap,
   getSavedActorUploadedAssets,
-  setSavedActorUploadedAssets
+  setSavedActorUploadedAssets,
+  findDepartmentDefinition
 } from '../../services/departmentsAndEmailService';
 import { readAndOptimizeImageFile } from '../../services/imageTransparencyService';
 import { PosteInputWithAnalyze } from '../common/PosteInputWithAnalyze';
@@ -106,7 +108,8 @@ import {
   FichesDocEsData,
   buildDefaultFichesDocEsData,
   saveFichesDocEsData,
-  loadFichesDocEsData
+  loadFichesDocEsData,
+  generateSingleDocEsPdf
 } from '../../services/fichesEtDocEsService';
 import {
   HousingAndNotaryData,
@@ -120,11 +123,21 @@ import {
   generateHousingTabPdf,
   downloadHousingTabWordDocx,
   getTabActorAssets,
-  getTabDocumentTitle
+  getTabDocumentTitle,
+  buildStructuredHousingDocument
 } from '../../services/housingDocsService';
+import { HousingAndDocEsStepWizard } from './HousingAndDocEsStepWizard';
+import {
+  LayoutTargetDocKey,
+  LayoutTemplatesMap,
+  getSavedLayoutTemplatesLocal,
+  loadAllLayoutTemplatesFromFirestore,
+  resolveEffectiveLayout
+} from '../../services/layoutImitationService';
 
 interface PostulantNouveauMasterModuleProps {
   settings: SiteSettings;
+  employees?: Employee[];
   onOpenInWebmail?: (html: string) => void;
   onEmployeeCreated?: (emp: Employee) => void;
   onBack?: () => void;
@@ -238,12 +251,14 @@ function wrapBasicEmailHtml(
 
 export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModuleProps> = ({
   settings,
+  employees = [],
   onOpenInWebmail,
   onEmployeeCreated,
   onBack
 }) => {
   // Navigation claire de l'espace de saisie (4 onglets aérés)
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<TopWorkspaceTab>('form');
+  const [selectedExistingMatricule, setSelectedExistingMatricule] = useState<string>('');
 
   // Postulant actif en cours d'édition
   const [postulant, setPostulant] = useState<PostulantInfo>(() =>
@@ -261,9 +276,11 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
   // Onglet actif du studio documentaire (01 à 13)
   const [activeManualTab, setActiveManualTab] = useState<ManualTabId>('dossier_kit');
 
-  // Sous-onglets de l'espace Hébergement / DOC ES
-  const [activeHousingFormSubTab, setActiveHousingFormSubTab] = useState<'t9' | 't10' | 't11' | 't12' | 'doc_es'>('t9');
-  const [activeDocEsFormTab, setActiveDocEsFormTab] = useState<'ats' | 'evaluation' | 'poste' | 'agence'>('ats');
+  // Sous-onglets de l'espace Hébergement / DOC ES et Modèles de mise en page à imiter
+  const [activeHousingFormSubTab, setActiveHousingFormSubTab] = useState<LayoutTargetDocKey>('t9');
+  const [layoutTemplates, setLayoutTemplates] = useState<LayoutTemplatesMap>(() =>
+    getSavedLayoutTemplatesLocal()
+  );
 
   // Données exhaustives 15 Fiches DOC ES et Onglets 9–12
   const [docEsData, setDocEsData] = useState<FichesDocEsData>(() =>
@@ -344,7 +361,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
     setTimeout(() => setCopiedNotification(null), 4500);
   };
 
-  // Chargement initial Firestore (config visuels, fichiers importés, liste postulants)
+  // Chargement initial Firestore (config visuels, fichiers importés, modèles à imiter, liste postulants)
   useEffect(() => {
     loadPdfAssetsConfigFromFirestore().then((cfg) => {
       setAssetsConfig(normalizePdfAssetsConfig(cfg));
@@ -357,6 +374,12 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
           ...prev,
           ...cloudAssets
         }));
+      }
+    });
+
+    loadAllLayoutTemplatesFromFirestore().then((templates) => {
+      if (Object.keys(templates).length > 0) {
+        setLayoutTemplates(templates);
       }
     });
 
@@ -387,6 +410,104 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
     } finally {
       setIsSavedPostulantsLoading(false);
     }
+  };
+
+  const handleUpdateAssetsConfig = (nextCfg: PdfImportedAssetsConfig) => {
+    const normalized = normalizePdfAssetsConfig(nextCfg);
+    setAssetsConfig(normalized);
+    void savePdfAssetsConfigToFirestore(normalized);
+  };
+
+  const handleLoadExistingEmployee = (matricule: string) => {
+    setSelectedExistingMatricule(matricule);
+    if (!matricule) return;
+    const found = employees.find((e) => e.matricule === matricule);
+    if (!found) return;
+
+    const matchedDept = findDepartmentDefinition(found.departement);
+    const horaireVal =
+      found.salaire_horaire ||
+      (found.salaire ? Math.round((found.salaire / 162.5) * 100) / 100 : postulant.salaireHoraire);
+    const mensuelVal = found.salaire || Math.round(horaireVal * 162.5);
+    const nomCompletVal = found.nom_complet || `${found.prenom} ${found.nom}`.trim();
+    const parts = nomCompletVal.split(' ');
+    const photoCandidate = found.photo_url || found.photo || '';
+
+    setPostulant((prev) => ({
+      ...prev,
+      matricule: found.matricule,
+      civilite: found.civilite || (found.sexe === 'Féminin' ? 'Madame' : 'Monsieur'),
+      nomComplet: nomCompletVal,
+      prenom: found.prenom || parts[0] || prev.prenom,
+      nom: found.nom || parts.slice(1).join(' ') || prev.nom,
+      email: found.email || prev.email,
+      telephone: found.telephone || prev.telephone,
+      adresse: found.adresse || prev.adresse,
+      dateNaissance: found.date_naissance || prev.dateNaissance,
+      nationalite: found.nationalite || prev.nationalite,
+      numeroPieceIdentite: found.numero_piece_identite || prev.numeroPieceIdentite,
+      contactUrgence: found.contact_urgence || prev.contactUrgence,
+      intitulePoste: found.poste || prev.intitulePoste,
+      departement: found.departement || prev.departement,
+      typeContrat: found.type_contrat || prev.typeContrat,
+      dateEffet: found.date_effet || found.date_embauche || prev.dateEffet,
+      salaireHoraire: horaireVal,
+      salaireMensuel: mensuelVal,
+      horairesTravail: found.horaires || prev.horairesTravail,
+      dureePeriodeEssai: found.duree_periode_essai || prev.dureePeriodeEssai,
+      managerRecruteur: found.manager || prev.managerRecruteur,
+      adresseEntreprise: found.lieu_travail || prev.adresseEntreprise,
+      contactDocPhone: found.doc_contact_phone || prev.contactDocPhone,
+      contactDocEmail: found.doc_contact_email || prev.contactDocEmail,
+      numeroImmatriculationEntreprise: found.ni || prev.numeroImmatriculationEntreprise,
+      responsabilitesMissions:
+        Array.isArray(found.responsabilites) && found.responsabilites.length > 0
+          ? found.responsabilites
+          : matchedDept?.missions || prev.responsabilitesMissions,
+      photoUrl: photoCandidate || prev.photoUrl,
+      logoUrl: found.logo_url || prev.logoUrl,
+      signatureUrl: found.signature_url || prev.signatureUrl,
+      cachetUrl: found.cachet_url || prev.cachetUrl,
+      filigraneUrl: found.filigrane_url || prev.filigraneUrl
+    }));
+
+    setHousingData((prev) => ({
+      ...prev,
+      employeurNumEnregistrement: found.ni || prev.employeurNumEnregistrement,
+      employeurTel: found.doc_contact_phone || prev.employeurTel,
+      employeurEmail: found.doc_contact_email || prev.employeurEmail,
+      beneficiaireDateLieuNaissance: `${found.date_naissance || '1988-06-15'} — (${
+        found.nationalite || postulant.nationalite
+      })`,
+      beneficiairePasseport: found.numero_piece_identite || prev.beneficiairePasseport,
+      beneficiaireDateArriveePrevue: found.date_effet || found.date_embauche || prev.beneficiaireDateArriveePrevue,
+      hebergementAdresseComplete: found.adresse_hebergement || prev.hebergementAdresseComplete,
+      hebergementDateDisponibilite: found.date_effet || found.date_embauche || prev.hebergementDateDisponibilite
+    }));
+
+    setDocEsData((prev) => ({
+      ...prev,
+      specialiteMetier: found.poste || prev.specialiteMetier,
+      pretentionsSalariales: `${mensuelVal.toLocaleString('fr-CA')} $ CAD / mois`
+    }));
+
+    if (photoCandidate || found.logo_url || found.signature_url || found.cachet_url || found.filigrane_url) {
+      setUploadedAssets((prev) => {
+        const next: UploadedAssetUrlsMap = {
+          ...prev,
+          ...(photoCandidate ? { photoCandidat: photoCandidate } : {}),
+          ...(found.logo_url ? { logo: found.logo_url } : {}),
+          ...(found.signature_url ? { signature: found.signature_url } : {}),
+          ...(found.cachet_url ? { cachet: found.cachet_url } : {}),
+          ...(found.filigrane_url ? { filigrane: found.filigrane_url } : {})
+        };
+        setSavedActorUploadedAssets(next);
+        void saveActorUploadedAssetsToFirestore(next);
+        return next;
+      });
+    }
+
+    triggerToast(`Données de ${nomCompletVal} (${found.matricule}) chargées dans Postulant Nouveau.`);
   };
 
   const handleUploadAsset = (key: string, url: string) => {
@@ -652,13 +773,20 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
       11: 'heb_hir',
       12: 'heb_declaration'
     };
+    const docKeyMap: Record<HousingTabNumber, LayoutTargetDocKey> = {
+      9: 't9',
+      10: 't10',
+      11: 't11',
+      12: 't12'
+    };
     const { doc, filename } = await generateHousingTabPdf(
       tabNumber,
       housingData,
       postulant,
       assetsConfig,
       uploadedAssets,
-      customVisualText[keyMap[tabNumber]]
+      customVisualText[keyMap[tabNumber]],
+      layoutTemplates[docKeyMap[tabNumber]]
     );
     doc.save(filename);
     triggerToast(`Onglet ${tabNumber} PDF téléchargé avec les visuels de l’acteur.`);
@@ -934,6 +1062,14 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
 
   const renderHousingTabModule = (tabNumber: HousingTabNumber, textKey: string) => {
     const actorAssets = getTabActorAssets(tabNumber, assetsConfig, uploadedAssets);
+    const docKeyMap: Record<HousingTabNumber, LayoutTargetDocKey> = {
+      9: 't9',
+      10: 't10',
+      11: 't11',
+      12: 't12'
+    };
+    const activeLayout = layoutTemplates[docKeyMap[tabNumber]];
+    const effectiveLayout = resolveEffectiveLayout(activeLayout);
     const title = getTabDocumentTitle(tabNumber);
     const plainContent =
       customVisualText[textKey] ||
@@ -945,21 +1081,43 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
         ? generateOnglet11PlainText(housingData, postulant)
         : generateOnglet12PlainText(housingData, postulant));
 
+    const cleanPlainContent = plainContent
+      .replace(/^={5,}$/gm, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    const useLetterheadLayout = Boolean(
+      effectiveLayout &&
+        effectiveLayout.layoutArchetype === 'letterhead_split' &&
+        !customVisualText[textKey]
+    );
+    const structuredModel = useLetterheadLayout
+      ? buildStructuredHousingDocument(tabNumber, housingData, postulant)
+      : null;
+
     const emailHtml = generateHousingTabEmailHtml(
       tabNumber,
       housingData,
       postulant,
       uploadedAssets,
-      customVisualText[textKey]
+      customVisualText[textKey],
+      activeLayout
     );
+
+    const sigCfg = assetsConfig.signature;
+    const cachetCfg = assetsConfig.cachet;
+    const logoCfg = assetsConfig.logo;
+    const qrCfg = assetsConfig.qrcodeEmployeur;
 
     return (
       <InteractiveDocumentCanvas
         title={`${tabNumber}. ${title}`}
         documentTypeLabel={`Onglet ${tabNumber} · Acteur Exclusif`}
         assetsConfig={assetsConfig}
-        onChangeAssetsConfig={setAssetsConfig}
+        onChangeAssetsConfig={handleUpdateAssetsConfig}
         uploadedAssetUrls={uploadedAssets}
+        layoutTemplate={activeLayout}
+        hideGenericChrome={useLetterheadLayout}
         exclusiveVisualSet={{
           logo: actorAssets.logo.url,
           signature: actorAssets.signature.url,
@@ -972,7 +1130,14 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
         htmlEmailContent={emailHtml}
         onDownloadPdf={() => handleDownloadHousingTabPdf(tabNumber)}
         onDownloadWord={async () => {
-          await downloadHousingTabWordDocx(tabNumber, housingData, postulant, customVisualText[textKey]);
+          await downloadHousingTabWordDocx(
+            tabNumber,
+            housingData,
+            postulant,
+            customVisualText[textKey],
+            activeLayout,
+            uploadedAssets
+          );
           triggerToast(`Onglet ${tabNumber} exporté au format Word (.docx).`);
         }}
         onDownloadHtml={(html) => downloadHtmlFile(`Onglet_${tabNumber}_${postulant.codeIdCandidature}.html`, html)}
@@ -987,13 +1152,239 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
           })
         }
       >
-        <div
-          contentEditable
-          suppressContentEditableWarning
-          className="font-mono text-xs sm:text-sm text-slate-800 leading-relaxed whitespace-pre-wrap outline-none p-4 hover:bg-amber-50/40 rounded-lg cursor-text"
-        >
-          {plainContent}
-        </div>
+        {useLetterheadLayout && structuredModel && effectiveLayout ? (
+          <div
+            contentEditable
+            suppressContentEditableWarning
+            className="flex-1 flex flex-col justify-between outline-none cursor-text min-h-[980px] text-slate-900"
+            style={{
+              fontSize: tabNumber === 11 ? '10.5px' : '11.5px',
+              lineHeight: tabNumber === 11 ? 1.35 : 1.48
+            }}
+          >
+            <div className="space-y-4">
+              {/* ZONE 1 : En-tête minimal (Logo gauche + petit repère carré droit, zéro bandeau) */}
+              <div
+                className={`flex items-start justify-between ${
+                  effectiveLayout.logoPlacement === 'top_right'
+                    ? 'flex-row-reverse'
+                    : effectiveLayout.logoPlacement === 'top_center'
+                    ? 'flex-col items-center gap-2'
+                    : ''
+                }`}
+              >
+                <div>
+                  {actorAssets.logo.url ? (
+                    <img
+                      src={actorAssets.logo.url}
+                      alt="Logo officiel"
+                      className="object-contain"
+                      style={{
+                        maxWidth: `${Math.min(logoCfg?.widthValue || 180, 210)}${logoCfg?.widthUnit || 'px'}`,
+                        maxHeight: `${Math.min(logoCfg?.heightValue || 56, 68)}${logoCfg?.heightUnit || 'px'}`,
+                        opacity: (logoCfg?.opacity ?? 100) / 100
+                      }}
+                    />
+                  ) : (
+                    <div
+                      className="font-extrabold text-xl tracking-tight"
+                      style={{ color: effectiveLayout.primaryColor }}
+                    >
+                      {postulant.nomEntreprise}
+                    </div>
+                  )}
+                </div>
+                <div className="w-3 h-3 border border-slate-300 flex items-center justify-center shrink-0 mt-1">
+                  <div className="w-1.5 h-1.5 bg-slate-900" />
+                </div>
+              </div>
+
+              {/* ZONE 2 : Expéditeur à gauche / Destinataire décalé à droite */}
+              <div className="grid grid-cols-12 gap-4 pt-2">
+                <div className="col-span-6 space-y-0.5 text-[10.5px] leading-snug text-slate-800">
+                  {structuredModel.senderLines.map((line, i) => (
+                    <div key={i} className={i === 0 ? 'font-bold uppercase tracking-tight' : ''}>
+                      {line}
+                    </div>
+                  ))}
+                </div>
+                <div className="col-span-6 pt-5 pl-6 space-y-0.5 text-[10.5px] leading-snug text-slate-900">
+                  {structuredModel.recipientLines.map((line, i) => (
+                    <div key={i} className={i === 0 ? 'font-bold uppercase' : ''}>
+                      {line}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* ZONE 3 : Pastille pastel "Vos références" + tableau aligné clé : valeur */}
+              <div className="space-y-2 pt-1">
+                <div>
+                  <span
+                    className="inline-block px-2.5 py-0.5 rounded-sm font-bold text-[11px]"
+                    style={{
+                      backgroundColor: effectiveLayout.highlightTintColor || '#D8F3EB',
+                      color: effectiveLayout.primaryColor || '#0B663A'
+                    }}
+                  >
+                    {structuredModel.refPillLabel}
+                  </span>
+                </div>
+                <div className="space-y-1 text-[10.5px]">
+                  {structuredModel.refPairs.map((pair, idx) => (
+                    <div key={idx} className="grid grid-cols-12 items-baseline">
+                      <span className="col-span-4 text-slate-600">{pair.label}</span>
+                      <span className="col-span-8 font-bold text-slate-900">: {pair.value}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* ZONE 4 : Titre principal centré & Sous-titre majuscules */}
+              <div
+                className="pt-3 pb-2"
+                style={{
+                  textAlign: effectiveLayout.headerAlign === 'left' ? 'left' : 'center'
+                }}
+              >
+                <h2 className="text-[17px] font-bold text-slate-900 leading-tight">
+                  {structuredModel.mainTitle}
+                </h2>
+                <p className="text-[10.5px] tracking-wider uppercase text-slate-600 mt-1">
+                  {structuredModel.mainSubtitle}
+                </p>
+              </div>
+
+              {/* ZONE 5 : Lignes d'introduction + paragraphes structurés + grille HIR optionnelle */}
+              <div className="space-y-2.5 text-[11px] text-slate-800">
+                <div className="space-y-0.5">
+                  {structuredModel.introLines.map((line, idx) => {
+                    const colonIdx = line.indexOf(':');
+                    if (colonIdx > 0) {
+                      return (
+                        <p key={idx}>
+                          <span>{line.slice(0, colonIdx + 1)}</span>
+                          <strong className="font-bold text-slate-900">{line.slice(colonIdx + 1)}</strong>
+                        </p>
+                      );
+                    }
+                    return <p key={idx}>{line}</p>;
+                  })}
+                </div>
+
+                {structuredModel.bodyParagraphs.map((para, idx) => (
+                  <p key={idx} className="leading-[1.48] text-slate-800">
+                    {para}
+                  </p>
+                ))}
+
+                {structuredModel.summaryTable && (
+                  <table className="w-full border-collapse text-[9.5px] mt-1">
+                    <thead>
+                      <tr
+                        style={{
+                          backgroundColor: effectiveLayout.highlightTintColor || '#D8F3EB',
+                          color: effectiveLayout.primaryColor || '#0B2545'
+                        }}
+                      >
+                        {structuredModel.summaryTable.headers.map((h, i) => (
+                          <th key={i} className="border border-slate-200 px-2 py-1 text-left font-bold">
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {structuredModel.summaryTable.rows.map((row, rIdx) => (
+                        <tr key={rIdx} className={rIdx % 2 === 1 ? 'bg-slate-50/70' : 'bg-white'}>
+                          {row.map((cell, cIdx) => (
+                            <td key={cIdx} className="border border-slate-200 px-2 py-0.5">
+                              {cell}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              {/* ZONE 6 : Fait à (Gauche) + Délégation / Signature / Cachet (Droite) */}
+              <div className="grid grid-cols-12 gap-4 pt-4 items-start">
+                <div className="col-span-6 text-[11px] text-slate-900 pt-1">
+                  {structuredModel.faitALine}
+                </div>
+                <div className="col-span-6 text-left space-y-1">
+                  <p className="font-bold text-[11px] text-slate-900">{structuredModel.signatoryHeading}</p>
+                  <p className="text-[10.5px] text-slate-700">{structuredModel.signatorySubRole}</p>
+                  <div className="flex items-center gap-3 py-1 min-h-[48px]">
+                    {actorAssets.signature.url && (
+                      <img
+                        src={actorAssets.signature.url}
+                        alt="Signature"
+                        className="object-contain"
+                        style={{
+                          maxWidth: `${Math.min(sigCfg?.widthValue || 130, 140)}${sigCfg?.widthUnit || 'px'}`,
+                          maxHeight: `${Math.min(sigCfg?.heightValue || 48, 56)}${sigCfg?.heightUnit || 'px'}`,
+                          opacity: (sigCfg?.opacity ?? 100) / 100
+                        }}
+                      />
+                    )}
+                    {actorAssets.cachet.url && (
+                      <img
+                        src={actorAssets.cachet.url}
+                        alt="Cachet"
+                        className="object-contain"
+                        style={{
+                          maxWidth: `${Math.min(cachetCfg?.widthValue || 80, 90)}${cachetCfg?.widthUnit || 'px'}`,
+                          maxHeight: `${Math.min(cachetCfg?.heightValue || 56, 60)}${cachetCfg?.heightUnit || 'px'}`,
+                          opacity: (cachetCfg?.opacity ?? 92) / 100
+                        }}
+                      />
+                    )}
+                  </div>
+                  <p className="font-bold text-[11px] text-slate-900">{structuredModel.signatoryPrintedName}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* ZONE 7 : Pied de page légal discret (QR gauche + 3 lignes légales + 1/1 à droite) */}
+            <div className="pt-6 mt-6 flex items-end justify-between gap-4">
+              <div className="flex items-center gap-2 shrink-0">
+                {actorAssets.qrcode.url && (
+                  <img
+                    src={actorAssets.qrcode.url}
+                    alt="QR"
+                    className="object-contain"
+                    style={{
+                      maxWidth: `${Math.min(qrCfg?.widthValue || 44, 52)}px`,
+                      maxHeight: `${Math.min(qrCfg?.heightValue || 44, 52)}px`
+                    }}
+                  />
+                )}
+              </div>
+              <div className="flex-1 text-[8.5px] leading-snug text-slate-500">
+                {structuredModel.footerLegalLines.map((line, i) => (
+                  <div key={i}>{line}</div>
+                ))}
+              </div>
+              <div className="flex items-center gap-2 shrink-0 text-[10px] text-slate-600 font-semibold">
+                {actorAssets.barcode.url && (
+                  <img src={actorAssets.barcode.url} alt="Code" className="h-6 object-contain" />
+                )}
+                <span>1/1</span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div
+            contentEditable
+            suppressContentEditableWarning
+            className="text-xs sm:text-sm text-slate-800 leading-relaxed whitespace-pre-wrap outline-none p-4 hover:bg-amber-50/40 rounded-lg cursor-text"
+          >
+            {cleanPlainContent}
+          </div>
+        )}
       </InteractiveDocumentCanvas>
     );
   };
@@ -1089,6 +1480,33 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
       )}
 
       <div className="p-6 space-y-6">
+        {/* SÉLECTEUR SALARIÉ EXISTANT DEPUIS "SALARIÉS & CONTRATS AUTO CDI/CDD" */}
+        <div className="bg-blue-50/70 border border-blue-200 rounded-xl px-4 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 text-xs sm:text-sm text-[#0B2545]">
+            <UserCheck className="w-4 h-4 text-[#0066B3] shrink-0" />
+            <div>
+              <span className="font-bold">Pré-remplir depuis Salariés &amp; Contrats Auto CDI/CDD ({employees.length}) :</span>
+              <span className="text-xs text-slate-600 block sm:inline sm:ml-1.5">
+                Charge instantanément identité, poste, salaire, photo et logement d’un salarié enregistré.
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 w-full md:w-auto">
+            <select
+              value={selectedExistingMatricule}
+              onChange={(e) => handleLoadExistingEmployee(e.target.value)}
+              className="w-full md:w-80 px-3.5 py-2 border border-blue-300 rounded-lg bg-white text-xs sm:text-sm font-semibold text-slate-900 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#0066B3]/30"
+            >
+              <option value="">-- Sélectionner un salarié existant ({employees.length}) --</option>
+              {employees.map((emp) => (
+                <option key={emp.matricule} value={emp.matricule}>
+                  {emp.nom_complet} ({emp.matricule}) — {emp.poste}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
         {/* 2. BARRE DE CONTEXTE RAPIDE (CAS DE RECRUTEMENT + MÉTHODE + MODÈLE CRIC) */}
         <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 grid grid-cols-1 xl:grid-cols-3 gap-4 items-center">
           <div className="space-y-1.5">
@@ -2036,745 +2454,89 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
         )}
 
         {/* ========================================================================= */}
-        {/* ONGLET SAISIE 2 : HÉBERGEMENT, NOTAIRE, HIR & PARAMÈTRES DOC ES           */}
+        {/* ONGLET SAISIE 2 : HÉBERGEMENT, NOTAIRE, HIR & DOC ES (PARCOURS MULTI-ÉTAPES + IMITATION) */}
         {/* ========================================================================= */}
         {activeWorkspaceTab === 'housing' && (
-          <div className="space-y-5">
-            <div className="flex flex-wrap gap-2 p-1.5 bg-slate-100 border border-slate-200 rounded-xl text-xs font-bold">
-              {(
-                [
-                  { id: 't9', label: 'Onglet 9 : Attestation Hébergement' },
-                  { id: 't10', label: 'Onglet 10 : Notaire Public BC' },
-                  { id: 't11', label: 'Onglet 11 : Inspection HIR (12 critères)' },
-                  { id: 't12', label: 'Onglet 12 : Déclaration Solennelle' },
-                  { id: 'doc_es', label: 'Onglet 13 : Paramètres 15 Fiches DOC ES' }
-                ] as const
-              ).map((st) => (
-                <button
-                  key={st.id}
-                  type="button"
-                  onClick={() => setActiveHousingFormSubTab(st.id)}
-                  className={`px-3.5 py-2 rounded-lg cursor-pointer transition-colors whitespace-nowrap ${
-                    activeHousingFormSubTab === st.id
-                      ? 'bg-[#0066B3] text-white'
-                      : 'text-slate-700 hover:bg-white'
-                  }`}
-                >
-                  {st.label}
-                </button>
-              ))}
-            </div>
-
-            {activeHousingFormSubTab === 't9' && (
-              <div className="p-6 rounded-xl bg-white border border-slate-200 grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    N° Immatriculation Employeur
-                  </label>
-                  <input
-                    type="text"
-                    value={housingData.employeurNumEnregistrement}
-                    onChange={(e) =>
-                      setHousingData({ ...housingData, employeurNumEnregistrement: e.target.value })
-                    }
-                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Date &amp; Lieu naissance bénéficiaire
-                  </label>
-                  <input
-                    type="text"
-                    value={housingData.beneficiaireDateLieuNaissance}
-                    onChange={(e) =>
-                      setHousingData({ ...housingData, beneficiaireDateLieuNaissance: e.target.value })
-                    }
-                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    N° Passeport bénéficiaire
-                  </label>
-                  <input
-                    type="text"
-                    value={housingData.beneficiairePasseport}
-                    onChange={(e) =>
-                      setHousingData({ ...housingData, beneficiairePasseport: e.target.value })
-                    }
-                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg font-mono font-bold"
-                  />
-                </div>
-                <div className="sm:col-span-2">
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Adresse complète du logement mis à disposition
-                  </label>
-                  <input
-                    type="text"
-                    value={housingData.hebergementAdresseComplete}
-                    onChange={(e) =>
-                      setHousingData({ ...housingData, hebergementAdresseComplete: e.target.value })
-                    }
-                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg font-semibold"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Ville / Province
-                  </label>
-                  <input
-                    type="text"
-                    value={housingData.hebergementVilleProvince}
-                    onChange={(e) =>
-                      setHousingData({ ...housingData, hebergementVilleProvince: e.target.value })
-                    }
-                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Type de logement
-                  </label>
-                  <select
-                    value={housingData.hebergementTypeLogement}
-                    onChange={(e) =>
-                      setHousingData({
-                        ...housingData,
-                        hebergementTypeLogement: e.target.value as HousingAndNotaryData['hebergementTypeLogement']
-                      })
-                    }
-                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg bg-white"
-                  >
-                    <option value="Appartement individuel">Appartement individuel</option>
-                    <option value="Maison partagée">Maison partagée</option>
-                    <option value="Chambre individuelle meublée">Chambre individuelle meublée</option>
-                    <option value="Résidence d'entreprise">Résidence d’entreprise</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Nombre de chambres / Capacité
-                  </label>
-                  <input
-                    type="text"
-                    value={housingData.hebergementNombreChambres}
-                    onChange={(e) =>
-                      setHousingData({ ...housingData, hebergementNombreChambres: e.target.value })
-                    }
-                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Lien de l’employeur avec le logement
-                  </label>
-                  <select
-                    value={housingData.hebergementLienEmployeur}
-                    onChange={(e) =>
-                      setHousingData({
-                        ...housingData,
-                        hebergementLienEmployeur: e.target.value as HousingAndNotaryData['hebergementLienEmployeur']
-                      })
-                    }
-                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg bg-white"
-                  >
-                    <option value="Propriétaire">Propriétaire</option>
-                    <option value="Locataire autorisé à héberger">Locataire autorisé à héberger</option>
-                    <option value="Convention de mise à disposition">Convention de mise à disposition</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Prise en charge Loyer mensuel
-                  </label>
-                  <select
-                    value={housingData.fraisLoyerOption}
-                    onChange={(e) =>
-                      setHousingData({
-                        ...housingData,
-                        fraisLoyerOption: e.target.value as HousingAndNotaryData['fraisLoyerOption']
-                      })
-                    }
-                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg bg-white font-semibold text-emerald-800"
-                  >
-                    <option value="100% employeur">100% employeur</option>
-                    <option value="Prise en charge partielle">Prise en charge partielle</option>
-                    <option value="À charge du salarié">À charge du salarié</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Eau / Électricité / Chauffage
-                  </label>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    <select
-                      value={housingData.fraisEau}
-                      onChange={(e) =>
-                        setHousingData({ ...housingData, fraisEau: e.target.value as 'Incluse' | 'Non incluse' })
-                      }
-                      className="px-2 py-2 border border-slate-300 rounded-lg bg-white text-xs"
-                    >
-                      <option value="Incluse">Eau: Oui</option>
-                      <option value="Non incluse">Eau: Non</option>
-                    </select>
-                    <select
-                      value={housingData.fraisElectricite}
-                      onChange={(e) =>
-                        setHousingData({
-                          ...housingData,
-                          fraisElectricite: e.target.value as 'Incluse' | 'Non incluse'
-                        })
-                      }
-                      className="px-2 py-2 border border-slate-300 rounded-lg bg-white text-xs"
-                    >
-                      <option value="Incluse">Élec: Oui</option>
-                      <option value="Non incluse">Élec: Non</option>
-                    </select>
-                    <select
-                      value={housingData.fraisChauffage}
-                      onChange={(e) =>
-                        setHousingData({
-                          ...housingData,
-                          fraisChauffage: e.target.value as 'Inclus' | 'Non inclus'
-                        })
-                      }
-                      className="px-2 py-2 border border-slate-300 rounded-lg bg-white text-xs"
-                    >
-                      <option value="Inclus">Chauf: Oui</option>
-                      <option value="Non inclus">Chauf: Non</option>
-                    </select>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Autres frais / équipements
-                  </label>
-                  <input
-                    type="text"
-                    value={housingData.fraisAutres}
-                    onChange={(e) => setHousingData({ ...housingData, fraisAutres: e.target.value })}
-                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-              </div>
-            )}
-
-            {activeHousingFormSubTab === 't10' && (
-              <div className="p-6 rounded-xl bg-white border border-slate-200 space-y-4 text-sm">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      Nom du Notaire public (BC)
-                    </label>
-                    <input
-                      type="text"
-                      value={housingData.notaireNomComplet}
-                      onChange={(e) =>
-                        setHousingData({ ...housingData, notaireNomComplet: e.target.value })
-                      }
-                      className="w-full px-3.5 py-2 border border-slate-300 rounded-lg font-bold"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      N° Licence / Membre Notaire
-                    </label>
-                    <input
-                      type="text"
-                      value={housingData.notaireNumeroLicence}
-                      onChange={(e) =>
-                        setHousingData({ ...housingData, notaireNumeroLicence: e.target.value })
-                      }
-                      className="w-full px-3.5 py-2 border border-slate-300 rounded-lg font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      N° Dossier Notarial
-                    </label>
-                    <input
-                      type="text"
-                      value={housingData.notaireNumeroDossier}
-                      onChange={(e) =>
-                        setHousingData({ ...housingData, notaireNumeroDossier: e.target.value })
-                      }
-                      className="w-full px-3.5 py-2 border border-slate-300 rounded-lg font-mono text-blue-900 font-bold"
-                    />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      Adresse étude notariale (Colombie-Britannique)
-                    </label>
-                    <input
-                      type="text"
-                      value={housingData.notaireVilleAdresse}
-                      onChange={(e) =>
-                        setHousingData({ ...housingData, notaireVilleAdresse: e.target.value })
-                      }
-                      className="w-full px-3.5 py-2 border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      Pièce identité vérifiée du signataire
-                    </label>
-                    <input
-                      type="text"
-                      value={housingData.notairePieceIdentiteSignataire}
-                      onChange={(e) =>
-                        setHousingData({ ...housingData, notairePieceIdentiteSignataire: e.target.value })
-                      }
-                      className="w-full px-3.5 py-2 border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-5 pt-3 border-t border-slate-100 text-xs font-medium">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={housingData.notaireFormaliteDevantMoi}
-                      onChange={(e) =>
-                        setHousingData({ ...housingData, notaireFormaliteDevantMoi: e.target.checked })
-                      }
-                    />
-                    <span>Signée personnellement devant moi</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={housingData.notaireFormaliteReconnue}
-                      onChange={(e) =>
-                        setHousingData({ ...housingData, notaireFormaliteReconnue: e.target.checked })
-                      }
-                    />
-                    <span>Signature reconnue comme véritable</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={housingData.notaireFormaliteConforme}
-                      onChange={(e) =>
-                        setHousingData({ ...housingData, notaireFormaliteConforme: e.target.checked })
-                      }
-                    />
-                    <span>Déclaration volontaire &amp; conforme</span>
-                  </label>
-                </div>
-              </div>
-            )}
-
-            {activeHousingFormSubTab === 't11' && (
-              <div className="p-6 rounded-xl bg-white border border-slate-200 space-y-4 text-sm">
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      Organisme (BCAC / HIR)
-                    </label>
-                    <input
-                      type="text"
-                      value={housingData.hirOrganismeNom}
-                      onChange={(e) => setHousingData({ ...housingData, hirOrganismeNom: e.target.value })}
-                      className="w-full px-3.5 py-2 border border-slate-300 rounded-lg font-bold"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      Nom de l’Inspecteur
-                    </label>
-                    <input
-                      type="text"
-                      value={housingData.hirInspecteurNom}
-                      onChange={(e) => setHousingData({ ...housingData, hirInspecteurNom: e.target.value })}
-                      className="w-full px-3.5 py-2 border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      N° Inspection
-                    </label>
-                    <input
-                      type="text"
-                      value={housingData.hirNumeroInspection}
-                      onChange={(e) =>
-                        setHousingData({ ...housingData, hirNumeroInspection: e.target.value })
-                      }
-                      className="w-full px-3.5 py-2 border border-slate-300 rounded-lg font-mono font-bold text-emerald-800"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      Superficie / Capacité
-                    </label>
-                    <input
-                      type="text"
-                      value={housingData.hirSuperficie}
-                      onChange={(e) => setHousingData({ ...housingData, hirSuperficie: e.target.value })}
-                      className="w-full px-3.5 py-2 border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                </div>
-
-                <div className="max-h-72 overflow-y-auto border border-slate-200 rounded-lg">
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead className="bg-slate-100 sticky top-0">
-                      <tr>
-                        <th className="p-2.5 border-b">Critère vérifié (12 points BC)</th>
-                        <th className="p-2.5 border-b w-36">Statut</th>
-                        <th className="p-2.5 border-b">Observations</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {housingData.hirCriteres.map((row, idx) => (
-                        <tr key={row.id} className="border-b last:border-b-0">
-                          <td className="p-2 font-semibold text-slate-800">{row.critere}</td>
-                          <td className="p-2">
-                            <select
-                              value={row.conforme ? 'ok' : 'ko'}
-                              onChange={(e) => {
-                                const next = [...housingData.hirCriteres];
-                                next[idx] = { ...row, conforme: e.target.value === 'ok' };
-                                setHousingData({ ...housingData, hirCriteres: next });
-                              }}
-                              className={`px-2 py-1.5 rounded border font-bold ${
-                                row.conforme ? 'text-emerald-800 bg-emerald-50' : 'text-red-700 bg-red-50'
-                              }`}
-                            >
-                              <option value="ok">Conforme</option>
-                              <option value="ko">Non conforme</option>
-                            </select>
-                          </td>
-                          <td className="p-2">
-                            <input
-                              type="text"
-                              value={row.observations}
-                              onChange={(e) => {
-                                const next = [...housingData.hirCriteres];
-                                next[idx] = { ...row, observations: e.target.value };
-                                setHousingData({ ...housingData, hirCriteres: next });
-                              }}
-                              className="w-full px-2.5 py-1.5 border border-slate-300 rounded bg-white"
-                            />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Conclusion Officielle HIR
-                  </label>
-                  <select
-                    value={housingData.hirConclusionStatut}
-                    onChange={(e) =>
-                      setHousingData({
-                        ...housingData,
-                        hirConclusionStatut: e.target.value as HousingAndNotaryData['hirConclusionStatut']
-                      })
-                    }
-                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg bg-white font-bold text-emerald-900"
-                  >
-                    <option value="Logement conforme aux normes d’habitation de Colombie-Britannique">
-                      Logement conforme aux normes d’habitation de Colombie-Britannique
-                    </option>
-                    <option value="Logement conforme sous réserve des corrections mineures ci-dessus">
-                      Logement conforme sous réserve des corrections mineures ci-dessus
-                    </option>
-                    <option value="Logement non conforme">Logement non conforme</option>
-                  </select>
-                </div>
-              </div>
-            )}
-
-            {activeHousingFormSubTab === 't12' && (
-              <div className="p-6 rounded-xl bg-white border border-slate-200 grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Autorité assermentatrice
-                  </label>
-                  <select
-                    value={housingData.declAutoriteType}
-                    onChange={(e) =>
-                      setHousingData({
-                        ...housingData,
-                        declAutoriteType: e.target.value as HousingAndNotaryData['declAutoriteType']
-                      })
-                    }
-                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg bg-white font-bold"
-                  >
-                    <option value="Notaire Public en Colombie-Britannique">
-                      Notaire Public en Colombie-Britannique
-                    </option>
-                    <option value="Commissaire aux Affidavits">Commissaire aux Affidavits</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Nom complet de l’Autorité
-                  </label>
-                  <input
-                    type="text"
-                    value={housingData.declAutoriteNom}
-                    onChange={(e) => setHousingData({ ...housingData, declAutoriteNom: e.target.value })}
-                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    N° Commission / Licence
-                  </label>
-                  <input
-                    type="text"
-                    value={housingData.declAutoriteNumeroCommission}
-                    onChange={(e) =>
-                      setHousingData({ ...housingData, declAutoriteNumeroCommission: e.target.value })
-                    }
-                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Ville / Province de déclaration
-                  </label>
-                  <input
-                    type="text"
-                    value={housingData.declVilleProvince}
-                    onChange={(e) => setHousingData({ ...housingData, declVilleProvince: e.target.value })}
-                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-                <div className="sm:col-span-2">
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Durée &amp; Conditions solennelles de prise en charge
-                  </label>
-                  <input
-                    type="text"
-                    value={housingData.declDureeEtConditions}
-                    onChange={(e) =>
-                      setHousingData({ ...housingData, declDureeEtConditions: e.target.value })
-                    }
-                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-              </div>
-            )}
-
-            {activeHousingFormSubTab === 'doc_es' && (
-              <div className="p-6 rounded-xl bg-white border border-slate-200 space-y-4 text-sm">
-                <div className="flex flex-wrap gap-2 pb-3 border-b border-slate-100 text-xs font-bold">
-                  {[
-                    { id: 'ats' as const, label: '1. Profil ATS & Compétences' },
-                    { id: 'evaluation' as const, label: '2. Évaluation RH (M2, M3)' },
-                    { id: 'poste' as const, label: '3. Poste & Références (M4-M7)' },
-                    { id: 'agence' as const, label: '4. Agence, RGPD & Tests (M8-M15)' }
-                  ].map((dtab) => (
-                    <button
-                      key={dtab.id}
-                      type="button"
-                      onClick={() => setActiveDocEsFormTab(dtab.id)}
-                      className={`px-3 py-1.5 rounded-lg cursor-pointer whitespace-nowrap ${
-                        activeDocEsFormTab === dtab.id
-                          ? 'bg-[#0B2545] text-white'
-                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                      }`}
-                    >
-                      {dtab.label}
-                    </button>
-                  ))}
-                </div>
-
-                {activeDocEsFormTab === 'ats' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">Réf. Dossier ATS</label>
-                      <input
-                        type="text"
-                        value={docEsData.referenceDossier}
-                        onChange={(e) => setDocEsData({ ...docEsData, referenceDossier: e.target.value })}
-                        className="w-full px-3.5 py-2 border border-slate-300 rounded-lg font-mono font-bold text-blue-900"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">Ville / Région</label>
-                      <input
-                        type="text"
-                        value={docEsData.villeRegion}
-                        onChange={(e) => setDocEsData({ ...docEsData, villeRegion: e.target.value })}
-                        className="w-full px-3.5 py-2 border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">Expérience (ans)</label>
-                      <input
-                        type="number"
-                        value={docEsData.anneesExperience}
-                        onChange={(e) =>
-                          setDocEsData({ ...docEsData, anneesExperience: parseInt(e.target.value) || 0 })
-                        }
-                        className="w-full px-3.5 py-2 border border-slate-300 rounded-lg font-bold"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Prétentions salariales
-                      </label>
-                      <input
-                        type="text"
-                        value={docEsData.pretentionsSalariales}
-                        onChange={(e) => setDocEsData({ ...docEsData, pretentionsSalariales: e.target.value })}
-                        className="w-full px-3.5 py-2 border border-slate-300 rounded-lg font-bold text-emerald-800"
-                      />
-                    </div>
-                    <div className="sm:col-span-4">
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Synthèse &amp; Avis Recruteur
-                      </label>
-                      <textarea
-                        rows={2}
-                        value={docEsData.syntheseRecruteur}
-                        onChange={(e) => setDocEsData({ ...docEsData, syntheseRecruteur: e.target.value })}
-                        className="w-full px-3.5 py-2 border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {activeDocEsFormTab === 'evaluation' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Nom de l’évaluateur
-                      </label>
-                      <input
-                        type="text"
-                        value={docEsData.evaluateurNom}
-                        onChange={(e) => setDocEsData({ ...docEsData, evaluateurNom: e.target.value })}
-                        className="w-full px-3.5 py-2 border border-slate-300 rounded-lg font-bold"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">Décision RH</label>
-                      <select
-                        value={docEsData.decisionEvaluation}
-                        onChange={(e) =>
-                          setDocEsData({
-                            ...docEsData,
-                            decisionEvaluation: e.target.value as FichesDocEsData['decisionEvaluation']
-                          })
-                        }
-                        className="w-full px-3.5 py-2 border border-slate-300 rounded-lg bg-white font-bold"
-                      >
-                        <option value="Poursuivre le processus">Poursuivre le processus</option>
-                        <option value="Mettre en attente">Mettre en attente</option>
-                        <option value="Stopper le processus">Stopper le processus</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Commentaire synthèse
-                      </label>
-                      <input
-                        type="text"
-                        value={docEsData.commentairesSyntheseEvaluateur}
-                        onChange={(e) =>
-                          setDocEsData({ ...docEsData, commentairesSyntheseEvaluateur: e.target.value })
-                        }
-                        className="w-full px-3.5 py-2 border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {activeDocEsFormTab === 'poste' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Rattachement hiérarchique
-                      </label>
-                      <input
-                        type="text"
-                        value={docEsData.rattachementHierarchique}
-                        onChange={(e) =>
-                          setDocEsData({ ...docEsData, rattachementHierarchique: e.target.value })
-                        }
-                        className="w-full px-3.5 py-2 border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">Outils métiers</label>
-                      <input
-                        type="text"
-                        value={docEsData.outilsMetiers}
-                        onChange={(e) => setDocEsData({ ...docEsData, outilsMetiers: e.target.value })}
-                        className="w-full px-3.5 py-2 border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">Matériel fourni</label>
-                      <input
-                        type="text"
-                        value={docEsData.materielFourni}
-                        onChange={(e) => setDocEsData({ ...docEsData, materielFourni: e.target.value })}
-                        className="w-full px-3.5 py-2 border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {activeDocEsFormTab === 'agence' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Taux honoraires agence (%)
-                      </label>
-                      <input
-                        type="number"
-                        value={docEsData.tauxHonorairesAgencePct}
-                        onChange={(e) =>
-                          setDocEsData({
-                            ...docEsData,
-                            tauxHonorairesAgencePct: parseFloat(e.target.value) || 0
-                          })
-                        }
-                        className="w-full px-3.5 py-2 border border-slate-300 rounded-lg font-bold"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Garantie remplacement (mois)
-                      </label>
-                      <input
-                        type="number"
-                        value={docEsData.dureeGarantieRemplacementMois}
-                        onChange={(e) =>
-                          setDocEsData({
-                            ...docEsData,
-                            dureeGarantieRemplacementMois: parseInt(e.target.value) || 0
-                          })
-                        }
-                        className="w-full px-3.5 py-2 border border-slate-300 rounded-lg font-bold"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Code Test Personnalité
-                      </label>
-                      <input
-                        type="text"
-                        value={docEsData.codeAccesPersonnalite}
-                        onChange={(e) =>
-                          setDocEsData({ ...docEsData, codeAccesPersonnalite: e.target.value })
-                        }
-                        className="w-full px-3.5 py-2 border border-slate-300 rounded-lg font-mono"
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          <HousingAndDocEsStepWizard
+            activeDocKey={activeHousingFormSubTab}
+            onChangeActiveDocKey={setActiveHousingFormSubTab}
+            housingData={housingData}
+            onChangeHousingData={setHousingData}
+            docEsData={docEsData}
+            onChangeDocEsData={(upd) => {
+              setDocEsData(upd);
+              void saveFichesDocEsData(postulant.id, upd);
+            }}
+            uploadedAssets={uploadedAssets}
+            onUploadAsset={(key, url) => handleUploadAsset(key, url)}
+            layoutTemplates={layoutTemplates}
+            onUpdateLayoutTemplate={(docKey, tpl) =>
+              setLayoutTemplates((prev) => {
+                const next = { ...prev };
+                if (tpl) next[docKey] = tpl;
+                else delete next[docKey];
+                return next;
+              })
+            }
+            verificationCodeRef={postulant.codeIdCandidature}
+            onJumpToStudioTab={(docKey) => {
+              const targetTabMap: Record<LayoutTargetDocKey, ManualTabId> = {
+                t9: 'heb_attestation',
+                t10: 'heb_notaire',
+                t11: 'heb_hir',
+                t12: 'heb_declaration',
+                doc_es: 'doc_es'
+              };
+              setActiveManualTab(targetTabMap[docKey]);
+              triggerToast('Document ouvert dans le Studio Documentaire ci-dessous.');
+            }}
+            onDownloadDocPdf={async (docKey) => {
+              if (docKey === 'doc_es') {
+                const { doc, filename } = generateSingleDocEsPdf(
+                  1,
+                  postulant,
+                  docEsData,
+                  settings,
+                  layoutTemplates.doc_es
+                );
+                doc.save(filename);
+                triggerToast('Fiche DOC ES PDF (mise en page imitée) téléchargée.');
+                return;
+              }
+              const tabNumMap: Record<'t9' | 't10' | 't11' | 't12', HousingTabNumber> = {
+                t9: 9,
+                t10: 10,
+                t11: 11,
+                t12: 12
+              };
+              await handleDownloadHousingTabPdf(tabNumMap[docKey]);
+            }}
+            onDownloadDocWord={async (docKey) => {
+              if (docKey === 'doc_es') return;
+              const tabNumMap: Record<'t9' | 't10' | 't11' | 't12', HousingTabNumber> = {
+                t9: 9,
+                t10: 10,
+                t11: 11,
+                t12: 12
+              };
+              const textKeyMap: Record<'t9' | 't10' | 't11' | 't12', string> = {
+                t9: 'heb_attestation',
+                t10: 'heb_notaire',
+                t11: 'heb_hir',
+                t12: 'heb_declaration'
+              };
+              await downloadHousingTabWordDocx(
+                tabNumMap[docKey],
+                housingData,
+                postulant,
+                customVisualText[textKeyMap[docKey]],
+                layoutTemplates[docKey],
+                uploadedAssets
+              );
+              triggerToast(`Document Word (.docx) généré avec la mise en page imitée et visuels intégrés.`);
+            }}
+            onToast={triggerToast}
+          />
         )}
 
         {/* ========================================================================= */}
@@ -2798,7 +2560,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
 
             <PanneauReglagesFichiersImportes
               assetsConfig={assetsConfig}
-              onChangeConfig={setAssetsConfig}
+              onChangeConfig={handleUpdateAssetsConfig}
               onUploadAsset={handleUploadAsset}
               uploadedAssetUrls={uploadedAssets}
               verificationCodeRef={postulant.codeIdCandidature}
@@ -3062,7 +2824,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             title={`Kit Candidat : ${postulant.nomComplet} (${postulant.intitulePoste})`}
             documentTypeLabel="Onglet 01 · Kit Candidat Officiel"
             assetsConfig={assetsConfig}
-            onChangeAssetsConfig={setAssetsConfig}
+            onChangeAssetsConfig={handleUpdateAssetsConfig}
             uploadedAssetUrls={uploadedAssets}
             exclusiveVisualSet={{
               logo: effectiveEmployerLogo,
@@ -3166,7 +2928,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             }`}
             documentTypeLabel="Onglet 02 · Contrat Légal CRIC"
             assetsConfig={assetsConfig}
-            onChangeAssetsConfig={setAssetsConfig}
+            onChangeAssetsConfig={handleUpdateAssetsConfig}
             uploadedAssetUrls={uploadedAssets}
             exclusiveVisualSet={{
               logo: effectiveEmployerLogo,
@@ -3290,7 +3052,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             title={`Promesse d'Embauche : ${postulant.nomComplet}`}
             documentTypeLabel="Onglet 03 · Promesse d’Embauche"
             assetsConfig={assetsConfig}
-            onChangeAssetsConfig={setAssetsConfig}
+            onChangeAssetsConfig={handleUpdateAssetsConfig}
             uploadedAssetUrls={uploadedAssets}
             exclusiveVisualSet={{
               logo: effectiveEmployerLogo,
@@ -3424,7 +3186,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                 postulant.ticketValide ? 'Onglet 04 · Ticket Officiel Validé' : 'Onglet 04 · Ticket Provisoire'
               }
               assetsConfig={assetsConfig}
-              onChangeAssetsConfig={setAssetsConfig}
+              onChangeAssetsConfig={handleUpdateAssetsConfig}
               uploadedAssetUrls={uploadedAssets}
               exclusiveVisualSet={{
                 logo: effectiveEmployerLogo,
@@ -3543,7 +3305,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             title={`Offre d'Emploi CNP ${postulant.codeCnp} : ${jobOffer.titrePoste}`}
             documentTypeLabel="Onglet 05 · Offre & Avantages BC"
             assetsConfig={assetsConfig}
-            onChangeAssetsConfig={setAssetsConfig}
+            onChangeAssetsConfig={handleUpdateAssetsConfig}
             uploadedAssetUrls={uploadedAssets}
             exclusiveVisualSet={{
               logo: effectiveEmployerLogo,
@@ -3623,7 +3385,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
               title={`${activeDesignModel.title} — ${postulant.nomComplet}`}
               documentTypeLabel="Onglet 06 · 5 Modèles Visuels"
               assetsConfig={assetsConfig}
-              onChangeAssetsConfig={setAssetsConfig}
+              onChangeAssetsConfig={handleUpdateAssetsConfig}
               uploadedAssetUrls={uploadedAssets}
               exclusiveVisualSet={{
                 logo: effectiveEmployerLogo,
@@ -3689,7 +3451,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             title={bundleCoverOptions.titreLivre}
             documentTypeLabel="Onglet 07 · Bundle Livre 4 Pages"
             assetsConfig={assetsConfig}
-            onChangeAssetsConfig={setAssetsConfig}
+            onChangeAssetsConfig={handleUpdateAssetsConfig}
             uploadedAssetUrls={uploadedAssets}
             exclusiveVisualSet={{
               logo: effectiveEmployerLogo,
@@ -3761,6 +3523,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
               saveFichesDocEsData(postulant.id, upd);
             }}
             settings={settings}
+            layoutTemplate={layoutTemplates.doc_es}
             onOpenInWebmail={onOpenInWebmail}
             onToast={triggerToast}
           />

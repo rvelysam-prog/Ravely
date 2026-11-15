@@ -9,6 +9,11 @@ import { PostulantInfo } from './postulantDossierService';
 import { SiteSettings } from '../types';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import {
+  ReferenceLayoutTemplate,
+  hexToRgbTuple,
+  resolveEffectiveLayout
+} from './layoutImitationService';
 
 export interface FichesDocEsData {
   // --- Modèle 1 : Fiche de synthèse (Profil ATS) ---
@@ -886,115 +891,237 @@ export function generateSingleDocEsPdf(
   modelId: number,
   p: PostulantInfo,
   d: FichesDocEsData,
-  settings: SiteSettings
+  settings: SiteSettings,
+  layoutTemplate?: ReferenceLayoutTemplate
 ): { doc: jsPDF; filename: string } {
+  const effective = resolveEffectiveLayout(layoutTemplate);
+  const orientation = effective?.orientation || 'portrait';
+  const pageFormat = effective?.pageFormat || 'a4';
   const doc = new jsPDF({
-    orientation: 'portrait',
+    orientation,
     unit: 'mm',
-    format: 'a4',
+    format: pageFormat,
     compress: true
   });
 
-  const PAGE_WIDTH = 210;
-  const PAGE_HEIGHT = 297;
-  const MARGIN_LEFT = 20;
-  const MARGIN_RIGHT = 20;
+  const PAGE_WIDTH = doc.internal.pageSize.getWidth();
+  const PAGE_HEIGHT = doc.internal.pageSize.getHeight();
+  const isCleanLetterhead = Boolean(
+    effective &&
+      (effective.layoutArchetype === 'letterhead_split' ||
+        effective.borderStyle === 'none' ||
+        effective.headerStyle === 'entete_epure')
+  );
+
+  const MARGIN_LEFT = effective?.marginsMm?.left ?? (isCleanLetterhead ? 18 : 20);
+  const MARGIN_RIGHT = effective?.marginsMm?.right ?? (isCleanLetterhead ? 18 : 20);
+  const MARGIN_TOP = effective?.marginsMm?.top ?? 15;
   const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT;
+  const pdfFont = effective?.fontFamily || 'helvetica';
+  const lineStep =
+    effective?.blockSpacing === 'compact'
+      ? 3.85
+      : effective?.blockSpacing === 'airy'
+      ? 5.0
+      : 4.35;
+
+  const primaryRgb = effective?.primaryColor ? hexToRgbTuple(effective.primaryColor) : ([11, 37, 69] as [number, number, number]);
+  const headerRgb = effective?.headerBgColor ? hexToRgbTuple(effective.headerBgColor) : primaryRgb;
+  const accentRgb = effective?.accentColor ? hexToRgbTuple(effective.accentColor) : ([212, 160, 23] as [number, number, number]);
+  const tintRgb = effective?.highlightTintColor ? hexToRgbTuple(effective.highlightTintColor) : ([216, 243, 235] as [number, number, number]);
+  const bodyRgb = effective?.bodyTextColor ? hexToRgbTuple(effective.bodyTextColor) : ([30, 41, 59] as [number, number, number]);
 
   const rendered = renderDocEsPlainText(modelId, p, d, settings);
 
-  // Cadre élégant
-  doc.setDrawColor(11, 37, 69);
-  doc.setLineWidth(0.8);
-  doc.rect(12, 12, PAGE_WIDTH - 24, PAGE_HEIGHT - 24);
-  doc.setDrawColor(212, 160, 23);
-  doc.setLineWidth(0.3);
-  doc.rect(14, 14, PAGE_WIDTH - 28, PAGE_HEIGHT - 28);
+  if (effective?.pageBgColor && effective.pageBgColor.toUpperCase() !== '#FFFFFF') {
+    doc.setFillColor(...hexToRgbTuple(effective.pageBgColor));
+    doc.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, 'F');
+  }
 
-  // Bandeau supérieur
-  doc.setFillColor(11, 37, 69);
-  doc.rect(15, 15, PAGE_WIDTH - 30, 22, 'F');
+  const drawFrame = () => {
+    if (!effective && !isCleanLetterhead) {
+      doc.setDrawColor(...primaryRgb);
+      doc.setLineWidth(0.8);
+      doc.rect(12, 12, PAGE_WIDTH - 24, PAGE_HEIGHT - 24);
+      doc.setDrawColor(...accentRgb);
+      doc.setLineWidth(0.3);
+      doc.rect(14, 14, PAGE_WIDTH - 28, PAGE_HEIGHT - 28);
+      return;
+    }
+    if (!effective || effective.borderStyle === 'none' || isCleanLetterhead) return;
+    doc.setDrawColor(...primaryRgb);
+    doc.setLineWidth(0.8);
+    doc.rect(12, 12, PAGE_WIDTH - 24, PAGE_HEIGHT - 24);
+    if (effective.borderStyle === 'double' || effective.borderStyle === 'official_band') {
+      doc.setDrawColor(...accentRgb);
+      doc.setLineWidth(0.3);
+      doc.rect(14, 14, PAGE_WIDTH - 28, PAGE_HEIGHT - 28);
+    }
+  };
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(12);
-  doc.setTextColor(255, 255, 255);
-  doc.text(p.nomEntreprise.toUpperCase(), MARGIN_LEFT, 24);
+  drawFrame();
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.setTextColor(212, 160, 23);
-  doc.text(`MODULE FICHES ET DOC ES · MODÈLE ${modelId}`, MARGIN_LEFT, 31);
+  let y = Math.max(16, MARGIN_TOP);
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(220, 230, 242);
-  doc.text(`Réf. Dossier : ${d.referenceDossier}`, PAGE_WIDTH - MARGIN_RIGHT, 24, { align: 'right' });
-  doc.text(`Date : ${p.dateEffet}`, PAGE_WIDTH - MARGIN_RIGHT, 31, { align: 'right' });
+  if (isCleanLetterhead) {
+    // En-tête épuré sans bandeau sombre ni cadre
+    doc.setFont(pdfFont, 'bold');
+    doc.setFontSize(13);
+    doc.setTextColor(...primaryRgb);
+    doc.text(p.nomEntreprise.toUpperCase(), MARGIN_LEFT, y + 4);
+
+    // Repère discret en haut à droite
+    doc.setDrawColor(180, 190, 200);
+    doc.setLineWidth(0.2);
+    doc.rect(PAGE_WIDTH - MARGIN_RIGHT - 3, y, 3, 3);
+    doc.setFillColor(20, 25, 35);
+    doc.rect(PAGE_WIDTH - MARGIN_RIGHT - 2.1, y + 0.9, 1.2, 1.2, 'F');
+
+    y += 12;
+    doc.setFont(pdfFont, 'normal');
+    doc.setFontSize(8.2);
+    doc.setTextColor(71, 85, 105);
+    doc.text(p.adresseEntreprise || 'Canada', MARGIN_LEFT, y);
+    doc.text(`Système ATS · ${p.intitulePoste}`, MARGIN_LEFT, y + 4);
+
+    doc.setFont(pdfFont, 'bold');
+    doc.setTextColor(15, 23, 42);
+    doc.text(`CANDIDAT : ${p.nomComplet.toUpperCase()}`, PAGE_WIDTH - MARGIN_RIGHT, y, { align: 'right' });
+    doc.setFont(pdfFont, 'normal');
+    doc.setTextColor(71, 85, 105);
+    doc.text(`Code ID : ${p.codeIdCandidature}`, PAGE_WIDTH - MARGIN_RIGHT, y + 4, { align: 'right' });
+
+    y += 10;
+    // Pastille pastel Références
+    doc.setFillColor(...tintRgb);
+    doc.roundedRect(MARGIN_LEFT, y, 34, 5.5, 1, 1, 'F');
+    doc.setFont(pdfFont, 'bold');
+    doc.setFontSize(8.2);
+    doc.setTextColor(...primaryRgb);
+    doc.text('Vos références', MARGIN_LEFT + 2, y + 3.8);
+
+    y += 8;
+    doc.setFontSize(8.2);
+    doc.setTextColor(71, 85, 105);
+    doc.setFont(pdfFont, 'normal');
+    doc.text('N° Dossier', MARGIN_LEFT, y);
+    doc.setFont(pdfFont, 'bold');
+    doc.setTextColor(15, 23, 42);
+    doc.text(`: ${d.referenceDossier}`, MARGIN_LEFT + 34, y);
+
+    y += 4.2;
+    doc.setFont(pdfFont, 'normal');
+    doc.setTextColor(71, 85, 105);
+    doc.text('Date d’effet', MARGIN_LEFT, y);
+    doc.setFont(pdfFont, 'bold');
+    doc.setTextColor(15, 23, 42);
+    doc.text(`: ${p.dateEffet} · Modèle ${modelId}`, MARGIN_LEFT + 34, y);
+
+    y += 9;
+  } else {
+    // Bandeau supérieur classique
+    doc.setFillColor(...headerRgb);
+    doc.rect(15, 15, PAGE_WIDTH - 30, 22, 'F');
+
+    doc.setFont(pdfFont, 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(255, 255, 255);
+    doc.text(p.nomEntreprise.toUpperCase(), MARGIN_LEFT, 24);
+
+    doc.setFont(pdfFont, 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(...accentRgb);
+    doc.text(`MODULE FICHES ET DOC ES · MODÈLE ${modelId}`, MARGIN_LEFT, 31);
+
+    doc.setFont(pdfFont, 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(220, 230, 242);
+    doc.text(`Réf. Dossier : ${d.referenceDossier}`, PAGE_WIDTH - MARGIN_RIGHT, 24, { align: 'right' });
+    doc.text(`Date : ${p.dateEffet}`, PAGE_WIDTH - MARGIN_RIGHT, 31, { align: 'right' });
+
+    y = Math.max(46, MARGIN_TOP + 28);
+  }
 
   // Titre du document
-  let y = 46;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
-  doc.setTextColor(11, 37, 69);
-  doc.text(rendered.title, PAGE_WIDTH / 2, y, { align: 'center' });
+  doc.setFont(pdfFont, 'bold');
+  doc.setFontSize(isCleanLetterhead ? 14 : 13);
+  doc.setTextColor(...(isCleanLetterhead ? ([15, 23, 42] as [number, number, number]) : primaryRgb));
+  const alignTitle = effective?.headerAlign === 'left' ? ('left' as const) : ('center' as const);
+  doc.text(rendered.title, alignTitle === 'center' ? PAGE_WIDTH / 2 : MARGIN_LEFT, y, { align: alignTitle });
 
   if (rendered.subtitle) {
     y += 5;
-    doc.setFont('helvetica', 'italic');
+    doc.setFont(pdfFont, isCleanLetterhead ? 'normal' : 'italic');
     doc.setFontSize(8.5);
-    doc.setTextColor(100, 116, 139);
-    doc.text(rendered.subtitle, PAGE_WIDTH / 2, y, { align: 'center' });
+    doc.setTextColor(71, 85, 105);
+    doc.text(
+      isCleanLetterhead ? rendered.subtitle.toUpperCase() : rendered.subtitle,
+      alignTitle === 'center' ? PAGE_WIDTH / 2 : MARGIN_LEFT,
+      y,
+      { align: alignTitle }
+    );
   }
 
-  y += 7;
-  doc.setDrawColor(0, 102, 179);
-  doc.setLineWidth(0.5);
-  doc.line(MARGIN_LEFT, y, PAGE_WIDTH - MARGIN_RIGHT, y);
+  if (!isCleanLetterhead) {
+    y += 7;
+    doc.setDrawColor(...accentRgb);
+    doc.setLineWidth(0.5);
+    doc.line(MARGIN_LEFT, y, PAGE_WIDTH - MARGIN_RIGHT, y);
+  }
 
-  y += 6;
+  y += 6.5;
 
-  // Corps du texte
-  doc.setFont('helvetica', 'normal');
+  // Corps du texte nettoyé
+  const sanitizedContent = rendered.content
+    .replace(/^[=\-_]{4,}\s*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  doc.setFont(pdfFont, 'normal');
   doc.setFontSize(8.5);
-  doc.setTextColor(30, 41, 59);
+  doc.setTextColor(...bodyRgb);
 
-  const lines = doc.splitTextToSize(rendered.content, CONTENT_WIDTH);
+  const lines = doc.splitTextToSize(sanitizedContent, CONTENT_WIDTH);
   for (let i = 0; i < lines.length; i++) {
-    if (y > PAGE_HEIGHT - 25) {
+    if (y > PAGE_HEIGHT - 22) {
       doc.addPage();
-      // Cadre nouvelle page
-      doc.setDrawColor(11, 37, 69);
-      doc.setLineWidth(0.8);
-      doc.rect(12, 12, PAGE_WIDTH - 24, PAGE_HEIGHT - 24);
-      y = 22;
+      drawFrame();
+      y = Math.max(20, MARGIN_TOP);
     }
     const line = lines[i];
-    if (line.startsWith('===') || line.startsWith('---')) {
-      // Ignorer séparateurs ASCII
+    if (/^[=\-_]{3,}/.test(line.trim())) {
       continue;
     }
     if (line.match(/^[0-9]\./) || line.startsWith('CANDIDAT :') || line.startsWith('RÉFÉRENCE') || line.startsWith('VOLET')) {
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor(11, 37, 69);
-      y += 1.5;
+      doc.setFont(pdfFont, 'bold');
+      doc.setTextColor(...primaryRgb);
+      y += 1.2;
     } else {
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(30, 41, 59);
+      doc.setFont(pdfFont, 'normal');
+      doc.setTextColor(...bodyRgb);
     }
     doc.text(line, MARGIN_LEFT, y);
-    y += 4.5;
+    y += lineStep;
   }
 
-  // Pied de page
-  doc.setFont('helvetica', 'italic');
-  doc.setFontSize(7.5);
-  doc.setTextColor(100, 116, 139);
-  doc.text(
-    `${p.nomEntreprise} · Système ATS Certifié · Modèle ${modelId} · Document Officiel`,
-    PAGE_WIDTH / 2,
-    PAGE_HEIGHT - 17,
-    { align: 'center' }
-  );
+  // Pied de page avec pagination exacte
+  const totalPages = doc.getNumberOfPages();
+  for (let pg = 1; pg <= totalPages; pg++) {
+    doc.setPage(pg);
+    doc.setFont(pdfFont, 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      `${p.nomEntreprise} · Système ATS Certifié · Modèle ${modelId} · Document Officiel`,
+      isCleanLetterhead ? MARGIN_LEFT : PAGE_WIDTH / 2,
+      PAGE_HEIGHT - 12,
+      { align: isCleanLetterhead ? 'left' : 'center' }
+    );
+    if (isCleanLetterhead) {
+      doc.setFont(pdfFont, 'bold');
+      doc.text(`${pg}/${totalPages}`, PAGE_WIDTH - MARGIN_RIGHT, PAGE_HEIGHT - 12, { align: 'right' });
+    }
+  }
 
   const safeTitle = rendered.title.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30);
   const filename = `DOC_ES_M${modelId}_${safeTitle}_${p.nom.toUpperCase()}.pdf`;

@@ -31,6 +31,7 @@ import {
 } from '../../services/departmentsAndEmailService';
 import { ForcusWordEditor } from '../admin/ForcusWordEditor';
 import { VisualHtmlEmailConverter } from './VisualHtmlEmailConverter';
+import { ReferenceLayoutTemplate, resolveEffectiveLayout } from '../../services/layoutImitationService';
 
 export interface InteractiveCanvasProps {
   title: string;
@@ -47,6 +48,7 @@ export interface InteractiveCanvasProps {
     barcode?: string;
     qrcode?: string;
   };
+  layoutTemplate?: ReferenceLayoutTemplate;
   htmlEmailContent: string;
   onDownloadPdf?: () => void;
   onDownloadWord?: () => void;
@@ -56,6 +58,7 @@ export interface InteractiveCanvasProps {
   onTextEdited?: (editedText: string) => void;
   onResetText?: () => void;
   hasCustomText?: boolean;
+  hideGenericChrome?: boolean;
   children: React.ReactNode;
 }
 
@@ -89,6 +92,7 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
   assetsConfig,
   uploadedAssetUrls = {},
   exclusiveVisualSet,
+  layoutTemplate,
   htmlEmailContent,
   onDownloadPdf,
   onDownloadWord,
@@ -98,8 +102,10 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
   onTextEdited,
   onResetText,
   hasCustomText = false,
+  hideGenericChrome = false,
   children
 }) => {
+  const effectiveLayout = resolveEffectiveLayout(layoutTemplate);
   // Vue par défaut : Document A4 Direct (immédiatement lisible et éditable pour les débutants)
   const [viewMode, setViewMode] = useState<CanvasViewMode>('a4');
   const [captureSignal, setCaptureSignal] = useState<number>(1);
@@ -180,6 +186,11 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
               <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-[#134074] text-amber-200 border border-amber-400/30 whitespace-nowrap">
                 {documentTypeLabel}
               </span>
+              {effectiveLayout && (
+                <span className="text-[11px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-200 border border-emerald-400/30 whitespace-nowrap">
+                  Modèle imité : {effectiveLayout.sourceFileName}
+                </span>
+              )}
             </div>
             <p className="text-xs text-blue-100/90 mt-1">
               Cliquez directement sur la feuille A4 pour modifier le texte, passez en Aperçu Email, ou lancez FORCUS Word.
@@ -444,9 +455,30 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
           onClick={() => {
             if (floatingMenu) setFloatingMenu(null);
           }}
-          className="w-[794px] min-h-[1122px] bg-white text-slate-900 shadow-lg rounded-sm p-10 sm:p-12 relative border border-slate-300 flex flex-col justify-between"
+          className="shadow-lg rounded-sm relative flex flex-col justify-between transition-all"
           style={{
-            fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif'
+            width: effectiveLayout?.orientation === 'landscape' ? '1050px' : '794px',
+            minHeight: effectiveLayout?.orientation === 'landscape' ? '794px' : '1122px',
+            backgroundColor: effectiveLayout?.pageBgColor || '#ffffff',
+            color: effectiveLayout?.bodyTextColor || '#0f172a',
+            paddingTop: effectiveLayout ? `${Math.round(effectiveLayout.marginsMm.top * 2.8)}px` : '44px',
+            paddingRight: effectiveLayout ? `${Math.round(effectiveLayout.marginsMm.right * 2.8)}px` : '44px',
+            paddingBottom: effectiveLayout ? `${Math.round(effectiveLayout.marginsMm.bottom * 2.8)}px` : '44px',
+            paddingLeft: effectiveLayout ? `${Math.round(effectiveLayout.marginsMm.left * 2.8)}px` : '44px',
+            border:
+              effectiveLayout?.borderStyle === 'double'
+                ? `4px double ${effectiveLayout.borderColor || '#0B2545'}`
+                : effectiveLayout?.borderStyle === 'simple'
+                ? `2px solid ${effectiveLayout.borderColor || '#0B2545'}`
+                : effectiveLayout?.borderStyle === 'official_band'
+                ? `3px solid ${effectiveLayout.primaryColor || '#0B2545'}`
+                : '1px solid #e2e8f0',
+            fontFamily:
+              effectiveLayout?.fontFamily === 'times'
+                ? 'Georgia, "Times New Roman", Times, serif'
+                : effectiveLayout?.fontFamily === 'courier'
+                ? '"Courier New", Courier, monospace'
+                : 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif'
           }}
         >
           {floatingMenu && (
@@ -546,9 +578,17 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
           )}
 
           {/* En-tête Logo Acteur + Contenu Principal */}
-          <div className="relative z-10 space-y-5">
-            {activeLogo && (
-              <div className="flex items-center justify-between border-b border-slate-200 pb-4">
+          <div className="relative z-10 space-y-5 flex-1 flex flex-col">
+            {!hideGenericChrome && activeLogo && (
+              <div
+                className={`flex items-center border-b border-slate-200 pb-4 ${
+                  effectiveLayout?.logoPlacement === 'top_right'
+                    ? 'flex-row-reverse justify-between'
+                    : effectiveLayout?.logoPlacement === 'top_center'
+                    ? 'flex-col justify-center gap-2 text-center'
+                    : 'justify-between'
+                }`}
+              >
                 <img
                   src={activeLogo}
                   alt="Logo officiel"
@@ -563,7 +603,15 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
 
             <div
               ref={editableWrapperRef}
-              className="outline-none"
+              className="outline-none flex-1 flex flex-col"
+              style={{
+                lineHeight:
+                  effectiveLayout?.blockSpacing === 'compact'
+                    ? 1.42
+                    : effectiveLayout?.blockSpacing === 'airy'
+                    ? 1.85
+                    : 1.55
+              }}
               onInput={(e) => {
                 const target = e.currentTarget as HTMLElement;
                 if (onTextEdited) {
@@ -576,7 +624,7 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
           </div>
 
           {/* Pied de page visuel avec Signature, Cachet, Code-Barres, QR Code */}
-          {(activeSignature || activeCachet || activeBarcode || activeQrCode) && (
+          {!hideGenericChrome && (activeSignature || activeCachet || activeBarcode || activeQrCode) && (
             <div className="relative z-10 mt-8 pt-5 border-t border-slate-200 flex items-end justify-between gap-4">
               <div className="flex items-end gap-6">
                 {activeSignature && (

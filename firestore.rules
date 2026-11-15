@@ -52,6 +52,12 @@ service cloud.firestore {
         data.title is string && data.title.size() >= 1 && data.title.size() <= 300;
     }
 
+    function isValidLayoutTemplate(data) {
+      return data.keys().hasAll(['docKey', 'sourceFileName']) &&
+        data.docKey is string && data.docKey.size() >= 1 && data.docKey.size() <= 32 &&
+        data.sourceFileName is string && data.sourceFileName.size() >= 1 && data.sourceFileName.size() <= 200;
+    }
+
     match /employees/{employeeId} {
       allow get: if isValidId(employeeId);
       allow list: if true;
@@ -121,6 +127,14 @@ service cloud.firestore {
       allow create: if isValidId(docId) && isValidPublicDocument(incoming());
       allow update: if isValidId(docId) && isValidPublicDocument(incoming());
       allow delete: if isValidId(docId);
+    }
+
+    match /document_layout_templates/{templateId} {
+      allow get: if isValidId(templateId);
+      allow list: if true;
+      allow create: if isValidId(templateId) && isValidLayoutTemplate(incoming());
+      allow update: if isValidId(templateId) && isValidLayoutTemplate(incoming());
+      allow delete: if isValidId(templateId);
     }
 
     match /test/{docId} {
