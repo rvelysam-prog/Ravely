@@ -6,6 +6,7 @@
  */
 
 import * as pdfjsLib from 'pdfjs-dist';
+import Tesseract from 'tesseract.js';
 import { collection, doc, getDocs, setDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import {
@@ -64,6 +65,29 @@ export interface SpatialBlueprint {
   hasTopRightMarker: boolean;
 }
 
+export interface ExtractedTextLineBlock {
+  id: string;
+  text: string;
+  xPct: number;
+  yPct: number;
+  wPct: number;
+  hPct: number;
+  fontSizePt: number;
+  isBold: boolean;
+  align: 'left' | 'center' | 'right';
+}
+
+export interface ExtractedVisualSlot {
+  id: string;
+  type: DetectedRefElement;
+  label: string;
+  xPct: number;
+  yPct: number;
+  wPct: number;
+  hPct: number;
+  previewDataUrl?: string;
+}
+
 export interface ReferenceLayoutTemplate {
   docKey: LayoutTargetDocKey;
   sourceFileName: string;
@@ -105,6 +129,9 @@ export interface ReferenceLayoutTemplate {
   detectedElements: DetectedRefElement[];
   ignoredMissingElements: DetectedRefElement[];
   detectedSummary: string;
+  extractedTextBlocks?: ExtractedTextLineBlock[];
+  extractedVisualSlots?: ExtractedVisualSlot[];
+  interactiveHtmlTemplate?: string;
 }
 
 export function mixHexWithWhite(hex: string, whiteRatio = 0.86): string {
@@ -419,6 +446,7 @@ interface PdfTextZonesInsight {
   hasBottomCenterText: boolean;
   hasFooterStrip: boolean;
   lineCount: number;
+  textBlocks: ExtractedTextLineBlock[];
 }
 
 async function renderFileToAnalysisCanvas(file: File): Promise<{
@@ -493,9 +521,11 @@ async function renderFileToAnalysisCanvas(file: File): Promise<{
       interface ParsedSpan {
         text: string;
         xPct: number;
+        xEndPct: number;
         xCenterPct: number;
         yPctTop: number;
         fontSize: number;
+        isBold: boolean;
       }
       const parsedSpans: ParsedSpan[] = [];
 
@@ -507,11 +537,15 @@ async function renderFileToAnalysisCanvas(file: File): Promise<{
         const fontSize = Math.abs(item.transform[0] || item.height || 10);
         const w = item.width || text.length * fontSize * 0.45;
 
-        const xPct = tx / pw;
-        const yPctTop = 1 - ty / ph;
+        const xPct = Math.max(0.01, Math.min(0.95, tx / pw));
+        const xEndPct = Math.max(xPct + 0.02, Math.min(0.98, (tx + w) / pw));
+        const yPctTop = Math.max(0.01, Math.min(0.98, 1 - ty / ph));
         const xCenterPct = (tx + w / 2) / pw;
+        const fontNameLower = (item.fontName || '').toLowerCase();
+        const styleFontLower = (textContent.styles?.[item.fontName || '']?.fontFamily || '').toLowerCase();
+        const isBold = fontNameLower.includes('bold') || fontNameLower.includes('black') || styleFontLower.includes('bold') || fontSize >= 13;
 
-        parsedSpans.push({ text, xPct, xCenterPct, yPctTop, fontSize });
+        parsedSpans.push({ text, xPct, xEndPct, xCenterPct, yPctTop, fontSize, isBold });
 
         if (item.fontName && textContent.styles?.[item.fontName]) {
           const ff = (textContent.styles[item.fontName].fontFamily || '').toLowerCase();
@@ -544,6 +578,45 @@ async function renderFileToAnalysisCanvas(file: File): Promise<{
         }
         if (yPctTop > 0.87) {
           footerStripCount++;
+        }
+      }
+
+      // Regrouper les spans PDF proches sur la même ligne (sans fusionner deux colonnes distinctes)
+      const sortedSpans = [...parsedSpans].sort((a, b) =>
+        Math.abs(a.yPctTop - b.yPctTop) > 0.008 ? a.yPctTop - b.yPctTop : a.xPct - b.xPct
+      );
+      const groupedBlocks: ExtractedTextLineBlock[] = [];
+      for (const sp of sortedSpans) {
+        const prev = groupedBlocks[groupedBlocks.length - 1];
+        if (
+          prev &&
+          Math.abs(prev.yPct * 0.01 - sp.yPctTop) <= 0.011 &&
+          sp.xPct - (prev.xPct * 0.01 + prev.wPct * 0.01) <= 0.065
+        ) {
+          prev.text = `${prev.text} ${sp.text}`.replace(/\s+/g, ' ').trim();
+          const endPct = Math.max(prev.xPct + prev.wPct, sp.xEndPct * 100);
+          prev.wPct = Math.min(94, Math.max(8, endPct - prev.xPct));
+          prev.fontSizePt = Math.max(prev.fontSizePt, Math.round(sp.fontSize * 10) / 10);
+          prev.isBold = prev.isBold || sp.isBold;
+        } else {
+          const wPct = Math.max(8, Math.min(92, (sp.xEndPct - sp.xPct) * 100));
+          const align: 'left' | 'center' | 'right' =
+            sp.xPct > 0.56
+              ? 'right'
+              : Math.abs(sp.xCenterPct - 0.5) <= 0.08 && sp.xPct >= 0.16 && wPct >= 18
+              ? 'center'
+              : 'left';
+          groupedBlocks.push({
+            id: `pdf_txt_${groupedBlocks.length + 1}`,
+            text: sp.text,
+            xPct: Math.round(sp.xPct * 1000) / 10,
+            yPct: Math.round(sp.yPctTop * 1000) / 10,
+            wPct: Math.round(wPct * 10) / 10,
+            hPct: Math.round(Math.max(1.8, (sp.fontSize / ph) * 140) * 10) / 10,
+            fontSizePt: Math.round(Math.max(7.5, Math.min(28, sp.fontSize)) * 10) / 10,
+            isBold: sp.isBold,
+            align
+          });
         }
       }
 
@@ -600,7 +673,8 @@ async function renderFileToAnalysisCanvas(file: File): Promise<{
         hasBottomRightText: bottomRightCount >= 1,
         hasBottomCenterText: bottomCenterCount >= 1,
         hasFooterStrip: footerStripCount >= 1,
-        lineCount: parsedSpans.length
+        lineCount: parsedSpans.length,
+        textBlocks: groupedBlocks.slice(0, 95)
       };
     } catch {
       // Fallback sur analyse canvas si getTextContent indisponible
@@ -1220,6 +1294,87 @@ export async function analyzeReferenceDocumentFile(
     detectedElements.push('qrcode');
   }
 
+  // Détection et extraction compacte des emplacements visuels du modèle (Logo, Signature, Tampon, QR)
+  const cropSlotPreview = (xPct: number, yPct: number, wPct: number, hPct: number): string | undefined => {
+    try {
+      const sx = Math.max(0, Math.round(w * xPct));
+      const sy = Math.max(0, Math.round(h * yPct));
+      const sw = Math.max(24, Math.min(w - sx, Math.round(w * wPct)));
+      const sh = Math.max(24, Math.min(h - sy, Math.round(h * hPct)));
+      const sliceCanvas = document.createElement('canvas');
+      const maxDim = 180;
+      const sc = Math.min(1, maxDim / Math.max(sw, sh));
+      sliceCanvas.width = Math.max(16, Math.round(sw * sc));
+      sliceCanvas.height = Math.max(16, Math.round(sh * sc));
+      const sctx = sliceCanvas.getContext('2d');
+      if (!sctx) return undefined;
+      sctx.fillStyle = '#ffffff';
+      sctx.fillRect(0, 0, sliceCanvas.width, sliceCanvas.height);
+      sctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, sliceCanvas.width, sliceCanvas.height);
+      return sliceCanvas.toDataURL('image/jpeg', 0.72);
+    } catch {
+      return undefined;
+    }
+  };
+
+  const extractedVisualSlots: ExtractedVisualSlot[] = [];
+  if (detectedElements.includes('logo')) {
+    const lx = logoPlacement === 'top_right' ? 0.68 : logoPlacement === 'top_center' ? 0.36 : 0.05;
+    extractedVisualSlots.push({
+      id: 'slot_logo',
+      type: 'logo',
+      label: 'Logo / En-tête (cliquez pour changer)',
+      xPct: lx * 100,
+      yPct: 3.5,
+      wPct: 24,
+      hPct: 9,
+      previewDataUrl: cropSlotPreview(lx, 0.025, 0.25, 0.10)
+    });
+  }
+  if (detectedElements.includes('signature')) {
+    const sx = signatureLayout === 'left_block' ? 0.07 : 0.56;
+    extractedVisualSlots.push({
+      id: 'slot_signature',
+      type: 'signature',
+      label: 'Signature manuscrite',
+      xPct: sx * 100,
+      yPct: 73,
+      wPct: 22,
+      hPct: 8,
+      previewDataUrl: cropSlotPreview(sx, 0.71, 0.24, 0.11)
+    });
+  }
+  if (detectedElements.includes('cachet')) {
+    const cx = signatureLayout === 'left_block' ? 0.30 : 0.78;
+    extractedVisualSlots.push({
+      id: 'slot_cachet',
+      type: 'cachet',
+      label: 'Cachet / Tampon officiel',
+      xPct: cx * 100,
+      yPct: 72,
+      wPct: 14,
+      hPct: 10,
+      previewDataUrl: cropSlotPreview(cx, 0.70, 0.15, 0.12)
+    });
+  }
+  if (detectedElements.includes('qrcode')) {
+    extractedVisualSlots.push({
+      id: 'slot_qrcode',
+      type: 'qrcode',
+      label: 'QR Code vérification',
+      xPct: 6,
+      yPct: 86.5,
+      wPct: 8,
+      hPct: 8,
+      previewDataUrl: cropSlotPreview(0.04, 0.85, 0.11, 0.11)
+    });
+  }
+
+  let extractedTextBlocks: ExtractedTextLineBlock[] = pdfTextZones?.textBlocks || [];
+  if (fileType === 'image' && extractedTextBlocks.length === 0) {
+    extractedTextBlocks = await runFastOcrOnCanvas(canvas);
+  }
+
   const previewThumbnailUrl = createCompressedThumbnail(canvas);
 
   const headerNameMap: Record<SpatialBlueprint['headerLayout'], string> = {
@@ -1249,7 +1404,7 @@ export async function analyzeReferenceDocumentFile(
     `${detectedElements.length} visuel(s)`
   ];
 
-  return {
+  const baseTemplate: ReferenceLayoutTemplate = {
     docKey,
     sourceFileName: file.name,
     sourceFileType: fileType,
@@ -1294,8 +1449,402 @@ export async function analyzeReferenceDocumentFile(
     spatialBlueprint,
     detectedElements,
     ignoredMissingElements: [],
-    detectedSummary: summaryParts.join(' · ')
+    detectedSummary: summaryParts.join(' · '),
+    extractedTextBlocks,
+    extractedVisualSlots
   };
+
+  baseTemplate.interactiveHtmlTemplate = buildInteractiveHtmlTemplate(baseTemplate);
+  return baseTemplate;
+}
+
+function escapeHtmlSafe(str: string): string {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+async function runFastOcrOnCanvas(canvas: HTMLCanvasElement, timeoutMs = 6500): Promise<ExtractedTextLineBlock[]> {
+  try {
+    const ocrPromise = Tesseract.recognize(canvas, 'fra+eng');
+    const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs));
+    const result = await Promise.race([ocrPromise, timeoutPromise]);
+    if (!result) return [];
+
+    const dataAny = result.data as unknown as {
+      lines?: Array<{ text?: string; bbox?: { x0: number; y0: number; x1: number; y1: number } }>;
+      text?: string;
+    };
+
+    const cw = Math.max(1, canvas.width);
+    const ch = Math.max(1, canvas.height);
+    const blocks: ExtractedTextLineBlock[] = [];
+
+    if (Array.isArray(dataAny?.lines) && dataAny.lines.length > 0) {
+      for (const line of dataAny.lines) {
+        const clean = (line.text || '').replace(/\s+/g, ' ').trim();
+        if (clean.length < 2 || !line.bbox) continue;
+        const xPct = Math.max(2, Math.min(92, (line.bbox.x0 / cw) * 100));
+        const yPct = Math.max(2, Math.min(95, (line.bbox.y0 / ch) * 100));
+        const wPct = Math.max(10, Math.min(92, ((line.bbox.x1 - line.bbox.x0) / cw) * 100));
+        const hPx = Math.max(10, line.bbox.y1 - line.bbox.y0);
+        const hPct = Math.max(1.8, Math.min(10, (hPx / ch) * 100));
+        const fontSizePt = Math.max(8, Math.min(22, Math.round((hPx / ch) * 842 * 0.72 * 10) / 10));
+        const centerPct = xPct + wPct / 2;
+        const align: 'left' | 'center' | 'right' =
+          xPct > 54 ? 'right' : Math.abs(centerPct - 50) < 9 && xPct > 15 ? 'center' : 'left';
+        blocks.push({
+          id: `ocr_txt_${blocks.length + 1}`,
+          text: clean,
+          xPct: Math.round(xPct * 10) / 10,
+          yPct: Math.round(yPct * 10) / 10,
+          wPct: Math.round(wPct * 10) / 10,
+          hPct: Math.round(hPct * 10) / 10,
+          fontSizePt,
+          isBold: fontSizePt >= 12.5 || clean === clean.toUpperCase(),
+          align
+        });
+      }
+      return blocks.slice(0, 95);
+    }
+
+    const lines = (dataAny?.text || '')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length >= 2)
+      .slice(0, 42);
+    lines.forEach((txt, idx) => {
+      blocks.push({
+        id: `ocr_txt_${idx + 1}`,
+        text: txt,
+        xPct: 8,
+        yPct: Math.min(92, 12 + idx * 3.1),
+        wPct: 84,
+        hPct: 2.5,
+        fontSizePt: idx < 3 ? 12 : 10,
+        isBold: idx < 3,
+        align: idx === 2 ? 'center' : 'left'
+      });
+    });
+    return blocks;
+  } catch {
+    return [];
+  }
+}
+
+export async function regenerateInteractiveHtmlWithOcr(
+  template: ReferenceLayoutTemplate
+): Promise<ReferenceLayoutTemplate> {
+  let blocks = template.extractedTextBlocks || [];
+  if (template.previewThumbnailUrl) {
+    try {
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error('Miniature introuvable'));
+        el.src = template.previewThumbnailUrl;
+      });
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth || 540;
+      c.height = img.naturalHeight || 760;
+      const ctx = c.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(img, 0, 0);
+        const ocrBlocks = await runFastOcrOnCanvas(c, 12000);
+        if (ocrBlocks.length > 0) {
+          blocks = ocrBlocks;
+        }
+      }
+    } catch {
+      // Conserver les blocs existants
+    }
+  }
+  const updated: ReferenceLayoutTemplate = {
+    ...template,
+    extractedTextBlocks: blocks
+  };
+  updated.interactiveHtmlTemplate = buildInteractiveHtmlTemplate(updated);
+  return updated;
+}
+
+/**
+ * Génère un fichier HTML/CSS/JS autonome haute fidélité (style Canva / Figma)
+ * sans image plate en arrière-plan : chaque texte est directement éditable
+ * (contenteditable="true") et chaque image/tampon/logo est remplaçable au clic,
+ * avec un bouton « Aperçu annoté » activant les cadres rouges et étiquettes.
+ */
+export function buildInteractiveHtmlTemplate(tpl: ReferenceLayoutTemplate): string {
+  const effective = resolveEffectiveLayout(tpl) || tpl;
+  const bp = effective.spatialBlueprint || buildBlueprintFromLegacyTemplate(tpl);
+  const primary = effective.primaryColor || '#0B2545';
+  const accent = effective.accentColor || '#0066B3';
+  const tint = effective.highlightTintColor || '#E8F2FF';
+  const pageBg = effective.pageBgColor || '#FFFFFF';
+
+  const isLandscape = tpl.orientation === 'landscape';
+  const wMm = isLandscape ? (tpl.pageFormat === 'letter' ? 279.4 : 297) : tpl.pageFormat === 'letter' ? 215.9 : 210;
+  const hMm = isLandscape ? (tpl.pageFormat === 'letter' ? 215.9 : 210) : tpl.pageFormat === 'letter' ? 279.4 : 297;
+
+  const fontStack =
+    tpl.fontFamily === 'times'
+      ? "'Source Serif 4', Georgia, serif"
+      : tpl.fontFamily === 'courier'
+      ? "'IBM Plex Mono', monospace"
+      : "'Plus Jakarta Sans', system-ui, -apple-system, sans-serif";
+
+  const blocks = tpl.extractedTextBlocks && tpl.extractedTextBlocks.length > 0 ? tpl.extractedTextBlocks : [];
+  const slots = tpl.extractedVisualSlots || [];
+
+  const textBlocksHtml =
+    blocks.length > 0
+      ? blocks
+          .map(
+            (b, idx) => `<div
+        id="${escapeHtmlSafe(b.id)}"
+        class="editable-text-abs"
+        contenteditable="true"
+        data-editable="text"
+        data-callout="${idx === 0 ? 'Cliquez pour modifier l’en-tête' : 'Cliquez pour éditer ce texte'}"
+        style="left:${b.xPct}%;top:${b.yPct}%;width:${Math.max(12, Math.min(92 - b.xPct, b.wPct + 4))}%;font-size:${b.fontSizePt}pt;font-weight:${
+              b.isBold ? 700 : 400
+            };text-align:${b.align};color:${
+              b.yPct < 14 && bp.headerLayout === 'filled_banner' ? '#FFFFFF' : b.isBold && b.fontSizePt >= 13 ? primary : effective.bodyTextColor || '#1E293B'
+            };"
+      >${escapeHtmlSafe(b.text)}</div>`
+          )
+          .join('\n')
+      : `<div class="structured-fallback">
+          <div class="doc-header ${bp.headerLayout === 'filled_banner' ? 'is-banner' : ''}">
+            <div class="hdr-left">
+              <div contenteditable="true" data-editable="text" data-callout="Modifier le nom d’organisation" class="org-name">ORGANISATION / ENTREPRISE</div>
+              <div contenteditable="true" data-editable="text" data-callout="Modifier les coordonnées" class="org-sub">Adresse complète · Téléphone · Courriel officiel</div>
+            </div>
+            <div class="hdr-right">
+              <div contenteditable="true" data-editable="text" data-callout="Modifier la référence" class="doc-ref">RÉF. OFFICIELLE · ${escapeHtmlSafe(
+                tpl.sourceFileName
+              )}</div>
+            </div>
+          </div>
+
+          <div class="meta-grid">
+            <div class="meta-col">
+              ${
+                bp.hasRefPill
+                  ? '<span contenteditable="true" data-editable="text" data-callout="Modifier l’étiquette" class="ref-pill">VOS RÉFÉRENCES</span>'
+                  : ''
+              }
+              <div contenteditable="true" data-editable="text" data-callout="Modifier les références" class="meta-lines">N° Dossier : REF-2026-001\nDate d’émission : 15 novembre 2026\nService émetteur : Direction Générale</div>
+            </div>
+            <div class="meta-col right">
+              <div contenteditable="true" data-editable="text" data-callout="Modifier le destinataire" class="meta-lines"><strong>À l’attention de :</strong>\nNom &amp; Prénom du Bénéficiaire\nAdresse complète du destinataire</div>
+            </div>
+          </div>
+
+          <div class="title-zone">
+            <h1 contenteditable="true" data-editable="text" data-callout="Modifier le titre principal">${
+              bp.titleUppercase ? 'DOCUMENT OFFICIEL DE RÉFÉRENCE' : 'Document officiel de référence'
+            }</h1>
+            <p contenteditable="true" data-editable="text" data-callout="Modifier le sous-titre" class="subtitle">Sous-titre réglementaire et objet du document</p>
+          </div>
+
+          <div contenteditable="true" data-editable="text" data-callout="Modifier le corps du texte" class="body-prose">
+            <p>Je soussigné(e), représentant dûment habilité, atteste par la présente des informations et engagements stipulés dans ce document modèle reproduit fidèlement.</p>
+            <p>Cliquez directement sur n’importe quel paragraphe, tableau ou zone d’image pour adapter ce modèle à votre dossier tout en conservant sa mise en page exacte.</p>
+          </div>
+
+          <div class="sig-zone">
+            <div contenteditable="true" data-editable="text" data-callout="Modifier lieu et date" class="sig-left">Fait à Surrey, BC, le ........................</div>
+            <div contenteditable="true" data-editable="text" data-callout="Modifier signataire" class="sig-right"><strong>Pour l’organisme, par délégation :</strong><br/>Nom &amp; Fonction du Signataire</div>
+          </div>
+        </div>`;
+
+  const visualSlotsHtml = slots
+    .map((slot, i) => {
+      const hasThumb = Boolean(slot.previewDataUrl);
+      return `<label
+      class="editable-img-slot"
+      data-editable="image"
+      data-callout="${escapeHtmlSafe(slot.label)}"
+      style="left:${slot.xPct}%;top:${slot.yPct}%;width:${slot.wPct}%;height:${slot.hPct}%;"
+      title="Cliquez pour importer ou remplacer : ${escapeHtmlSafe(slot.label)}"
+    >
+      ${
+        hasThumb
+          ? `<img id="slot_img_${i}" src="${slot.previewDataUrl}" alt="${escapeHtmlSafe(slot.label)}" />`
+          : `<span class="slot-placeholder">+ ${escapeHtmlSafe(slot.label)}</span>`
+      }
+      <input type="file" accept="image/*" onchange="window.__swapSlotImage(this, 'slot_img_${i}')" />
+    </label>`;
+    })
+    .join('\n');
+
+  const headerBarCss =
+    bp.headerLayout === 'filled_banner'
+      ? `.doc-header.is-banner { background:${primary}; color:#fff; padding:14px 18px; border-bottom:4px solid ${accent}; } .top-banner-bg{position:absolute;left:0;right:0;top:0;height:${Math.max(
+          10,
+          bp.headerBannerHeightMm || 18
+        )}mm;background:${primary};pointer-events:none;}`
+      : bp.headerLayout === 'top_accent_bar'
+      ? `.top-banner-bg{position:absolute;left:0;right:0;top:0;height:4mm;background:${primary};pointer-events:none;}`
+      : '';
+
+  const outerBorderCss =
+    tpl.borderStyle === 'double'
+      ? `outline: 3px double ${primary}; outline-offset: -8mm;`
+      : tpl.borderStyle === 'simple'
+      ? `outline: 1.5px solid ${primary}; outline-offset: -8mm;`
+      : bp.hasLeftAccentStripe
+      ? `border-left: 7px solid ${primary};`
+      : '';
+
+  return `<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Modèle Interactif — ${escapeHtmlSafe(tpl.sourceFileName)}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;600;700;800&family=Source+Serif+4:wght@400;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root { --primary: ${primary}; --accent: ${accent}; --tint: ${tint}; --page-bg: ${pageBg}; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 66px 16px 36px; background: #e2e8f0;
+      font-family: ${fontStack}; color: #1e293b;
+    }
+    .studio-toolbar {
+      position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 9999;
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      background: #0b2545; color: #fff; padding: 8px 14px; border-radius: 12px;
+      box-shadow: 0 12px 28px rgba(11,37,69,0.28); font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+    .studio-toolbar button {
+      border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.1); color: #fff;
+      padding: 7px 12px; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer;
+    }
+    .studio-toolbar button:hover { background: rgba(255,255,255,0.2); }
+    .studio-toolbar button.active { background: #dc2626; border-color: #fca5a5; }
+    .studio-toolbar button.primary { background: #f59e0b; color: #0f172a; border-color: #fbbf24; }
+    .sheet {
+      position: relative; width: ${wMm}mm; min-height: ${hMm}mm; margin: 0 auto;
+      background: var(--page-bg); box-shadow: 0 18px 42px rgba(15,23,42,0.18);
+      padding: ${tpl.marginsMm.top}mm ${tpl.marginsMm.right}mm ${tpl.marginsMm.bottom}mm ${tpl.marginsMm.left}mm;
+      overflow: hidden; ${outerBorderCss}
+    }
+    ${headerBarCss}
+    .editable-text-abs {
+      position: absolute; z-index: 15; line-height: 1.32; padding: 2px 4px; border-radius: 3px;
+      outline: 1px dashed transparent; transition: outline-color .15s, background .15s; white-space: pre-wrap;
+    }
+    [data-editable]:hover { outline: 1.5px dashed #0284c7 !important; background: rgba(224,242,254,0.35); }
+    [data-editable]:focus { outline: 2px solid #0284c7 !important; background: rgba(254,249,195,0.45); }
+    .editable-img-slot {
+      position: absolute; z-index: 20; display: flex; align-items: center; justify-content: center;
+      cursor: pointer; border: 1.5px dashed rgba(148,163,184,0.65); border-radius: 6px;
+      background: rgba(255,255,255,0.72); overflow: hidden; padding: 3px;
+    }
+    .editable-img-slot img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .editable-img-slot input { display: none; }
+    .slot-placeholder { font-size: 10px; font-weight: 700; color: #0b2545; text-align: center; padding: 4px; }
+    .structured-fallback { position: relative; z-index: 15; display: flex; flex-direction: column; gap: 18px; }
+    .doc-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; border-bottom: 2px solid var(--accent); padding-bottom: 10px; }
+    .org-name { font-size: 16pt; font-weight: 800; color: var(--primary); }
+    .org-sub { font-size: 9pt; color: #475569; margin-top: 4px; white-space: pre-line; }
+    .doc-ref { font-size: 9.5pt; font-weight: 700; color: var(--primary); text-align: right; }
+    .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; font-size: 9.5pt; }
+    .meta-col.right { text-align: right; }
+    .meta-lines { white-space: pre-line; line-height: 1.5; }
+    .ref-pill { display: inline-block; background: var(--tint); color: var(--primary); font-weight: 700; padding: 3px 9px; border-radius: 4px; margin-bottom: 6px; }
+    .title-zone { text-align: ${bp.titleAlign}; padding: ${bp.titleHasBox ? '10px 14px' : '6px 0'}; background: ${bp.titleHasBox ? 'var(--tint)' : 'transparent'}; border: ${bp.titleHasBox ? '1.5px solid var(--primary)' : 'none'}; }
+    .title-zone h1 { margin: 0; font-size: 15pt; color: var(--primary); }
+    .title-zone .subtitle { margin: 4px 0 0; font-size: 9.5pt; color: #475569; text-transform: uppercase; letter-spacing: .04em; }
+    .body-prose { font-size: 10.5pt; line-height: 1.62; color: #1e293b; }
+    .sig-zone { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 24px; padding-top: 14px; border-top: 1px solid #cbd5e1; font-size: 10pt; }
+    .sig-right { text-align: right; }
+
+    /* Mode Aperçu Annoté (Cadres rouges & étiquettes style Canva) */
+    body.annotated-mode [data-editable]:not(.editable-text-abs):not(.editable-img-slot) {
+      position: relative;
+    }
+    body.annotated-mode [data-editable] {
+      outline: 2px dashed #dc2626 !important;
+      outline-offset: 2px;
+      background: rgba(254,226,226,0.22) !important;
+    }
+    body.annotated-mode [data-editable]::after {
+      content: "✎ " attr(data-callout);
+      position: absolute; top: -18px; left: 0;
+      background: #dc2626; color: #fff; font-size: 9px; font-weight: 700;
+      padding: 1px 6px; border-radius: 4px; white-space: nowrap; z-index: 50;
+      pointer-events: none; box-shadow: 0 2px 6px rgba(220,38,38,0.35);
+    }
+
+    @media print {
+      body { margin: 0; padding: 0; background: #fff; }
+      .studio-toolbar { display: none !important; }
+      .sheet { box-shadow: none; margin: 0; width: 100%; min-height: auto; }
+      [data-editable], body.annotated-mode [data-editable] {
+        outline: none !important; background: transparent !important; border-color: transparent !important;
+      }
+      body.annotated-mode [data-editable]::after { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="studio-toolbar">
+    <button type="button" id="btn-annotate" onclick="window.__toggleAnnotate()">Aperçu annoté (Zones éditables)</button>
+    <button type="button" class="primary" onclick="window.print()">Imprimer / PDF</button>
+    <button type="button" onclick="window.__downloadSelfHtml()">Télécharger (.html)</button>
+    <button type="button" onclick="location.reload()">Réinitialiser</button>
+  </div>
+
+  <div class="sheet" id="interactive-sheet">
+    ${blocks.length > 0 && (bp.headerLayout === 'filled_banner' || bp.headerLayout === 'top_accent_bar') ? '<div class="top-banner-bg"></div>' : ''}
+    ${textBlocksHtml}
+    ${visualSlotsHtml}
+  </div>
+
+  <script>
+    window.__toggleAnnotate = function() {
+      document.body.classList.toggle('annotated-mode');
+      var btn = document.getElementById('btn-annotate');
+      if (btn) btn.classList.toggle('active');
+    };
+    window.__swapSlotImage = function(input, imgId) {
+      var file = input.files && input.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function() {
+        var slot = input.closest('.editable-img-slot');
+        var existing = document.getElementById(imgId);
+        if (!existing && slot) {
+          slot.innerHTML = '<img id="' + imgId + '" alt="Visuel importé" />';
+          slot.appendChild(input);
+          existing = document.getElementById(imgId);
+        }
+        if (existing) existing.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    };
+    window.__downloadSelfHtml = function() {
+      var wasAnnotated = document.body.classList.contains('annotated-mode');
+      document.body.classList.remove('annotated-mode');
+      var html = '<!DOCTYPE html>\\n' + document.documentElement.outerHTML;
+      if (wasAnnotated) document.body.classList.add('annotated-mode');
+      var blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'Modele_Interactif_Modifie.html';
+      a.click();
+    };
+  </script>
+</body>
+</html>`;
 }
 
 // ============================================================================

@@ -22,7 +22,8 @@ import {
   Barcode,
   Trash2,
   AlertCircle,
-  Stamp
+  Stamp,
+  Wand2
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import {
@@ -56,6 +57,7 @@ interface PanneauReglagesFichiersImportesProps {
   verificationCodeRef?: string;
   lockedActorScope?: ActorScopeId;
   onOpenStampGenerator?: (cachetAssetKey: AssetTabKey) => void;
+  onOpenVisualGenerator?: (assetKey: AssetTabKey) => void;
   compact?: boolean;
 }
 
@@ -177,6 +179,7 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
   verificationCodeRef = 'ENT-BC-2026-AUTH',
   lockedActorScope,
   onOpenStampGenerator,
+  onOpenVisualGenerator,
   compact = false
 }) => {
   const effectiveConfig = propAssetsConfig || initialConfig || DEFAULT_PDF_ASSETS_CONFIG;
@@ -567,15 +570,27 @@ export const PanneauReglagesFichiersImportes: React.FC<PanneauReglagesFichiersIm
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          {activeSubTabDef.key.toLowerCase().includes('cachet') && onOpenStampGenerator && (
+          {onOpenVisualGenerator ? (
             <button
               type="button"
-              onClick={() => onOpenStampGenerator(activeTab)}
-              className="min-h-[40px] px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold inline-flex items-center gap-2 cursor-pointer whitespace-nowrap shadow-xs"
+              onClick={() => onOpenVisualGenerator(activeTab)}
+              className="min-h-[40px] px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-extrabold inline-flex items-center gap-2 cursor-pointer whitespace-nowrap shadow-xs"
             >
-              <Stamp className="w-4 h-4" />
-              <span>Créer un Tampon</span>
+              <Wand2 className="w-4 h-4" />
+              <span>Créer / Imiter un Visuel</span>
             </button>
+          ) : (
+            activeSubTabDef.key.toLowerCase().includes('cachet') &&
+            onOpenStampGenerator && (
+              <button
+                type="button"
+                onClick={() => onOpenStampGenerator(activeTab)}
+                className="min-h-[40px] px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold inline-flex items-center gap-2 cursor-pointer whitespace-nowrap shadow-xs"
+              >
+                <Stamp className="w-4 h-4" />
+                <span>Créer un Tampon</span>
+              </button>
+            )
           )}
 
           {activeSubTabDef.isAuthTool === 'barcode' && (

@@ -9,6 +9,7 @@ export interface EditableDocumentVisualProps {
   settings?: PdfAssetItemSettings;
   isSelected: boolean;
   onSelect: () => void;
+  onDeselect?: () => void;
   onUpdateSettings: (patch: Partial<PdfAssetItemSettings>) => void;
   onReset?: () => void;
   defaultWidthPx?: number;
@@ -78,6 +79,7 @@ export const EditableDocumentVisual: React.FC<EditableDocumentVisualProps> = ({
   settings,
   isSelected,
   onSelect,
+  onDeselect,
   onUpdateSettings,
   onReset,
   defaultWidthPx = 140,
@@ -115,8 +117,27 @@ export const EditableDocumentVisual: React.FC<EditableDocumentVisualProps> = ({
   useEffect(() => {
     if (!isSelected) {
       setShowLayoutPopover(false);
+      return;
     }
-  }, [isSelected]);
+    const handleOutside = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) {
+        setShowLayoutPopover(false);
+        onDeselect?.();
+      }
+    };
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowLayoutPopover(false);
+        onDeselect?.();
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    window.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      window.removeEventListener('keydown', handleEsc);
+    };
+  }, [isSelected, onDeselect]);
 
   const startBodyDrag = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!interactive) return;
@@ -260,6 +281,7 @@ export const EditableDocumentVisual: React.FC<EditableDocumentVisualProps> = ({
   return (
     <div
       ref={boxRef}
+      data-editable-visual="true"
       onClick={(e) => {
         if (!interactive) return;
         e.stopPropagation();
@@ -303,9 +325,9 @@ export const EditableDocumentVisual: React.FC<EditableDocumentVisualProps> = ({
         }}
       />
 
-      {/* POIGNÉES DE SÉLECTION WORD 2013 (Masquées dans la capture html2canvas) */}
+      {/* POIGNÉES DE SÉLECTION WORD 2013 (Masquées dans la capture html2canvas & print) */}
       {isSelected && interactive && (
-        <div data-html2canvas-ignore="true" className="contents">
+        <div data-html2canvas-ignore="true" className="contents print:hidden">
           {/* Poignée de rotation en haut */}
           <button
             type="button"

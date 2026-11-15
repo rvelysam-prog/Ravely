@@ -87,7 +87,9 @@ import { PanneauReglagesFichiersImportes } from '../common/PanneauReglagesFichie
 import { InteractiveDocumentCanvas } from '../common/InteractiveDocumentCanvas';
 import { EditableDocumentVisual } from '../common/EditableDocumentVisual';
 import { ForcusWordEditor } from './ForcusWordEditor';
+import type { ForcusDocumentLayer } from '../../services/indexedDbDocStorage';
 import { OfficialStampGeneratorModal } from './OfficialStampGeneratorModal';
+import { UniversalVisualGeneratorModal } from './UniversalVisualGeneratorModal';
 import { BrandLogo } from '../BrandLogo';
 import {
   getSavedPdfAssetsConfig,
@@ -164,6 +166,22 @@ type ManualTabId =
   | 'doc_es';
 
 type TopWorkspaceTab = 'form' | 'housing' | 'assets' | 'actions_db';
+
+const DOC_KEY_TO_MANUAL_TAB: Record<LayoutTargetDocKey, ManualTabId> = {
+  t9: 'heb_attestation',
+  t10: 'heb_notaire',
+  t11: 'heb_hir',
+  t12: 'heb_declaration',
+  doc_es: 'doc_es'
+};
+
+const MANUAL_TAB_TO_DOC_KEY: Partial<Record<ManualTabId, LayoutTargetDocKey>> = {
+  heb_attestation: 't9',
+  heb_notaire: 't10',
+  heb_hir: 't11',
+  heb_declaration: 't12',
+  doc_es: 'doc_es'
+};
 
 interface AutoActionQueue {
   saveDossier: boolean;
@@ -337,6 +355,8 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
 
   const [isStampModalOpen, setIsStampModalOpen] = useState(false);
   const [stampTargetKey, setStampTargetKey] = useState<ImportedAssetKey>('cachet');
+  const [isUniversalVisualModalOpen, setIsUniversalVisualModalOpen] = useState(false);
+  const [visualGeneratorTargetKey, setVisualGeneratorTargetKey] = useState<ImportedAssetKey>('logo');
   const [selectedHousingVisual, setSelectedHousingVisual] = useState<string | null>(null);
   const tabsContainerRef = useRef<HTMLDivElement>(null);
 
@@ -1199,6 +1219,8 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
         activeAssetKeyMap={activeAssetKeyMap}
         layoutTemplate={activeLayout}
         hideGenericChrome={useBlueprintLayout}
+        onClearExternalSelection={() => setSelectedHousingVisual(null)}
+        onExportSuccess={triggerToast}
         exclusiveVisualSet={{
           logo: actorAssets.logo.url,
           signature: actorAssets.signature.url,
@@ -1275,6 +1297,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                           settings={logoCfg}
                           isSelected={selectedHousingVisual === `${tabNumber}_logo`}
                           onSelect={() => setSelectedHousingVisual(`${tabNumber}_logo`)}
+                          onDeselect={() => setSelectedHousingVisual(null)}
                           onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.logo.key as ImportedAssetKey, patch)}
                           onReset={() => resetActorAssetItem(actorAssets.logo.key as ImportedAssetKey)}
                           defaultWidthPx={150}
@@ -1570,6 +1593,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                           settings={sigCfg}
                           isSelected={selectedHousingVisual === `${tabNumber}_sig`}
                           onSelect={() => setSelectedHousingVisual(`${tabNumber}_sig`)}
+                          onDeselect={() => setSelectedHousingVisual(null)}
                           onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.signature.key as ImportedAssetKey, patch)}
                           onReset={() => resetActorAssetItem(actorAssets.signature.key as ImportedAssetKey)}
                           defaultWidthPx={130}
@@ -1584,6 +1608,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                           settings={cachetCfg}
                           isSelected={selectedHousingVisual === `${tabNumber}_cachet`}
                           onSelect={() => setSelectedHousingVisual(`${tabNumber}_cachet`)}
+                          onDeselect={() => setSelectedHousingVisual(null)}
                           onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.cachet.key as ImportedAssetKey, patch)}
                           onReset={() => resetActorAssetItem(actorAssets.cachet.key as ImportedAssetKey)}
                           defaultWidthPx={80}
@@ -1606,6 +1631,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                           settings={sigCfg}
                           isSelected={selectedHousingVisual === `${tabNumber}_sig`}
                           onSelect={() => setSelectedHousingVisual(`${tabNumber}_sig`)}
+                          onDeselect={() => setSelectedHousingVisual(null)}
                           onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.signature.key as ImportedAssetKey, patch)}
                           onReset={() => resetActorAssetItem(actorAssets.signature.key as ImportedAssetKey)}
                           defaultWidthPx={130}
@@ -1620,6 +1646,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                           settings={cachetCfg}
                           isSelected={selectedHousingVisual === `${tabNumber}_cachet`}
                           onSelect={() => setSelectedHousingVisual(`${tabNumber}_cachet`)}
+                          onDeselect={() => setSelectedHousingVisual(null)}
                           onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.cachet.key as ImportedAssetKey, patch)}
                           onReset={() => resetActorAssetItem(actorAssets.cachet.key as ImportedAssetKey)}
                           defaultWidthPx={80}
@@ -1644,6 +1671,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                             settings={sigCfg}
                             isSelected={selectedHousingVisual === `${tabNumber}_sig`}
                             onSelect={() => setSelectedHousingVisual(`${tabNumber}_sig`)}
+                          onDeselect={() => setSelectedHousingVisual(null)}
                             onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.signature.key as ImportedAssetKey, patch)}
                             onReset={() => resetActorAssetItem(actorAssets.signature.key as ImportedAssetKey)}
                             defaultWidthPx={130}
@@ -1658,6 +1686,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                             settings={cachetCfg}
                             isSelected={selectedHousingVisual === `${tabNumber}_cachet`}
                             onSelect={() => setSelectedHousingVisual(`${tabNumber}_cachet`)}
+                          onDeselect={() => setSelectedHousingVisual(null)}
                             onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.cachet.key as ImportedAssetKey, patch)}
                             onReset={() => resetActorAssetItem(actorAssets.cachet.key as ImportedAssetKey)}
                             defaultWidthPx={80}
@@ -1691,6 +1720,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                       settings={qrCfg}
                       isSelected={selectedHousingVisual === `${tabNumber}_qr`}
                       onSelect={() => setSelectedHousingVisual(`${tabNumber}_qr`)}
+                      onDeselect={() => setSelectedHousingVisual(null)}
                       onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.qrcode.key as ImportedAssetKey, patch)}
                       onReset={() => resetActorAssetItem(actorAssets.qrcode.key as ImportedAssetKey)}
                       defaultWidthPx={44}
@@ -1712,6 +1742,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                         settings={barcodeCfg}
                         isSelected={selectedHousingVisual === `${tabNumber}_bc`}
                         onSelect={() => setSelectedHousingVisual(`${tabNumber}_bc`)}
+                        onDeselect={() => setSelectedHousingVisual(null)}
                         onUpdateSettings={(patch) => updateActorAssetItem(actorAssets.barcode.key as ImportedAssetKey, patch)}
                         onReset={() => resetActorAssetItem(actorAssets.barcode.key as ImportedAssetKey)}
                         defaultWidthPx={75}
@@ -1991,7 +2022,12 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                 <button
                   key={tab.id}
                   type="button"
-                  onClick={() => setActiveWorkspaceTab(tab.id)}
+                  onClick={() => {
+                    setActiveWorkspaceTab(tab.id);
+                    if (tab.id === 'housing') {
+                      setActiveManualTab(DOC_KEY_TO_MANUAL_TAB[activeHousingFormSubTab]);
+                    }
+                  }}
                   className={`min-h-[44px] px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold inline-flex items-center gap-2 transition-colors cursor-pointer whitespace-nowrap border ${
                     isActive
                       ? 'bg-[#0B2545] text-white border-[#0B2545]'
@@ -2818,7 +2854,10 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
         {activeWorkspaceTab === 'housing' && (
           <HousingAndDocEsStepWizard
             activeDocKey={activeHousingFormSubTab}
-            onChangeActiveDocKey={setActiveHousingFormSubTab}
+            onChangeActiveDocKey={(docKey) => {
+              setActiveHousingFormSubTab(docKey);
+              setActiveManualTab(DOC_KEY_TO_MANUAL_TAB[docKey]);
+            }}
             housingData={housingData}
             onChangeHousingData={setHousingData}
             docEsData={docEsData}
@@ -2833,6 +2872,10 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             onOpenStampGenerator={(targetKey) => {
               setStampTargetKey(targetKey);
               setIsStampModalOpen(true);
+            }}
+            onOpenVisualGenerator={(targetKey) => {
+              setVisualGeneratorTargetKey(targetKey);
+              setIsUniversalVisualModalOpen(true);
             }}
             layoutTemplates={layoutTemplates}
             onUpdateLayoutTemplate={(docKey, tpl) =>
@@ -2917,13 +2960,13 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
               <button
                 type="button"
                 onClick={() => {
-                  setStampTargetKey('cachet');
-                  setIsStampModalOpen(true);
+                  setVisualGeneratorTargetKey('logo');
+                  setIsUniversalVisualModalOpen(true);
                 }}
                 className="min-h-[38px] px-4 py-2 bg-[#0B2545] hover:bg-[#134074] text-white rounded-lg text-xs font-bold flex items-center gap-2 cursor-pointer whitespace-nowrap"
               >
                 <Sparkles className="w-4 h-4 text-amber-300" />
-                <span>Créer un Tampon Officiel</span>
+                <span>Créer / Imiter un Visuel (7 types)</span>
               </button>
             </div>
 
@@ -2933,6 +2976,14 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
               onUploadAsset={handleUploadAsset}
               uploadedAssetUrls={uploadedAssets}
               verificationCodeRef={postulant.codeIdCandidature}
+              onOpenStampGenerator={(key) => {
+                setStampTargetKey(key);
+                setIsStampModalOpen(true);
+              }}
+              onOpenVisualGenerator={(key) => {
+                setVisualGeneratorTargetKey(key);
+                setIsUniversalVisualModalOpen(true);
+              }}
               title="Panneau Visuels & Tampons — 6 Parties Officiels (Employeur, CRIC, Hébergement, Notaire, Inspecteur CM/HIR, Déclaration CER-CLT)"
             />
           </div>
@@ -3153,7 +3204,13 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                 <button
                   key={tab.id}
                   type="button"
-                  onClick={() => setActiveManualTab(tab.id)}
+                  onClick={() => {
+                    setActiveManualTab(tab.id);
+                    const mappedDocKey = MANUAL_TAB_TO_DOC_KEY[tab.id];
+                    if (mappedDocKey) {
+                      setActiveHousingFormSubTab(mappedDocKey);
+                    }
+                  }}
                   className={`min-h-[40px] px-3.5 py-2 text-xs font-bold rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0 border ${
                     isActive
                       ? 'bg-[#0B2545] text-white border-[#0B2545]'
@@ -3216,6 +3273,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             }}
             onDownloadHtml={(html) => downloadHtmlFile(`Kit_Candidat_${postulant.codeIdCandidature}.html`, html)}
             onOpenInWebmail={onOpenInWebmail}
+            onExportSuccess={triggerToast}
             onTextEdited={(text) => setCustomVisualText((prev) => ({ ...prev, dossier_kit: text }))}
             hasCustomText={Boolean(customVisualText['dossier_kit'])}
             onResetText={() =>
@@ -3338,6 +3396,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             }}
             onDownloadHtml={(html) => downloadHtmlFile(`Contrat_CRIC_${postulant.codeIdCandidature}.html`, html)}
             onOpenInWebmail={onOpenInWebmail}
+            onExportSuccess={triggerToast}
             onTextEdited={(text) => setCustomVisualText((prev) => ({ ...prev, contrat: text }))}
             hasCustomText={Boolean(customVisualText['contrat'])}
             onResetText={() =>
@@ -3447,6 +3506,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             }}
             onDownloadHtml={(html) => downloadHtmlFile(`Promesse_Embauche_${postulant.codeIdCandidature}.html`, html)}
             onOpenInWebmail={onOpenInWebmail}
+            onExportSuccess={triggerToast}
             onTextEdited={(txt) => setCustomVisualText((prev) => ({ ...prev, promesse: txt }))}
             hasCustomText={Boolean(customVisualText['promesse'])}
             onResetText={() =>
@@ -3582,6 +3642,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
               }}
               onDownloadHtml={(html) => downloadHtmlFile(`Ticket_${postulant.codeIdCandidature}.html`, html)}
               onOpenInWebmail={onOpenInWebmail}
+              onExportSuccess={triggerToast}
             >
               <div className="border-2 border-dashed border-[#D4A017] rounded-xl p-6 bg-[#FEFCF6] space-y-5 relative overflow-hidden">
                 {!postulant.ticketValide && (
@@ -3696,6 +3757,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             }}
             onDownloadHtml={(html) => downloadHtmlFile(`Offre_${jobOffer.reference}.html`, html)}
             onOpenInWebmail={onOpenInWebmail}
+            onExportSuccess={triggerToast}
           >
             <div contentEditable suppressContentEditableWarning className="space-y-4 text-sm outline-none">
               <div className="border-b border-slate-200 pb-3">
@@ -3785,6 +3847,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
               }}
               onDownloadHtml={(html) => downloadHtmlFile(`Design_Model_${selectedDesignModelId}.html`, html)}
               onOpenInWebmail={onOpenInWebmail}
+              onExportSuccess={triggerToast}
             >
               <div
                 contentEditable
@@ -3842,6 +3905,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             }}
             onDownloadHtml={(html) => downloadHtmlFile(`Bundle_${postulant.codeIdCandidature}.html`, html)}
             onOpenInWebmail={onOpenInWebmail}
+            onExportSuccess={triggerToast}
           >
             <div
               contentEditable
@@ -3872,6 +3936,67 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             settings={settings}
             initialTitle={`Document_${(postulant.nom || 'CANDIDAT').toUpperCase()}_${postulant.codeIdCandidature}`}
             initialHtmlContent={emailModel.html}
+            initialLayers={(() => {
+              const list: ForcusDocumentLayer[] = [];
+              if (effectiveEmployerLogo) {
+                list.push({
+                  id: 'kit_logo',
+                  name: 'Logo Officiel',
+                  type: 'logo',
+                  content: effectiveEmployerLogo,
+                  x: 40 + Math.round(assetsConfig.logo?.offsetX || 0),
+                  y: 32 + Math.round(assetsConfig.logo?.offsetY || 0),
+                  width: assetsConfig.logo?.widthValue || 160,
+                  height: assetsConfig.logo?.heightValue || 56,
+                  rotation: assetsConfig.logo?.rotation ?? 0,
+                  opacity: assetsConfig.logo?.opacity ?? 100,
+                  zIndex: assetsConfig.logo?.zIndex ?? 25,
+                  locked: false,
+                  visible: true,
+                  wrapMode: assetsConfig.logo?.wrapMode === 'behind_text' ? 'behind' : 'infront',
+                  style: {}
+                });
+              }
+              if (uploadedAssets.signature) {
+                list.push({
+                  id: 'kit_sig',
+                  name: 'Signature',
+                  type: 'signature',
+                  content: uploadedAssets.signature,
+                  x: 420 + Math.round(assetsConfig.signature?.offsetX || 0),
+                  y: 760 + Math.round(assetsConfig.signature?.offsetY || 0),
+                  width: assetsConfig.signature?.widthValue || 140,
+                  height: assetsConfig.signature?.heightValue || 52,
+                  rotation: assetsConfig.signature?.rotation ?? 0,
+                  opacity: assetsConfig.signature?.opacity ?? 100,
+                  zIndex: assetsConfig.signature?.zIndex ?? 30,
+                  locked: false,
+                  visible: true,
+                  wrapMode: assetsConfig.signature?.wrapMode === 'behind_text' ? 'behind' : 'infront',
+                  style: {}
+                });
+              }
+              if (uploadedAssets.cachet) {
+                list.push({
+                  id: 'kit_cachet',
+                  name: 'Cachet Officiel',
+                  type: 'stamp',
+                  content: uploadedAssets.cachet,
+                  x: 560 + Math.round(assetsConfig.cachet?.offsetX || 0),
+                  y: 745 + Math.round(assetsConfig.cachet?.offsetY || 0),
+                  width: assetsConfig.cachet?.widthValue || 96,
+                  height: assetsConfig.cachet?.heightValue || 72,
+                  rotation: assetsConfig.cachet?.rotation ?? 0,
+                  opacity: assetsConfig.cachet?.opacity ?? 100,
+                  zIndex: assetsConfig.cachet?.zIndex ?? 32,
+                  locked: false,
+                  visible: true,
+                  wrapMode: assetsConfig.cachet?.wrapMode === 'behind_text' ? 'behind' : 'infront',
+                  style: {}
+                });
+              }
+              return list;
+            })()}
             onOpenInWebmail={onOpenInWebmail}
           />
         )}
@@ -3911,6 +4036,23 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
           handleUploadAsset(stampTargetKey, dataUrl);
           setIsStampModalOpen(false);
           triggerToast('Tampon officiel appliqué, lié à l’acteur actif et synchronisé dans Firestore.');
+        }}
+      />
+
+      {/* MODAL GÉNÉRATEUR UNIVERSEL DE VISUELS (7 CATÉGORIES + IMITATION PAR MODÈLE) */}
+      <UniversalVisualGeneratorModal
+        isOpen={isUniversalVisualModalOpen}
+        onClose={() => setIsUniversalVisualModalOpen(false)}
+        targetAssetKey={visualGeneratorTargetKey}
+        settings={settings}
+        defaultReferenceCode={postulant.codeIdCandidature}
+        onApplyVisual={(assetKey, dataUrl) => {
+          if (assetKey === 'cachet') {
+            setPostulant((prev) => ({ ...prev, cachetUrl: dataUrl }));
+          }
+          handleUploadAsset(assetKey, dataUrl);
+          setIsUniversalVisualModalOpen(false);
+          triggerToast(`Visuel « ${assetKey} » généré, appliqué et synchronisé dans Firestore !`);
         }}
       />
     </div>

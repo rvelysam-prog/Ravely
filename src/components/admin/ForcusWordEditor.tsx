@@ -83,7 +83,7 @@ export interface ForcusWordEditorProps {
   initialHtmlContent?: string;
   initialTitle?: string;
   initialLayers?: ForcusDocumentLayer[];
-  onApplyToDocument?: (htmlContent: string) => void;
+  onApplyToDocument?: (htmlContent: string, layers?: ForcusDocumentLayer[]) => void;
   onClose?: () => void;
   isEmbeddedModal?: boolean;
 }
@@ -180,6 +180,35 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
 
   // Pinceau mise en forme (Format Painter)
   const [copiedFormat, setCopiedFormat] = useState<Record<string, string> | null>(null);
+  const [isExportingPdf, setIsExportingPdf] = useState<boolean>(false);
+
+  // Fermeture automatique de la barre d'outils flottante de calque avec Échap ou clic extérieur
+  useEffect(() => {
+    const onKeyDownEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSelectedLayerId(null);
+        setFloatingInsertMenu(null);
+      }
+    };
+    const onMouseDownOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (
+        !target.closest('[data-forcus-layer="true"]') &&
+        !target.closest('[data-forcus-floating-menu="true"]') &&
+        !target.closest('[data-forcus-selection-pane="true"]')
+      ) {
+        setSelectedLayerId(null);
+        setFloatingInsertMenu(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDownEsc);
+    document.addEventListener('mousedown', onMouseDownOutside);
+    return () => {
+      window.removeEventListener('keydown', onKeyDownEsc);
+      document.removeEventListener('mousedown', onMouseDownOutside);
+    };
+  }, []);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -585,9 +614,24 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
     showToast('Calque supprimé');
   };
 
+  const buildCombinedLayersHtml = (): string => {
+    const fullBodyHtml = doc.pages.map((p) => p.htmlContent).join('<br/>');
+    const visualLayers = doc.pages.flatMap((p) =>
+      p.layers.filter((l) => l.visible && l.content && l.content.startsWith('data:image'))
+    );
+    if (visualLayers.length === 0) return fullBodyHtml;
+    const footerImgs = visualLayers
+      .map(
+        (l) =>
+          `<div style="display:inline-block;margin:6px 10px;text-align:center;vertical-align:middle;"><img src="${l.content}" alt="${l.name}" style="width:${Math.min(220, l.width)}px;height:${Math.min(120, l.height)}px;object-fit:contain;opacity:${(l.opacity || 100) / 100};transform:rotate(${l.rotation || 0}deg);" /></div>`
+      )
+      .join('');
+    return `${fullBodyHtml}<div style="margin-top:16px;padding-top:12px;border-top:1px solid #e2e8f0;">${footerImgs}</div>`;
+  };
+
   // Convertisseur vers HTML Mail Template
   const handleConvertToHtmlEmailTemplate = (respectDocStylesOnly = true) => {
-    const fullBodyHtml = doc.pages.map((p) => p.htmlContent).join('<br/>');
+    const fullBodyHtml = buildCombinedLayersHtml();
     const primaryCol = respectDocStylesOnly ? doc.theme.primaryColor : (settings?.company_name ? '#0B2545' : '#0066B3');
     const containerBg = respectDocStylesOnly ? doc.theme.pageBackground : '#FFFFFF';
 
@@ -628,15 +672,24 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
     }
   };
 
-  // Export PDF haute fidélité
+  // Export PDF haute fidélité (efface toute sélection/barre d'outils avant capture)
   const handleExportPdf = async () => {
     try {
       showToast('Génération du PDF en cours...');
+      setSelectedLayerId(null);
+      setFloatingInsertMenu(null);
+      setIsExportingPdf(true);
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 40)))
+      );
+
       const pdf = new jsPDF({
         orientation: doc.orientation,
         unit: 'mm',
         format: 'a4'
       });
+      const pdfPageW = pdf.internal.pageSize.getWidth();
+      const pdfPageH = pdf.internal.pageSize.getHeight();
 
       const pagesEl = document.querySelectorAll('.forcus-page-sheet');
       for (let i = 0; i < pagesEl.length; i++) {
@@ -647,11 +700,12 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
           scale: 2,
           useCORS: true,
           logging: false,
-          backgroundColor: '#ffffff'
+          backgroundColor: '#ffffff',
+          ignoreElements: (el) => el.getAttribute('data-html2canvas-ignore') === 'true'
         });
 
         const imgData = canvas.toDataURL('image/jpeg', 0.95);
-        pdf.addImage(imgData, 'JPEG', 0, 0, 210, 297);
+        pdf.addImage(imgData, 'JPEG', 0, 0, pdfPageW, pdfPageH);
       }
 
       pdf.save(`${doc.title.replace(/\s+/g, '_')}.pdf`);
@@ -659,12 +713,14 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
     } catch (err) {
       console.error(err);
       showToast('Erreur génération PDF');
+    } finally {
+      setIsExportingPdf(false);
     }
   };
 
   // Export Word (.docx / .doc)
   const handleExportWordDocx = () => {
-    const fullHtml = doc.pages.map((p) => p.htmlContent).join('<br/><hr/><br/>');
+    const fullHtml = buildCombinedLayersHtml();
     const header = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
 <head><meta charset='utf-8'><title>${doc.title}</title>
 <style>
@@ -805,8 +861,15 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
             <button
               type="button"
               onClick={() => {
-                const fullHtml = doc.pages.map((p) => p.htmlContent).join('<br/>');
-                onApplyToDocument(fullHtml);
+                setSelectedLayerId(null);
+                setFloatingInsertMenu(null);
+                const latestHtml = activeEditorRef.current?.innerHTML;
+                const pagesWithLatest = doc.pages.map((p, idx) =>
+                  idx === 0 && latestHtml !== undefined ? { ...p, htmlContent: latestHtml } : p
+                );
+                const fullHtml = pagesWithLatest.map((p) => p.htmlContent).join('<br/>');
+                const allLayers = pagesWithLatest.flatMap((p) => p.layers);
+                onApplyToDocument(fullHtml, allLayers);
                 showToast('Modifications appliquées au document !');
                 if (onClose) onClose();
               }}
@@ -1379,6 +1442,7 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
           className="flex-1 overflow-auto p-8 flex flex-col items-center gap-10 bg-[#E1DFDD] relative"
           onClick={() => {
             if (floatingInsertMenu) setFloatingInsertMenu(null);
+            if (selectedLayerId) setSelectedLayerId(null);
           }}
         >
           {/* Règle horizontale Word 2013 */}
@@ -1404,6 +1468,12 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
           {doc.pages.map((page, pageIndex) => (
             <div
               key={page.id}
+              onClick={(e) => {
+                if (e.target === e.currentTarget) {
+                  setSelectedLayerId(null);
+                  setFloatingInsertMenu(null);
+                }
+              }}
               style={{
                 width: doc.orientation === 'landscape' ? '297mm' : '210mm',
                 minHeight: doc.orientation === 'landscape' ? '210mm' : '297mm',
@@ -1481,6 +1551,7 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
                   return (
                     <div
                       key={layer.id}
+                      data-forcus-layer="true"
                       onClick={(e) => {
                         e.stopPropagation();
                         setSelectedLayerId(layer.id);
@@ -1544,7 +1615,7 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
                         cursor: layer.locked ? 'default' : 'move'
                       }}
                       className={`group transition-shadow ${
-                        isSelected ? 'ring-2 ring-blue-600 ring-offset-1 shadow-lg' : 'hover:ring-1 hover:ring-blue-400'
+                        isSelected && !isExportingPdf ? 'ring-2 ring-blue-600 ring-offset-1 shadow-lg' : 'hover:ring-1 hover:ring-blue-400'
                       }`}
                     >
                       {/* Rendu du contenu du calque */}
@@ -1578,11 +1649,12 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
                       )}
 
                       {/* Barre d'outils contextuelle flottante complète sur l'élément sélectionné */}
-                      {isSelected && (
+                      {isSelected && !isExportingPdf && (
                         <div
+                          data-html2canvas-ignore="true"
                           onClick={(e) => e.stopPropagation()}
                           onMouseDown={(e) => e.stopPropagation()}
-                          className="absolute -top-11 left-0 flex flex-wrap items-center gap-1 bg-slate-900/95 backdrop-blur-md text-white px-2.5 py-1 rounded-lg shadow-2xl text-[10px] z-50 border border-slate-700 whitespace-nowrap"
+                          className="print:hidden absolute -top-11 left-0 flex flex-wrap items-center gap-1 bg-slate-900/95 backdrop-blur-md text-white px-2.5 py-1 rounded-lg shadow-2xl text-[10px] z-50 border border-slate-700 whitespace-nowrap"
                         >
                           <span className="font-bold text-amber-300 pr-1 border-r border-slate-700">{layer.name}</span>
 
@@ -1745,17 +1817,26 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
                           >
                             <Trash2 className="w-3 h-3" />
                           </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setSelectedLayerId(null)}
+                            className="px-1.5 py-0.5 bg-emerald-600 hover:bg-emerald-700 rounded text-white font-bold ml-0.5"
+                            title="Valider et fermer ce menu"
+                          >
+                            ✓ OK
+                          </button>
                         </div>
                       )}
 
                       {/* Poignées de redimensionnement interactives */}
-                      {isSelected && !layer.locked && (
-                        <>
+                      {isSelected && !layer.locked && !isExportingPdf && (
+                        <div data-html2canvas-ignore="true" className="print:hidden">
                           <div className="absolute -top-1.5 -left-1.5 w-3 h-3 bg-blue-600 rounded-full border-2 border-white cursor-nwse-resize" />
                           <div className="absolute -top-1.5 -right-1.5 w-3 h-3 bg-blue-600 rounded-full border-2 border-white cursor-nesw-resize" />
                           <div className="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-blue-600 rounded-full border-2 border-white cursor-nesw-resize" />
                           <div className="absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-blue-600 rounded-full border-2 border-white cursor-nwse-resize" />
-                        </>
+                        </div>
                       )}
                     </div>
                   );
@@ -1786,12 +1867,14 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
           {/* Menu contextuel flottant suite à un double-clic */}
           {floatingInsertMenu && (
             <div
+              data-html2canvas-ignore="true"
+              data-forcus-floating-menu="true"
               style={{
                 position: 'absolute',
                 left: `${floatingInsertMenu.x}px`,
                 top: `${floatingInsertMenu.y}px`
               }}
-              className="bg-slate-900 text-white rounded-xl p-3 shadow-2xl border border-amber-400 z-50 text-xs flex flex-col gap-1.5 min-w-[200px] animate-scale-in"
+              className="print:hidden bg-slate-900 text-white rounded-xl p-3 shadow-2xl border border-amber-400 z-50 text-xs flex flex-col gap-1.5 min-w-[200px] animate-scale-in"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between border-b border-white/10 pb-1.5 mb-1">
@@ -1867,7 +1950,7 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
 
         {/* 5. VOLET LATÉRAL DE GESTION DES CALQUES (Selection Pane) */}
         {isSelectionPaneOpen && (
-          <div className="w-72 bg-white border-l border-slate-300 flex flex-col shadow-lg z-20">
+          <div data-forcus-selection-pane="true" className="w-72 bg-white border-l border-slate-300 flex flex-col shadow-lg z-20">
             <div className="bg-[#2B579A] text-white p-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Layers className="w-4 h-4 text-amber-400" />

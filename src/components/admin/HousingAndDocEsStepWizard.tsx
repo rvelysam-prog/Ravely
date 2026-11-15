@@ -19,7 +19,13 @@ import {
   Layers,
   Palette,
   Sliders,
-  Check
+  Check,
+  Code2,
+  Copy,
+  Maximize2,
+  X,
+  ScanText,
+  Wand2
 } from 'lucide-react';
 import { HousingAndNotaryData, HousingTabNumber } from '../../services/housingDocsService';
 import { FichesDocEsData } from '../../services/fichesEtDocEsService';
@@ -41,6 +47,8 @@ import {
   SpatialBlueprint,
   analyzeReferenceDocumentFile,
   buildBlueprintFromLegacyTemplate,
+  buildInteractiveHtmlTemplate,
+  regenerateInteractiveHtmlWithOcr,
   getActorLabelForDocKey,
   getActorScopeForDocKey,
   getMissingVisualAssetsForTemplate,
@@ -62,6 +70,7 @@ interface HousingAndDocEsStepWizardProps {
   assetsConfig?: PdfImportedAssetsConfig;
   onChangeAssetsConfig?: (newConfig: PdfImportedAssetsConfig) => void;
   onOpenStampGenerator?: (targetCachetKey: ImportedAssetKey) => void;
+  onOpenVisualGenerator?: (targetAssetKey: ImportedAssetKey, docKey?: LayoutTargetDocKey) => void;
   layoutTemplates: LayoutTemplatesMap;
   onUpdateLayoutTemplate: (docKey: LayoutTargetDocKey, template: ReferenceLayoutTemplate | undefined) => void;
   verificationCodeRef: string;
@@ -162,6 +171,7 @@ export const HousingAndDocEsStepWizard: React.FC<HousingAndDocEsStepWizardProps>
   assetsConfig,
   onChangeAssetsConfig,
   onOpenStampGenerator,
+  onOpenVisualGenerator,
   layoutTemplates,
   onUpdateLayoutTemplate,
   verificationCodeRef,
@@ -178,6 +188,9 @@ export const HousingAndDocEsStepWizard: React.FC<HousingAndDocEsStepWizardProps>
     doc_es: 0
   });
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isRunningOcr, setIsRunningOcr] = useState(false);
+  const [showInteractiveHtmlStudio, setShowInteractiveHtmlStudio] = useState(true);
+  const [isInteractiveHtmlFullscreen, setIsInteractiveHtmlFullscreen] = useState(false);
 
   const activeDef = DOC_DEFINITIONS.find((d) => d.key === activeDocKey) || DOC_DEFINITIONS[0];
   const currentStep = stepByDoc[activeDocKey] || 0;
@@ -229,8 +242,26 @@ export const HousingAndDocEsStepWizard: React.FC<HousingAndDocEsStepWizardProps>
       ...activeTemplate,
       ...patch
     };
+    updated.interactiveHtmlTemplate = buildInteractiveHtmlTemplate(updated);
     onUpdateLayoutTemplate(activeDocKey, updated);
     await saveLayoutTemplateToFirestore(activeDocKey, updated);
+  };
+
+  const handleRunOcrReExtract = async () => {
+    if (!activeTemplate) return;
+    setIsRunningOcr(true);
+    try {
+      const updated = await regenerateInteractiveHtmlWithOcr(activeTemplate);
+      onUpdateLayoutTemplate(activeDocKey, updated);
+      await saveLayoutTemplateToFirestore(activeDocKey, updated);
+      onToast(
+        `Analyse OCR terminée (${updated.extractedTextBlocks?.length || 0} zones de texte éditables générées).`
+      );
+    } catch {
+      onToast('Impossible d’exécuter l’extraction OCR sur cette miniature.');
+    } finally {
+      setIsRunningOcr(false);
+    }
   };
 
   const handleUpdateBlueprintField = async (
@@ -1043,6 +1074,17 @@ export const HousingAndDocEsStepWizard: React.FC<HousingAndDocEsStepWizardProps>
                               </button>
                             )}
 
+                            {onOpenVisualGenerator && (
+                              <button
+                                type="button"
+                                onClick={() => onOpenVisualGenerator(m.assetKey, activeDocKey)}
+                                className="px-3 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <Wand2 className="w-3.5 h-3.5" />
+                                <span>Créer / Imiter</span>
+                              </button>
+                            )}
+
                             <button
                               type="button"
                               onClick={() => handleToggleIgnoreMissing(m.element)}
@@ -1063,6 +1105,127 @@ export const HousingAndDocEsStepWizard: React.FC<HousingAndDocEsStepWizardProps>
                     <span>
                       Tous les éléments visuels requis par ce document modèle sont déjà présents dans « Visuels, Logos &amp; Tampons » ({getActorLabelForDocKey(activeDocKey)}).
                     </span>
+                  </div>
+                )}
+
+                {/* STUDIO MODÈLE INTERACTIF HTML / CSS / JS (STYLE CANVA) */}
+                {(() => {
+                  const interactiveHtml =
+                    activeTemplate.interactiveHtmlTemplate || buildInteractiveHtmlTemplate(activeTemplate);
+                  return (
+                    <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                      <div className="px-4 py-3 bg-[#0B2545] text-white flex flex-wrap items-center justify-between gap-2.5">
+                        <div className="flex items-center gap-2">
+                          <Code2 className="w-4 h-4 text-amber-300 shrink-0" />
+                          <div>
+                            <h6 className="text-xs sm:text-sm font-bold">
+                              Modèle HTML / CSS / JS Interactif &amp; Annoté (Éditable sur mesure)
+                            </h6>
+                            <p className="text-[11px] text-blue-200">
+                              Textes éditables au clic, emplacements d’images remplaçables &amp; bouton « Aperçu annoté » (sans image de fond plate).
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 text-xs font-bold">
+                          <button
+                            type="button"
+                            onClick={handleRunOcrReExtract}
+                            disabled={isRunningOcr}
+                            className="px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-white inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                            title="Extraire ou ré-analyser le texte via OCR"
+                          >
+                            <ScanText className={`w-3.5 h-3.5 ${isRunningOcr ? 'animate-pulse text-amber-300' : ''}`} />
+                            <span>{isRunningOcr ? 'OCR en cours...' : 'Analyser Texte (OCR)'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await navigator.clipboard.writeText(interactiveHtml);
+                                onToast('Code complet HTML / CSS / JS copié dans le presse-papiers !');
+                              } catch {
+                                onToast('Impossible de copier automatiquement.');
+                              }
+                            }}
+                            className="px-3 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 inline-flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>Copier Code HTML/CSS/JS</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const blob = new Blob([interactiveHtml], { type: 'text/html;charset=utf-8' });
+                              const a = document.createElement('a');
+                              a.href = URL.createObjectURL(blob);
+                              a.download = `Modele_Interactif_${activeDocKey}.html`;
+                              a.click();
+                              onToast('Fichier modèle interactif (.html) téléchargé.');
+                            }}
+                            className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 inline-flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            <span>Télécharger (.html)</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setIsInteractiveHtmlFullscreen(true)}
+                            className="px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-white inline-flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Maximize2 className="w-3.5 h-3.5" />
+                            <span>Plein Écran</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setShowInteractiveHtmlStudio((v) => !v)}
+                            className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-blue-100 inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>{showInteractiveHtmlStudio ? 'Masquer' : 'Afficher'}</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {showInteractiveHtmlStudio && (
+                        <div className="bg-slate-200 p-2 sm:p-3">
+                          <iframe
+                            key={`${activeDocKey}_${activeTemplate.analyzedAt}_${activeTemplate.extractedTextBlocks?.length || 0}`}
+                            title="Aperçu Modèle Interactif"
+                            srcDoc={interactiveHtml}
+                            className="w-full h-[540px] rounded-lg border border-slate-300 bg-white"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {isInteractiveHtmlFullscreen && (
+                  <div className="fixed inset-0 z-[120] bg-slate-950/85 flex flex-col p-3 sm:p-6">
+                    <div className="bg-[#0B2545] text-white px-4 py-3 rounded-t-xl flex items-center justify-between">
+                      <span className="text-sm font-bold flex items-center gap-2">
+                        <Code2 className="w-4 h-4 text-amber-300" />
+                        <span>Studio Modèle Interactif — {activeTemplate.sourceFileName}</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setIsInteractiveHtmlFullscreen(false)}
+                        className="px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                        <span>Fermer</span>
+                      </button>
+                    </div>
+                    <iframe
+                      title="Aperçu Plein Écran Modèle Interactif"
+                      srcDoc={activeTemplate.interactiveHtmlTemplate || buildInteractiveHtmlTemplate(activeTemplate)}
+                      className="w-full flex-1 bg-white rounded-b-xl border border-slate-700"
+                    />
                   </div>
                 )}
               </div>
@@ -1087,6 +1250,7 @@ export const HousingAndDocEsStepWizard: React.FC<HousingAndDocEsStepWizardProps>
               onUploadAsset={(key, dataUrl) => onUploadAsset(key, dataUrl)}
               verificationCodeRef={verificationCodeRef}
               onOpenStampGenerator={onOpenStampGenerator}
+              onOpenVisualGenerator={(key) => onOpenVisualGenerator?.(key, activeDocKey)}
               compact={true}
               title={`Visuels & Tampons liés — ${activeDef.tabLabel}`}
             />
