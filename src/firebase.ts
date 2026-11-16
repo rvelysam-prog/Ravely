@@ -30,7 +30,7 @@ export const resolvedFirebaseConfig = {
     firebaseConfig.firestoreDatabaseId
 };
 
-const app = initializeApp(resolvedFirebaseConfig);
+export const app = initializeApp(resolvedFirebaseConfig);
 
 function initDb() {
   try {

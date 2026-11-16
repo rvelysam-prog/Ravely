@@ -67,6 +67,7 @@ import {
 import {
   JobOfferData,
   buildDefaultJobOfferForPoste,
+  generateJobOfferPdf,
   downloadJobOfferPdf,
   publishJobOffer,
   CANADIAN_STANDARD_BENEFITS
@@ -77,8 +78,15 @@ import {
 } from '../../services/bundleAssemblyService';
 import {
   PromesseEmbaucheData,
+  generatePromesseEmbauchePdfDoc,
   downloadPromesseEmbauchePdf
 } from '../../services/promesseEmbauchePdfGenerator';
+import {
+  FolderArrangementMode,
+  PackagedDocumentFile,
+  buildDefaultEmployeeFolderName,
+  exportSelectedDocumentsIntoFolder
+} from '../../services/autoFolderExportService';
 import {
   CANDIDATE_TICKET_STAMP_PRESETS,
   generateStampPngDataUrl
@@ -330,6 +338,12 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
     downloadTab11Pdf: false,
     downloadTab12Pdf: false
   });
+
+  // Mission 2 : Classement automatique dans un dossier nommé d'après le salarié
+  const [packageAsFolder, setPackageAsFolder] = useState<boolean>(true);
+  const [customAutoFolderName, setCustomAutoFolderName] = useState<string>('');
+  const [autoArrangementMode, setAutoArrangementMode] = useState<FolderArrangementMode>('by_category');
+  const [preferNativeDirPicker, setPreferNativeDirPicker] = useState<boolean>(false);
 
   const [cricModelChoice, setCricModelChoice] = useState<'model1' | 'model2'>('model1');
   const [selectedDesignModelId, setSelectedDesignModelId] = useState<string>('1');
@@ -820,10 +834,12 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
     triggerToast(`Onglet ${tabNumber} PDF téléchargé avec les visuels de l’acteur.`);
   };
 
-  // EXÉCUTION AUTOMATIQUE COMPLÈTE (1 CLIC)
+  // EXÉCUTION AUTOMATIQUE COMPLÈTE (1 CLIC) + CLASSEMENT DOSSIER SALARIÉ
   const handleRunAutomaticFullGeneration = async () => {
     setIsAutoExecuting(true);
     const executedActions: string[] = [];
+    const packagedFiles: PackagedDocumentFile[] = [];
+
     try {
       const updated: PostulantInfo = {
         ...postulant,
@@ -894,61 +910,213 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
           settings,
           customVisualText['dossier_kit']
         );
-        doc.save(filename);
+        if (packageAsFolder) {
+          packagedFiles.push({
+            filename,
+            blob: doc.output('blob'),
+            category: 'administratif_rh',
+            actor: 'Candidat',
+            orderIndex: 1,
+            label: '01. Kit Candidat Complet'
+          });
+        } else {
+          doc.save(filename);
+        }
         executedActions.push('Kit PDF');
       }
 
       if (autoQueue.downloadContratPdf) {
-        if (cricModelChoice === 'model1') {
-          const { doc, filename } = await generateModel1AttestationPdf(cricVars, customVisualText['contrat']);
-          doc.save(filename);
+        const { doc, filename } =
+          cricModelChoice === 'model1'
+            ? await generateModel1AttestationPdf(cricVars, customVisualText['contrat'])
+            : await generateModel2ContratPdf(cricVars, customVisualText['contrat']);
+        if (packageAsFolder) {
+          packagedFiles.push({
+            filename,
+            blob: doc.output('blob'),
+            category: 'contrats_promesses',
+            actor: 'Cabinet_CRIC',
+            orderIndex: 2,
+            label: '02. Contrat CRIC'
+          });
         } else {
-          const { doc, filename } = await generateModel2ContratPdf(cricVars, customVisualText['contrat']);
           doc.save(filename);
         }
         executedActions.push('Contrat CRIC PDF');
       }
 
       if (autoQueue.downloadPromessePdf) {
-        await downloadPromesseEmbauchePdf(buildPromesseObj());
+        const promesseObj = buildPromesseObj();
+        if (packageAsFolder) {
+          const doc = await generatePromesseEmbauchePdfDoc(promesseObj);
+          const safeNom = (updated.nomComplet || 'Salarie').replace(/\s+/g, '_');
+          packagedFiles.push({
+            filename: `Promesse_Embauche_${safeNom}.pdf`,
+            blob: doc.output('blob'),
+            category: 'contrats_promesses',
+            actor: 'Employeur',
+            orderIndex: 3,
+            label: "03. Promesse d'Embauche"
+          });
+        } else {
+          await downloadPromesseEmbauchePdf(promesseObj);
+        }
         executedActions.push('Promesse PDF');
       }
 
       if (autoQueue.downloadTicketPdf) {
         const { doc, filename } = await generateTicketEntretienPdf(ticketData, effectiveEmployerLogo);
-        doc.save(filename);
+        if (packageAsFolder) {
+          packagedFiles.push({
+            filename,
+            blob: doc.output('blob'),
+            category: 'administratif_rh',
+            actor: 'Employeur',
+            orderIndex: 4,
+            label: "04. Ticket d'Entretien"
+          });
+        } else {
+          doc.save(filename);
+        }
         executedActions.push('Ticket PDF');
       }
 
       if (autoQueue.downloadOffrePdf) {
-        await downloadJobOfferPdf(jobOffer, effectiveEmployerLogo);
+        if (packageAsFolder) {
+          const { doc, filename } = await generateJobOfferPdf(jobOffer, effectiveEmployerLogo);
+          packagedFiles.push({
+            filename,
+            blob: doc.output('blob'),
+            category: 'contrats_promesses',
+            actor: 'Employeur',
+            orderIndex: 5,
+            label: '05. Offre & CNP'
+          });
+        } else {
+          await downloadJobOfferPdf(jobOffer, effectiveEmployerLogo);
+        }
         executedActions.push('Offre CNP PDF');
       }
 
       if (autoQueue.downloadBundlePdf) {
-        await handleDownloadBundlePdf();
+        const bundleData: BundleAssemblyData = {
+          titreDossier: bundleCoverOptions.titreLivre,
+          nomCandidat: updated.nomComplet,
+          titrePoste: updated.intitulePoste,
+          codeCnp: updated.codeCnp,
+          referenceDossier: updated.codeIdCandidature,
+          dateEtablissement: updated.dateEffet,
+          jobOffer,
+          cricVariables: cricVars,
+          ticketData,
+          logoUrl: effectiveEmployerLogo,
+          companyName: updated.nomEntreprise
+        };
+        const { doc, filename } = await generateAssembledBookBundlePdf(bundleData, settings);
+        if (packageAsFolder) {
+          packagedFiles.push({
+            filename,
+            blob: doc.output('blob'),
+            category: 'contrats_promesses',
+            actor: 'Employeur',
+            orderIndex: 7,
+            label: '07. Bundle Couverture Livre'
+          });
+        } else {
+          doc.save(filename);
+        }
         executedActions.push('Bundle PDF');
       }
 
-      if (autoQueue.downloadTab9Pdf) {
-        await handleDownloadHousingTabPdf(9);
-        executedActions.push('Onglet 9 PDF');
+      const housingTabsQueue: Array<{
+        flag: boolean;
+        tabNum: HousingTabNumber;
+        textKey: string;
+        docKey: LayoutTargetDocKey;
+        actor: PackagedDocumentFile['actor'];
+        label: string;
+      }> = [
+        {
+          flag: autoQueue.downloadTab9Pdf,
+          tabNum: 9,
+          textKey: 'heb_attestation',
+          docKey: 't9',
+          actor: 'Employeur',
+          label: '09. Attestation Hébergement'
+        },
+        {
+          flag: autoQueue.downloadTab10Pdf,
+          tabNum: 10,
+          textKey: 'heb_notaire',
+          docKey: 't10',
+          actor: 'Notaire_BC',
+          label: '10. Certificat Notaire BC'
+        },
+        {
+          flag: autoQueue.downloadTab11Pdf,
+          tabNum: 11,
+          textKey: 'heb_hir',
+          docKey: 't11',
+          actor: 'Inspecteur_HIR',
+          label: '11. Rapport Inspection HIR'
+        },
+        {
+          flag: autoQueue.downloadTab12Pdf,
+          tabNum: 12,
+          textKey: 'heb_declaration',
+          docKey: 't12',
+          actor: 'Employeur',
+          label: '12. Déclaration Solennelle'
+        }
+      ];
+
+      for (const ht of housingTabsQueue) {
+        if (!ht.flag) continue;
+        const { doc, filename } = await generateHousingTabPdf(
+          ht.tabNum,
+          housingData,
+          updated,
+          assetsConfig,
+          uploadedAssets,
+          customVisualText[ht.textKey],
+          layoutTemplates[ht.docKey]
+        );
+        if (packageAsFolder) {
+          packagedFiles.push({
+            filename,
+            blob: doc.output('blob'),
+            category: 'hebergement_notaire_hir',
+            actor: ht.actor,
+            orderIndex: ht.tabNum,
+            label: ht.label
+          });
+        } else {
+          doc.save(filename);
+        }
+        executedActions.push(`Onglet ${ht.tabNum} PDF`);
       }
-      if (autoQueue.downloadTab10Pdf) {
-        await handleDownloadHousingTabPdf(10);
-        executedActions.push('Onglet 10 PDF');
-      }
-      if (autoQueue.downloadTab11Pdf) {
-        await handleDownloadHousingTabPdf(11);
-        executedActions.push('Onglet 11 PDF');
-      }
-      if (autoQueue.downloadTab12Pdf) {
-        await handleDownloadHousingTabPdf(12);
-        executedActions.push('Onglet 12 PDF');
+
+      let folderFeedback = '';
+      if (packageAsFolder && packagedFiles.length > 0) {
+        const exportRes = await exportSelectedDocumentsIntoFolder(packagedFiles, {
+          employeeOrCandidateName: updated.nomComplet,
+          referenceCode: updated.codeIdCandidature,
+          customFolderName: customAutoFolderName.trim() || undefined,
+          arrangementMode: autoArrangementMode,
+          preferNativeDirectoryPicker: preferNativeDirPicker,
+          includeManifestTxt: true
+        });
+        folderFeedback =
+          exportRes.method === 'directory_picker'
+            ? ` · Classés dans dossier local « ${exportRes.rootFolderName}/ » (${exportRes.fileCount} PDF)`
+            : ` · Dossier « ${exportRes.rootFolderName}/ » téléchargé (.zip, ${exportRes.fileCount} PDF)`;
+        if (exportRes.warning) {
+          folderFeedback += ` (${exportRes.warning})`;
+        }
       }
 
       await loadPostulants();
-      triggerToast(`Génération Automatique terminée (${executedActions.join(' · ')})`);
+      triggerToast(`Génération Automatique terminée (${executedActions.join(' · ')})${folderFeedback}`);
     } catch (err) {
       console.error(err);
       triggerToast('Erreur lors de la génération automatique.');
@@ -1783,13 +1951,13 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
   return (
     <div className="bg-white rounded-2xl shadow-lg border border-slate-200 overflow-hidden font-sans">
       {/* 1. EN-TÊTE CLAIR ET ÉPURÉ */}
-      <div className="bg-[#0B2545] text-white px-6 py-5 border-b border-[#163968] flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div className="flex items-start gap-3">
+      <div className="bg-[#0B2545] text-white px-4 sm:px-6 py-4 sm:py-5 border-b border-[#163968] flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div className="flex items-start gap-3 min-w-0">
           {onBack && (
             <button
               type="button"
               onClick={onBack}
-              className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer mt-0.5"
+              className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer mt-0.5 shrink-0"
               title="Retour à la section précédente"
             >
               <ArrowLeft className="w-4 h-4 text-amber-300" />
@@ -1798,22 +1966,22 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
           <div className="p-2.5 rounded-xl bg-amber-400/15 border border-amber-300/30 shrink-0">
             <UserPlus className="w-6 h-6 text-amber-300" />
           </div>
-          <div>
-            <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight text-white">
+          <div className="min-w-0">
+            <h2 className="text-lg sm:text-2xl font-extrabold tracking-tight text-white">
               POSTULANT NOUVEAU
             </h2>
-            <p className="text-xs sm:text-sm text-blue-100 mt-1 tabular-nums">
+            <p className="text-xs sm:text-sm text-blue-100 mt-1 tabular-nums break-words">
               Dossier actif : <strong className="text-white">{postulant.nomComplet}</strong> · CNP {postulant.codeCnp} · Réf.{' '}
               <span className="font-mono text-amber-300">{postulant.codeIdCandidature}</span>
             </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => handleSavePostulant()}
-            className="min-h-[42px] px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold text-xs sm:text-sm flex items-center gap-2 cursor-pointer whitespace-nowrap"
+            className="min-h-[44px] px-3.5 sm:px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold text-xs sm:text-sm flex items-center gap-2 cursor-pointer whitespace-nowrap"
           >
             <Save className="w-4 h-4 text-amber-300" />
             <span>Sauvegarder</span>
@@ -1823,7 +1991,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             type="button"
             onClick={handlePublishToEntretien}
             disabled={isPublishingEntretien}
-            className="min-h-[42px] px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs sm:text-sm flex items-center gap-2 cursor-pointer disabled:opacity-50 whitespace-nowrap"
+            className="min-h-[44px] px-3.5 sm:px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs sm:text-sm flex items-center gap-2 cursor-pointer disabled:opacity-50 whitespace-nowrap"
           >
             <Globe className="w-4 h-4" />
             <span>{isPublishingEntretien ? 'Publication...' : 'Publier Entretien'}</span>
@@ -1833,7 +2001,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             type="button"
             onClick={handleAddOffreToNosOffres}
             disabled={isPublishingOffre}
-            className="min-h-[42px] px-4 py-2 rounded-lg bg-[#0066B3] hover:bg-[#0284c7] text-white font-semibold text-xs sm:text-sm flex items-center gap-2 cursor-pointer disabled:opacity-50 whitespace-nowrap"
+            className="min-h-[44px] px-3.5 sm:px-4 py-2 rounded-lg bg-[#0066B3] hover:bg-[#0284c7] text-white font-semibold text-xs sm:text-sm flex items-center gap-2 cursor-pointer disabled:opacity-50 whitespace-nowrap"
             title="Publier directement l'offre 05. Offre & CNP sur la page Nos Offres"
           >
             <Briefcase className="w-4 h-4 text-amber-300" />
@@ -1844,7 +2012,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             type="button"
             onClick={handleRunAutomaticFullGeneration}
             disabled={isAutoExecuting}
-            className="min-h-[42px] px-5 py-2 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs sm:text-sm flex items-center gap-2 cursor-pointer disabled:opacity-50 whitespace-nowrap"
+            className="min-h-[44px] px-4 sm:px-5 py-2 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs sm:text-sm flex items-center gap-2 cursor-pointer disabled:opacity-50 whitespace-nowrap"
           >
             {isAutoExecuting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
             <span>Génération Automatique ({checkedCount})</span>
@@ -1854,22 +2022,22 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
 
       {/* BARRE DE NOTIFICATION TOAST */}
       {copiedNotification && (
-        <div className="bg-emerald-600 text-white text-xs sm:text-sm px-6 py-3 flex items-center justify-between font-semibold">
-          <div className="flex items-center gap-2">
+        <div className="bg-emerald-600 text-white text-xs sm:text-sm px-4 sm:px-6 py-3 flex items-center justify-between font-semibold">
+          <div className="flex items-center gap-2 min-w-0">
             <CheckCircle2 className="w-4 h-4 text-emerald-100 shrink-0" />
-            <span>{copiedNotification}</span>
+            <span className="break-words">{copiedNotification}</span>
           </div>
           <button
             type="button"
             onClick={() => setCopiedNotification(null)}
-            className="text-xs underline cursor-pointer ml-4"
+            className="text-xs underline cursor-pointer ml-4 shrink-0"
           >
             Fermer
           </button>
         </div>
       )}
 
-      <div className="p-6 space-y-6">
+      <div className="p-3 sm:p-6 space-y-5 sm:space-y-6">
         {/* SÉLECTEUR SALARIÉ EXISTANT DEPUIS "SALARIÉS & CONTRATS AUTO CDI/CDD" */}
         <div className="bg-blue-50/70 border border-blue-200 rounded-xl px-4 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 text-xs sm:text-sm text-[#0B2545]">
@@ -2028,13 +2196,13 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                       setActiveManualTab(DOC_KEY_TO_MANUAL_TAB[activeHousingFormSubTab]);
                     }
                   }}
-                  className={`min-h-[44px] px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold inline-flex items-center gap-2 transition-colors cursor-pointer whitespace-nowrap border ${
+                  className={`min-h-[44px] px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold inline-flex items-center gap-2 transition-colors cursor-pointer text-left sm:whitespace-nowrap border ${
                     isActive
                       ? 'bg-[#0B2545] text-white border-[#0B2545]'
                       : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
                   }`}
                 >
-                  <Icon className={`w-4 h-4 ${isActive ? 'text-amber-300' : 'text-[#0066B3]'}`} />
+                  <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-amber-300' : 'text-[#0066B3]'}`} />
                   <span>{tab.label}</span>
                 </button>
               );
@@ -2944,6 +3112,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
               );
               triggerToast(`Document Word (.docx) généré avec la mise en page imitée et visuels intégrés.`);
             }}
+            onOpenInWebmail={onOpenInWebmail}
             onToast={triggerToast}
           />
         )}
@@ -3035,6 +3204,97 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                     Tout décocher
                   </button>
                 </div>
+              </div>
+
+              {/* PARAMÈTRES DU DOSSIER DE CLASSEMENT SALARIÉ (MISSION 2) */}
+              <div className="p-4 rounded-xl bg-white border border-blue-200 space-y-3 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="inline-flex items-center gap-2 font-extrabold text-[#0B2545] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={packageAsFolder}
+                      onChange={(e) => setPackageAsFolder(e.target.checked)}
+                      className="rounded text-[#0066B3]"
+                    />
+                    <span>
+                      Classer automatiquement tous les PDF générés dans un dossier nommé d’après le salarié
+                    </span>
+                  </label>
+                  <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-blue-50 text-[#0066B3] font-bold">
+                    {customAutoFolderName.trim() ||
+                      buildDefaultEmployeeFolderName(postulant.nomComplet, postulant.codeIdCandidature)}
+                    /
+                  </span>
+                </div>
+
+                {packageAsFolder && (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+                    <label className="space-y-1">
+                      <span className="font-semibold text-slate-600 block">
+                        Nom du dossier cible (auto selon salarié)
+                      </span>
+                      <div className="flex gap-1.5">
+                        <input
+                          type="text"
+                          value={customAutoFolderName}
+                          onChange={(e) => setCustomAutoFolderName(e.target.value)}
+                          placeholder={buildDefaultEmployeeFolderName(
+                            postulant.nomComplet,
+                            postulant.codeIdCandidature
+                          )}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-slate-50 focus:bg-white font-mono text-xs"
+                        />
+                        {customAutoFolderName && (
+                          <button
+                            type="button"
+                            onClick={() => setCustomAutoFolderName('')}
+                            className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold shrink-0 cursor-pointer"
+                            title="Revenir au nom du salarié"
+                          >
+                            Auto
+                          </button>
+                        )}
+                      </div>
+                    </label>
+
+                    <label className="space-y-1">
+                      <span className="font-semibold text-slate-600 block">
+                        Organisation des sous-dossiers
+                      </span>
+                      <select
+                        value={autoArrangementMode}
+                        onChange={(e) =>
+                          setAutoArrangementMode(e.target.value as FolderArrangementMode)
+                        }
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white font-semibold text-xs"
+                      >
+                        <option value="by_category">
+                          Par catégorie (01_Administratif / 02_Contrats / 03_Hébergement)
+                        </option>
+                        <option value="by_actor">
+                          Par acteur (Employeur / Cabinet_CRIC / Notaire / HIR / Candidat)
+                        </option>
+                        <option value="flat_ordered">
+                          Dossier unique ordonné (01_..., 02_...)
+                        </option>
+                      </select>
+                    </label>
+
+                    <div className="flex items-end">
+                      <label className="w-full p-2.5 rounded-lg border border-slate-200 bg-slate-50 flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={preferNativeDirPicker}
+                          onChange={(e) => setPreferNativeDirPicker(e.target.checked)}
+                          className="rounded text-[#0066B3]"
+                        />
+                        <span className="text-[11px] font-semibold text-slate-700">
+                          Demander un dossier disque direct (Chrome/Edge, sinon ZIP auto)
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">

@@ -57,6 +57,7 @@ import {
   deleteLayoutTemplateFromFirestore
 } from '../../services/layoutImitationService';
 import { PanneauReglagesFichiersImportes } from '../common/PanneauReglagesFichiersImportes';
+import { InteractiveReplicaStudio } from './InteractiveReplicaStudio';
 
 interface HousingAndDocEsStepWizardProps {
   activeDocKey: LayoutTargetDocKey;
@@ -77,6 +78,7 @@ interface HousingAndDocEsStepWizardProps {
   onJumpToStudioTab: (docKey: LayoutTargetDocKey) => void;
   onDownloadDocPdf: (docKey: LayoutTargetDocKey) => void;
   onDownloadDocWord: (docKey: LayoutTargetDocKey) => void;
+  onOpenInWebmail?: (html: string) => void;
   onToast: (msg: string) => void;
 }
 
@@ -178,6 +180,7 @@ export const HousingAndDocEsStepWizard: React.FC<HousingAndDocEsStepWizardProps>
   onJumpToStudioTab,
   onDownloadDocPdf,
   onDownloadDocWord,
+  onOpenInWebmail,
   onToast
 }) => {
   const [stepByDoc, setStepByDoc] = useState<Record<LayoutTargetDocKey, number>>({
@@ -1236,10 +1239,26 @@ export const HousingAndDocEsStepWizard: React.FC<HousingAndDocEsStepWizardProps>
                   Aucun document modèle importé pour « {activeDef.tabLabel} ».
                 </p>
                 <p className="text-xs text-slate-500 max-w-lg mx-auto">
-                  Vous pouvez importer un document type (PDF, JPG, PNG) pour que notre outil imite sa mise en page, ou passer directement à l’étape suivante pour utiliser la mise en page officielle standard.
+                  Vous pouvez importer un document type (PDF, JPG, PNG) pour que notre outil imite sa mise en page, utiliser le studio interactif 8 étapes ci-dessous, ou passer à l’étape suivante pour utiliser la mise en page officielle standard.
                 </p>
               </div>
             )}
+
+            {/* STUDIO DE REPRODUCTION FIDÈLE & ÉDITEUR CANVA 8 ÉTAPES */}
+            <InteractiveReplicaStudio
+              docKey={activeDocKey}
+              onOpenInWebmail={onOpenInWebmail}
+              onSyncedPalette={(pal) => {
+                if (activeTemplate) {
+                  void handleUpdateTemplateField({
+                    primaryColor: pal.primary,
+                    accentColor: pal.accent,
+                    pageBgColor: pal.pageBgColor
+                  });
+                }
+              }}
+              onToast={onToast}
+            />
 
             {/* LIAISON DIRECTE : PANNEAU VISUELS & TAMPONS DE CET ONGLET */}
             <PanneauReglagesFichiersImportes

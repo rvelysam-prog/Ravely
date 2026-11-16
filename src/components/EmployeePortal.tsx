@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { Employee, SiteSettings } from '../types';
 import { BrandLogo } from './BrandLogo';
+import { ResponsivePaperWrapper } from './common/ResponsivePaperWrapper';
 import {
   authenticateEmployeeJS,
   fetchEmployeesFromFirestore,
@@ -620,7 +621,7 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {hasCustomPdfData && (
                 <div className="flex items-center bg-slate-800 rounded-lg p-0.5 text-xs">
                   <button
@@ -668,7 +669,7 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
 
           {/* Protected A4 Contract Viewport */}
           <div
-            className="bg-slate-800 p-3 sm:p-6 overflow-x-auto max-h-[820px] overflow-y-auto relative select-none"
+            className="bg-slate-800 p-2 sm:p-6 overflow-x-hidden max-h-[820px] overflow-y-auto relative select-none"
             onContextMenu={handleContextMenu}
           >
             {viewerMode === 'pdf-native' && hasCustomPdfData ? (
@@ -684,10 +685,11 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
                 />
               </div>
             ) : (
-              /* EXACT A4 VISUAL REPRODUCTION OF THE 4-PAGE REFERENCE CONTRACT */
+              /* EXACT A4 VISUAL REPRODUCTION WRAPPED FOR MOBILE/TABLET */
+              <ResponsivePaperWrapper paperWidthPx={794} minPaperHeightPx={1122} manualZoomPct={zoomLevel}>
               <div
                 style={{ fontSize: `${zoomLevel}%` }}
-                className="max-w-[794px] mx-auto bg-white text-black shadow-2xl border border-slate-300 relative overflow-hidden"
+                className="w-[794px] mx-auto bg-white text-black shadow-2xl border border-slate-300 relative overflow-hidden"
               >
                 {/* Arrière-plan importé personnalisé */}
                 {effectiveArrierePlan && (
@@ -1187,6 +1189,7 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
                   </span>
                 </div>
               </div>
+              </ResponsivePaperWrapper>
             )}
           </div>
         </div>

@@ -40,6 +40,7 @@ import { ForcusWordEditor } from '../admin/ForcusWordEditor';
 import { ForcusDocumentLayer } from '../../services/indexedDbDocStorage';
 import { VisualHtmlEmailConverter } from './VisualHtmlEmailConverter';
 import { EditableDocumentVisual } from './EditableDocumentVisual';
+import { ResponsivePaperWrapper } from './ResponsivePaperWrapper';
 import { ReferenceLayoutTemplate, resolveEffectiveLayout } from '../../services/layoutImitationService';
 
 export interface InteractiveCanvasProps {
@@ -116,6 +117,7 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
   const [hasInlineEdits, setHasInlineEdits] = useState<boolean>(false);
   const [resetNonce, setResetNonce] = useState<number>(0);
   const [isExportingPdf, setIsExportingPdf] = useState<boolean>(false);
+  const [isCapturingConverter, setIsCapturingConverter] = useState<boolean>(false);
 
   const [emailViewport, setEmailViewport] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
   const [copiedHtml, setCopiedHtml] = useState(false);
@@ -459,7 +461,8 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
     onClearExternalSelection?.();
     if (a4SheetRef.current && viewMode === 'a4') {
       try {
-        await new Promise((r) => requestAnimationFrame(r));
+        setIsCapturingConverter(true);
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
         const rendered = await html2canvas(a4SheetRef.current, {
           scale: 1.4,
           useCORS: true,
@@ -472,6 +475,8 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
         }
       } catch {
         // Fallback géré par VisualHtmlEmailConverter
+      } finally {
+        setIsCapturingConverter(false);
       }
     }
     setViewMode('converter');
@@ -856,15 +861,20 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
         </div>
       </div>
 
-      {/* FEUILLE A4 ORIGINALE (Affichée et aérée par défaut ; rendue hors-écran si besoin de capture) */}
+      {/* FEUILLE A4 ORIGINALE (Adaptée proportionnellement sur mobile/tablette ; non scalée lors de la capture PDF/HTML) */}
       <div
         className={
           viewMode === 'a4'
-            ? 'bg-slate-100 border border-slate-200 p-4 sm:p-8 rounded-xl flex justify-center overflow-x-auto'
+            ? 'bg-slate-100 border border-slate-200 p-2 sm:p-6 rounded-xl overflow-hidden'
             : 'fixed -left-[9999px] top-0 pointer-events-none opacity-100'
         }
         aria-hidden={viewMode !== 'a4'}
       >
+        <ResponsivePaperWrapper
+          paperWidthPx={effectiveLayout?.orientation === 'landscape' ? 1050 : 794}
+          minPaperHeightPx={effectiveLayout?.orientation === 'landscape' ? 794 : 1122}
+          bypassScale={isExportingPdf || isCapturingConverter || viewMode !== 'a4'}
+        >
         <div
           ref={a4SheetRef}
           onDoubleClick={(e) => {
@@ -1152,6 +1162,7 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
             </div>
           )}
         </div>
+        </ResponsivePaperWrapper>
       </div>
 
       {/* VUE 3 FENÊTRES (DÉCOUPAGE CANVAS + APERÇU EMAIL + CODE SOURCE) */}
@@ -1188,9 +1199,9 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
           <div
             className={`transition-all duration-300 bg-white rounded-xl shadow-2xl overflow-hidden border border-slate-700 ${
               emailViewport === 'mobile'
-                ? 'w-[375px]'
+                ? 'w-full max-w-[375px]'
                 : emailViewport === 'tablet'
-                ? 'w-[640px]'
+                ? 'w-full max-w-[640px]'
                 : 'w-full max-w-[680px]'
             }`}
           >

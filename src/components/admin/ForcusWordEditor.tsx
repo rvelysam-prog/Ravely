@@ -75,6 +75,7 @@ import mammoth from 'mammoth';
 import { ArrowLeft, CheckCircle2 } from 'lucide-react';
 import { SiteSettings } from '../../types';
 import { VisualHtmlEmailConverter } from '../common/VisualHtmlEmailConverter';
+import { ResponsivePaperWrapper } from '../common/ResponsivePaperWrapper';
 
 export interface ForcusWordEditorProps {
   settings?: SiteSettings;
@@ -753,8 +754,8 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
   return (
     <div className="flex flex-col h-full bg-[#E1DFDD] border border-slate-300 rounded-2xl overflow-hidden shadow-2xl font-sans select-none">
       {/* 1. BARRE DE TITRE SUPÉRIEURE WORD 2013 (Bleu classique #2B579A) */}
-      <div className="bg-[#2B579A] text-white px-4 py-2 flex items-center justify-between border-b border-[#1E3F70]">
-        <div className="flex items-center gap-3">
+      <div className="bg-[#2B579A] text-white px-3 sm:px-4 py-2 flex flex-wrap items-center justify-between gap-2 border-b border-[#1E3F70]">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0 max-w-full">
           {/* Quick Access Toolbar */}
           <div className="flex items-center gap-1.5 pr-3 border-r border-white/20">
             <button
@@ -798,13 +799,13 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
             type="text"
             value={doc.title}
             onChange={(e) => setDoc({ ...doc, title: e.target.value })}
-            className="bg-transparent text-white font-bold text-xs sm:text-sm px-2 py-0.5 rounded hover:bg-white/10 focus:bg-white focus:text-slate-900 border-b border-transparent focus:border-amber-400 outline-none transition-all w-56 sm:w-80"
+            className="bg-transparent text-white font-bold text-xs sm:text-sm px-2 py-0.5 rounded hover:bg-white/10 focus:bg-white focus:text-slate-900 border-b border-transparent focus:border-amber-400 outline-none transition-all w-40 sm:w-72 md:w-80 max-w-full"
           />
           <span className="text-[11px] text-blue-200 hidden sm:inline">- FORCUS Word 2013</span>
         </div>
 
         {/* Actions rapides à droite */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
           <span className="text-[10px] text-blue-200 font-mono hidden md:inline">{lastSavedTime}</span>
 
           <button
@@ -1428,9 +1429,9 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
       </div>
 
       {/* 4. ZONE CENTRALE : FEUILLES A4 AVEC RÈGLES OU CONVERTISSEUR 3 FENÊTRES + VOLET DE SÉLECTION */}
-      <div className="flex-1 flex overflow-hidden relative">
+      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
         {workspaceView === 'converter_3_panels' ? (
-          <div className="flex-1 overflow-auto p-4 bg-[#E1DFDD]">
+          <div className="flex-1 overflow-auto p-2 sm:p-4 bg-[#E1DFDD]">
             <VisualHtmlEmailConverter
               title={doc.title}
               fallbackHtmlEmail={doc.pages.map((p) => p.htmlContent).join('<br/>')}
@@ -1439,14 +1440,14 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
           </div>
         ) : (
         <div
-          className="flex-1 overflow-auto p-8 flex flex-col items-center gap-10 bg-[#E1DFDD] relative"
+          className="flex-1 overflow-auto p-3 sm:p-8 flex flex-col items-center gap-6 sm:gap-10 bg-[#E1DFDD] relative"
           onClick={() => {
             if (floatingInsertMenu) setFloatingInsertMenu(null);
             if (selectedLayerId) setSelectedLayerId(null);
           }}
         >
           {/* Règle horizontale Word 2013 */}
-          <div className="w-[210mm] max-w-full bg-white border border-slate-300 h-5 mb-2 rounded shadow-2xs flex items-center justify-between px-4 text-[9px] font-mono text-slate-400 select-none">
+          <div className="hidden md:flex w-[210mm] max-w-full bg-white border border-slate-300 h-5 mb-2 rounded shadow-2xs items-center justify-between px-4 text-[9px] font-mono text-slate-400 select-none">
             <span>0 cm</span>
             <span>2.5 cm (Marge)</span>
             <span>5 cm</span>
@@ -1464,10 +1465,16 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
             </div>
           )}
 
-          {/* Rendu des pages A4 physiques */}
+          {/* Rendu des pages A4 physiques (scalées proprement sur mobile/tablette) */}
           {doc.pages.map((page, pageIndex) => (
-            <div
+            <ResponsivePaperWrapper
               key={page.id}
+              paperWidthPx={doc.orientation === 'landscape' ? 1122 : 794}
+              minPaperHeightPx={doc.orientation === 'landscape' ? 794 : 1122}
+              manualZoomPct={zoomLevel}
+              bypassScale={isExportingPdf}
+            >
+            <div
               onClick={(e) => {
                 if (e.target === e.currentTarget) {
                   setSelectedLayerId(null);
@@ -1482,8 +1489,6 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
                 paddingBottom: `${doc.margins.bottom}mm`,
                 paddingLeft: `${doc.margins.left}mm`,
                 paddingRight: `${doc.margins.right}mm`,
-                transform: `scale(${zoomLevel / 100})`,
-                transformOrigin: 'top center',
                 fontFamily: doc.theme.fontFamily || 'Calibri, sans-serif'
               }}
               className="forcus-page-sheet relative bg-white shadow-2xl border border-slate-300 text-slate-900 rounded-xs mb-8 transition-transform"
@@ -1862,6 +1867,7 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
                 Page {page.pageNumber} sur {doc.pages.length}
               </span>
             </div>
+            </ResponsivePaperWrapper>
           ))}
 
           {/* Menu contextuel flottant suite à un double-clic */}
@@ -1950,7 +1956,7 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
 
         {/* 5. VOLET LATÉRAL DE GESTION DES CALQUES (Selection Pane) */}
         {isSelectionPaneOpen && (
-          <div data-forcus-selection-pane="true" className="w-72 bg-white border-l border-slate-300 flex flex-col shadow-lg z-20">
+          <div data-forcus-selection-pane="true" className="w-full lg:w-72 shrink-0 max-h-[300px] lg:max-h-none bg-white border-t lg:border-t-0 lg:border-l border-slate-300 flex flex-col shadow-lg z-20">
             <div className="bg-[#2B579A] text-white p-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Layers className="w-4 h-4 text-amber-400" />
@@ -2064,7 +2070,7 @@ export const ForcusWordEditor: React.FC<ForcusWordEditorProps> = ({
       </div>
 
       {/* 6. BARRE D'ÉTAT INFÉRIEURE WORD 2013 */}
-      <div className="bg-[#2B579A] text-white px-4 py-1.5 flex items-center justify-between text-xs border-t border-[#1E3F70]">
+      <div className="bg-[#2B579A] text-white px-3 sm:px-4 py-1.5 flex flex-wrap items-center justify-between gap-2 text-xs border-t border-[#1E3F70]">
         <div className="flex items-center gap-4">
           <span>Page 1 sur {doc.pages.length}</span>
           <span className="hidden sm:inline">|</span>

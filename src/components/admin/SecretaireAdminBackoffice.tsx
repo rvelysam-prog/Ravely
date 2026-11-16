@@ -166,25 +166,25 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
     <div className="min-h-screen bg-[#F8F9FA] flex flex-col">
       {/* Top Header Secrétariat */}
       <header className="bg-[#0B1220] text-white border-b border-white/10 sticky top-0 z-30 shadow-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3.5">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 min-h-[72px] py-2 sm:py-0 flex flex-wrap items-center justify-between gap-2 sm:gap-4">
+          <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
             <BrandLogo size="header" companyName={settings.company_name} />
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-base text-white tracking-wide">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                <span className="font-bold text-sm sm:text-base text-white tracking-wide truncate max-w-[160px] sm:max-w-none">
                   {settings.company_name}
                 </span>
                 <span className="bg-amber-400 text-slate-950 font-bold text-[10px] uppercase px-2 py-0.5 rounded-full">
                   Secrétariat
                 </span>
               </div>
-              <p className="text-xs text-gray-400">
+              <p className="text-[11px] sm:text-xs text-gray-400 hidden sm:block">
                 Espace de gestion administrative des identités salariés
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             <div className="hidden sm:flex flex-col text-right">
               <span className="text-xs font-semibold text-white">{session.username}</span>
               <span className="text-[10px] text-amber-400 font-mono">

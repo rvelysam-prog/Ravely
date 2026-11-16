@@ -47,8 +47,8 @@ export const Header: React.FC<HeaderProps> = ({
     <>
       {/* Barre Top Noire #0A0A0A 11px avec adresse / coordonnées filtrées + sélecteur multisite étanche */}
       <div className="bg-[#0A0A0A] text-gray-300 text-[11px] leading-tight border-b border-white/10">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 flex flex-col md:flex-row items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center justify-center md:justify-start gap-x-3.5 gap-y-1">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-2 flex flex-col md:flex-row items-center justify-between gap-1.5 sm:gap-2">
+          <div className="flex flex-wrap items-center justify-center md:justify-start gap-x-3 gap-y-1 text-center md:text-left">
             <span className="inline-flex items-center gap-1.5 text-gray-300">
               <MapPin className="w-3 h-3 text-[#D4A017] shrink-0" />
               <span>{settings.address}</span>
@@ -56,7 +56,7 @@ export const Header: React.FC<HeaderProps> = ({
 
             {/* SÉCURITÉ ÉTANCHÉITÉ : Coordonnées masquées à 100% sur le Secrétariat */}
             {hasPhone && (
-              <div className="inline-flex items-center gap-1.5 text-gray-300 font-mono tabular-nums text-xs">
+              <div className="inline-flex flex-wrap items-center justify-center gap-1.5 text-gray-300 font-mono tabular-nums text-[11px] sm:text-xs">
                 <Phone className="w-3.5 h-3.5 text-[#D4A017] shrink-0" />
                 <span className="text-gray-400 text-[10px] uppercase font-sans font-semibold">Tél :</span>
                 <a
@@ -66,10 +66,10 @@ export const Header: React.FC<HeaderProps> = ({
                 >
                   {settings.phone}
                 </a>
-                <span className="text-gray-500 font-bold">|</span>
+                <span className="text-gray-500 font-bold hidden sm:inline">|</span>
                 <a
                   href={`tel:${(settings.phone_secondary || '+1 (506) 802-2226').replace(/\s+/g, '')}`}
-                  className="text-gray-300 hover:text-white font-medium transition-colors"
+                  className="text-gray-300 hover:text-white font-medium transition-colors hidden sm:inline"
                   title={`Ligne secondaire / Opérations : ${settings.phone_secondary || '+1 (506) 802-2226'}`}
                 >
                   {settings.phone_secondary || '+1 (506) 802-2226'}
@@ -78,17 +78,17 @@ export const Header: React.FC<HeaderProps> = ({
             )}
 
             {hasEmail && (
-              <div className="inline-flex items-center gap-1.5 text-gray-300">
+              <div className="inline-flex flex-wrap items-center justify-center gap-1.5 text-gray-300 max-w-full">
                 <Mail className="w-3 h-3 text-[#D4A017] shrink-0" />
                 <a
                   href={`mailto:${settings.email}`}
-                  className="text-[#D4A017] hover:text-white font-medium transition-colors"
+                  className="text-[#D4A017] hover:text-white font-medium transition-colors break-all"
                   title={`Email principal : ${settings.email}`}
                 >
                   {settings.email}
                 </a>
                 {settings.email_secondary && (
-                  <>
+                  <span className="hidden md:inline-flex items-center gap-1.5">
                     <span className="text-gray-500">/</span>
                     <a
                       href={`mailto:${settings.email_secondary}`}
@@ -97,7 +97,7 @@ export const Header: React.FC<HeaderProps> = ({
                     >
                       {settings.email_secondary}
                     </a>
-                  </>
+                  </span>
                 )}
               </div>
             )}
@@ -113,23 +113,23 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Header blanc cassé #F8F9FA sticky */}
       <header className="sticky top-0 z-40 bg-[#F8F9FA] text-gray-900 border-b border-gray-200 shadow-xs">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-22 flex items-center justify-between gap-4">
-          {/* Logo légèrement agrandi + "ATLANTIC TRANSPORT LTD" noir bold 20px + sous-texte "SURREY, BC • CANADA" gris 11px */}
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 sm:h-22 flex items-center justify-between gap-2 sm:gap-4">
+          {/* Logo + Titre adaptatif sur mobile sans débordement */}
           <button
             type="button"
             onClick={() => handleNavClick('accueil')}
-            className="flex items-center gap-3.5 text-left group focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F59E0B] rounded-xl min-h-[48px]"
+            className="flex items-center gap-2 sm:gap-3.5 text-left group focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F59E0B] rounded-xl min-h-[44px] min-w-0"
           >
             <BrandLogo
               customLogoUrl={settings.logo_url}
               companyName={settings.company_name}
               size="header"
             />
-            <div className="flex flex-col justify-center">
-              <span className="font-bold text-[17px] sm:text-[20px] leading-tight text-gray-950 tracking-tight whitespace-nowrap">
+            <div className="flex flex-col justify-center min-w-0">
+              <span className="font-bold text-sm sm:text-[20px] leading-tight text-gray-950 tracking-tight truncate max-w-[148px] xs:max-w-[180px] sm:max-w-none">
                 {settings.company_name}
               </span>
-              <span className="text-[11px] font-medium text-gray-500 uppercase tracking-wider mt-0.5 whitespace-nowrap">
+              <span className="text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wider mt-0.5 truncate">
                 SURREY, BC • CANADA
               </span>
             </div>
@@ -159,15 +159,18 @@ export const Header: React.FC<HeaderProps> = ({
             })}
           </nav>
 
-          {/* Boutons "Espace Employé" gris clair et "Demander un devis" orange #F59E0B */}
-          <div className="flex items-center gap-2.5">
+          {/* Boutons "Espace Employé" et "Demander un devis" avec cibles tactiles >= 44px */}
+          <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
             <button
               type="button"
               onClick={onOpenEmployeeModal}
-              className="min-h-[42px] px-3.5 sm:px-4 py-2 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-900 text-xs sm:text-sm font-semibold transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 border border-gray-300/80"
+              className="min-h-[44px] px-2.5 sm:px-4 py-2 rounded-xl bg-gray-200 hover:bg-gray-300 text-gray-900 text-xs sm:text-sm font-semibold transition-colors flex items-center gap-1.5 sm:gap-2 whitespace-nowrap shrink-0 border border-gray-300/80"
             >
               <Lock className="w-3.5 h-3.5 text-gray-700 shrink-0" />
-              <span>{isEmployeeLoggedIn ? 'Espace Employé (Actif)' : 'Espace Employé'}</span>
+              <span className="hidden xs:inline sm:inline">
+                {isEmployeeLoggedIn ? 'Employé (Actif)' : 'Espace Employé'}
+              </span>
+              <span className="xs:hidden">Portail</span>
             </button>
 
             <button

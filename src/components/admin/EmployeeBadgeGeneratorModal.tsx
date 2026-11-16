@@ -25,6 +25,7 @@ import {
 import { Employee, SiteSettings } from '../../types';
 import { getCompanyContactConfig, CompanyContactConfig } from '../../services/companyConfigService';
 import { generateDefaultAvatarSvgDataUri } from '../../services/staticStorage';
+import { ResponsivePaperWrapper } from '../common/ResponsivePaperWrapper';
 
 interface EmployeeBadgeGeneratorModalProps {
   employee: Employee | null;
@@ -874,18 +875,19 @@ export const EmployeeBadgeGeneratorModal: React.FC<EmployeeBadgeGeneratorModalPr
               className="px-2 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold w-24 text-[#0B2545]"
             />
           </div>
-          <div className="flex items-center gap-2 ml-auto text-[11px] text-slate-600">
+          <div className="flex flex-wrap items-center gap-2 sm:ml-auto text-[11px] text-slate-600">
             <span className="bg-white border border-slate-200 px-2 py-0.5 rounded font-mono">
               Tél: {companyConfig.primaryPhone}
             </span>
-            <span className="bg-white border border-slate-200 px-2 py-0.5 rounded font-mono">
+            <span className="bg-white border border-slate-200 px-2 py-0.5 rounded font-mono break-all">
               Email: {companyConfig.primaryEmail}
             </span>
           </div>
         </div>
 
         {/* Zone de prévisualisation de la carte (Format vertical CR-80) */}
-        <div className="p-4 sm:p-8 flex flex-col items-center justify-center bg-slate-200/80 overflow-y-auto flex-1">
+        <div className="p-3 sm:p-8 flex flex-col items-center justify-center bg-slate-200/80 overflow-y-auto flex-1">
+          <ResponsivePaperWrapper paperWidthPx={370} minPaperHeightPx={585}>
           {activeSide === 'recto' ? (
             /* ============================== */
             /* RECTO VISUEL DU BADGE          */
@@ -1098,6 +1100,7 @@ export const EmployeeBadgeGeneratorModal: React.FC<EmployeeBadgeGeneratorModalPr
               </div>
             </div>
           )}
+          </ResponsivePaperWrapper>
 
           {/* Légende sous le badge */}
           <div className="mt-4 flex flex-wrap items-center justify-center gap-3 text-xs text-slate-600 print:hidden">

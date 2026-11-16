@@ -2989,7 +2989,7 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
             <div className="relative z-10 space-y-4">
               {/* En-tête Page 1 */}
               <div className="grid grid-cols-12 gap-2 items-start">
-                <div className="col-span-5 space-y-1">
+                <div className="col-span-5 space-y-1 min-w-0">
                   {/* Zone Logo avec alignement, taille, opacité, teinte, X/Y, rotation */}
                   <div
                     className={`min-h-[64px] w-full ${getLiveAssetBoxClasses(assetsConfig.logo)}`}
@@ -3002,17 +3002,17 @@ export const PromesseEmbaucheSection: React.FC<PromesseEmbaucheSectionProps> = (
                       }
                       alt="Atlantic Transport"
                       style={getLiveAssetInlineStyle(assetsConfig.logo, { w: 180, h: 60 })}
-                      className="object-contain"
+                      className="object-contain max-w-full"
                     />
                   </div>
-                  <div className="text-[11px] leading-snug text-[#3A6E48] pt-1">
+                  <div className="text-[10px] sm:text-[11px] leading-snug text-[#3A6E48] pt-1 break-words">
                     <div>Atlantic Transport ltd.</div>
                     <div>King George Blvd, Surrey</div>
                     <div>BC V3T 2W1, Canada</div>
                     <div>Téléphone : +15068022206 · +1 (506) 802-2226</div>
                     <div>
                       Email :{' '}
-                      <span className="font-bold text-[#1B6CA8]">
+                      <span className="font-bold text-[#1B6CA8] break-all">
                         atlantictransport.int.contact@ik.me · atlantictransport.int@ik.me
                       </span>
                     </div>
