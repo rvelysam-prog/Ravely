@@ -5,11 +5,28 @@
  */
 
 import { jsPDF } from 'jspdf';
-import { collection, doc, getDocs, setDoc, deleteDoc, getDoc } from 'firebase/firestore';
+import JSZip from 'jszip';
+import { collection, doc, getDocs, setDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { SiteSettings } from '../types';
 import { CONTRACT_STATIC_ASSETS, loadStaticImageAsPngDataUrl } from './contractPdfGenerator';
-import { generateSmallStackedBarcodeCanvasDataUrl, saveInterviewSession, TicketEntretienData } from './contractGenerationService';
+import { saveInterviewSession, TicketEntretienData } from './contractGenerationService';
+import type { LayoutTemplatesMap, ReferenceLayoutTemplate } from './layoutImitationService';
+import type { PdfImportedAssetsConfig, UploadedAssetUrlsMap } from './departmentsAndEmailService';
+import {
+  DocEsPreloadedImages,
+  FichesDocEsData,
+  KitDocLayoutMap,
+  KitDocVisualScopeMap,
+  buildDefaultFichesDocEsData,
+  loadStoredFichesDocEsSync,
+  getDocEsModelsForCasType,
+  renderDocEsPlainText,
+  resolveLayoutTemplateForDocEsModel,
+  preloadDocEsModelVisuals,
+  generateKitDocEsCompiledPdf,
+  generateKitDocEsIndividualPdfsAsync
+} from './fichesEtDocEsService';
 
 export type RecrutementCasType = 'direct' | 'agence';
 
@@ -484,358 +501,220 @@ Mandataire agréé CNESST : ${p.permisCnesst} · Membre CCIC : ${p.numeroCcic}`;
   }
 }
 
+export interface PostulantKitGenerationOptions {
+  uploadedAssets?: UploadedAssetUrlsMap;
+  assetsConfig?: PdfImportedAssetsConfig;
+  layoutTemplates?: LayoutTemplatesMap;
+  kitDocLayouts?: KitDocLayoutMap;
+  kitDocVisualScopes?: KitDocVisualScopeMap;
+}
+
 /**
- * Génère le PDF complet du Kit Candidat / Dossier Postulant
+ * Génère le PDF complet du Kit Candidat constitué de l'ensemble des documents PDF
+ * énumérés dans "Fiches et DOC ES" selon le type de candidature ('direct' : Modèles 1 à 8 | 'agence' : Modèles 9 à 15),
+ * avec mise en page par document et intégration de tous les visuels "3. Visuels, Logos & Tampons (6 Parties)".
  */
 export async function generatePostulantKitPdf(
   p: PostulantInfo,
   settings: SiteSettings,
-  customTextOverride?: string
+  customTextOverride?: string,
+  docEsDataOverride?: FichesDocEsData,
+  layoutTemplate?: ReferenceLayoutTemplate,
+  kitOptions?: PostulantKitGenerationOptions
 ): Promise<{ doc: jsPDF; filename: string }> {
-  const doc = new jsPDF({
-    orientation: 'portrait',
-    unit: 'mm',
-    format: 'a4',
-    compress: true
-  });
+  const effectiveDocEsData =
+    docEsDataOverride ||
+    loadStoredFichesDocEsSync(p.id, buildDefaultFichesDocEsData(p, settings));
 
-  const PAGE_WIDTH = 210;
-  const PAGE_HEIGHT = 297;
-  const MARGIN_LEFT = 20;
-  const MARGIN_RIGHT = 20;
-  const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT;
+  const models = getDocEsModelsForCasType(p.casType);
+  const mergedLayoutTemplates: LayoutTemplatesMap = {
+    ...(kitOptions?.layoutTemplates || {}),
+    ...(layoutTemplate ? { doc_es: layoutTemplate } : {})
+  };
 
-  let logoEmp = '';
-  let logoAgence = '';
-  let cachetDataUrl = '';
-  let signatureDataUrl = '';
-  let photoDataUrl = '';
+  const perModelLayouts: Record<number, ReferenceLayoutTemplate> = {};
+  const perModelImages: Record<number, DocEsPreloadedImages> = {};
+
+  await Promise.all(
+    models.map(async (m) => {
+      perModelLayouts[m.id] = resolveLayoutTemplateForDocEsModel(
+        m.id,
+        mergedLayoutTemplates,
+        kitOptions?.kitDocLayouts,
+        layoutTemplate || mergedLayoutTemplates.doc_es
+      );
+      perModelImages[m.id] = await preloadDocEsModelVisuals(
+        m.id,
+        p,
+        kitOptions?.uploadedAssets,
+        kitOptions?.assetsConfig,
+        kitOptions?.kitDocVisualScopes?.[m.id]
+      );
+    })
+  );
+
+  // Résoudre aussi les visuels de la page de couverture à partir des réglages Employeur/CRIC
+  const firstModelId = models[0]?.id || (p.casType === 'agence' ? 9 : 1);
+  const coverImages: DocEsPreloadedImages = perModelImages[firstModelId]
+    ? { ...perModelImages[firstModelId] }
+    : await preloadDocEsModelVisuals(
+        firstModelId,
+        p,
+        kitOptions?.uploadedAssets,
+        kitOptions?.assetsConfig,
+        kitOptions?.kitDocVisualScopes?.[firstModelId]
+      );
 
   try {
-    if (p.logoUrl) logoEmp = await loadStaticImageAsPngDataUrl(p.logoUrl);
-    if (p.logoAgenceUrl) logoAgence = await loadStaticImageAsPngDataUrl(p.logoAgenceUrl);
-    if (p.cachetUrl) cachetDataUrl = await loadStaticImageAsPngDataUrl(p.cachetUrl);
-    if (p.signatureUrl) signatureDataUrl = await loadStaticImageAsPngDataUrl(p.signatureUrl);
-    if (p.photoUrl) photoDataUrl = await loadStaticImageAsPngDataUrl(p.photoUrl);
+    if (!coverImages.logoEmp && p.logoUrl) {
+      coverImages.logoEmp = await loadStaticImageAsPngDataUrl(p.logoUrl);
+    }
+    if (!coverImages.logoAgence && p.logoAgenceUrl) {
+      coverImages.logoAgence = await loadStaticImageAsPngDataUrl(p.logoAgenceUrl);
+    }
+    if (!coverImages.cachet && p.cachetUrl) {
+      coverImages.cachet = await loadStaticImageAsPngDataUrl(p.cachetUrl);
+    }
+    if (!coverImages.signature && p.signatureUrl) {
+      coverImages.signature = await loadStaticImageAsPngDataUrl(p.signatureUrl);
+    }
+    if (!coverImages.photo && p.photoUrl) {
+      coverImages.photo = await loadStaticImageAsPngDataUrl(p.photoUrl);
+    }
   } catch {}
 
-  // ==========================================
-  // PAGE 1 : FICHE DE SYNTHÈSE / COUVERTURE DU DOSSIER
-  // ==========================================
-  // Bordure élégante
-  doc.setDrawColor(11, 37, 69);
-  doc.setLineWidth(1.2);
-  doc.rect(12, 12, PAGE_WIDTH - 24, PAGE_HEIGHT - 24);
-  doc.setDrawColor(212, 160, 23);
-  doc.setLineWidth(0.4);
-  doc.rect(14, 14, PAGE_WIDTH - 28, PAGE_HEIGHT - 28);
+  const { doc, filename } = generateKitDocEsCompiledPdf(
+    p,
+    effectiveDocEsData,
+    settings,
+    layoutTemplate || mergedLayoutTemplates.doc_es,
+    coverImages,
+    customTextOverride,
+    perModelLayouts,
+    perModelImages
+  );
 
-  let y = 22;
+  return { doc, filename };
+}
 
-  // En-tête Logos
-  if (logoEmp) {
-    try {
-      doc.addImage(logoEmp, 'PNG', MARGIN_LEFT, y, 45, 18);
-    } catch {
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(14);
-      doc.setTextColor(11, 37, 69);
-      doc.text(p.nomEntreprise, MARGIN_LEFT, y + 8);
-    }
-  }
-  if (p.casType === 'agence' && logoAgence) {
-    try {
-      doc.addImage(logoAgence, 'PNG', PAGE_WIDTH - MARGIN_RIGHT - 45, y, 45, 18);
-    } catch {}
-  }
+/**
+ * Génère l'archive ZIP contenant tous les PDF individuels "Fiches et DOC ES" + le Kit PDF compilé
+ * correspondant au type de candidature ('direct' vs 'agence'), avec mise en page par document et visuels 6 Parties.
+ */
+export async function generateKitCandidatZipPackage(
+  p: PostulantInfo,
+  settings: SiteSettings,
+  docEsDataOverride?: FichesDocEsData,
+  layoutTemplate?: ReferenceLayoutTemplate,
+  customTextOverride?: string,
+  kitOptions?: PostulantKitGenerationOptions
+): Promise<{ zipBlob: Blob; zipFilename: string; pdfCount: number }> {
+  const effectiveDocEsData =
+    docEsDataOverride ||
+    loadStoredFichesDocEsSync(p.id, buildDefaultFichesDocEsData(p, settings));
 
-  y += 24;
+  const mergedLayoutTemplates: LayoutTemplatesMap = {
+    ...(kitOptions?.layoutTemplates || {}),
+    ...(layoutTemplate ? { doc_es: layoutTemplate } : {})
+  };
 
-  // Titre principal
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(16);
-  doc.setTextColor(11, 37, 69);
-  const titreDossier = p.casType === 'direct'
-    ? 'DOSSIER D’ACCUEIL & KIT D’ENTRETIEN CANDIDAT'
-    : 'KIT DE PRÉSENTATION TRIPARTITE & PRÉPARATION ENTRETIEN';
-  doc.text(titreDossier, PAGE_WIDTH / 2, y, { align: 'center' });
+  const compiled = await generatePostulantKitPdf(
+    p,
+    settings,
+    customTextOverride,
+    effectiveDocEsData,
+    layoutTemplate,
+    kitOptions
+  );
+  const individuals = await generateKitDocEsIndividualPdfsAsync(
+    p,
+    effectiveDocEsData,
+    settings,
+    mergedLayoutTemplates,
+    kitOptions?.kitDocLayouts,
+    kitOptions?.uploadedAssets,
+    kitOptions?.assetsConfig,
+    kitOptions?.kitDocVisualScopes
+  );
 
-  y += 6;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  doc.setTextColor(212, 160, 23);
-  doc.text(`RÉFÉRENCE OFFICIELLE : ${p.codeIdCandidature}`, PAGE_WIDTH / 2, y, { align: 'center' });
+  const zip = new JSZip();
+  const modeTag = p.casType === 'agence' ? 'Agence_Placement' : 'Candidature_Directe';
+  const safeName = (p.nomComplet || p.nom || 'Candidat').replace(/[^a-zA-Z0-9_-]+/g, '_');
+  const rootName = `Kit_${safeName}_${modeTag}_${p.codeIdCandidature}`;
+  const folder = zip.folder(rootName) || zip;
 
-  y += 10;
-
-  // Photo d'identité si présente
-  if (photoDataUrl) {
-    try {
-      doc.addImage(photoDataUrl, 'PNG', PAGE_WIDTH - MARGIN_RIGHT - 32, y, 30, 36);
-      doc.setDrawColor(11, 37, 69);
-      doc.setLineWidth(0.3);
-      doc.rect(PAGE_WIDTH - MARGIN_RIGHT - 32, y, 30, 36);
-    } catch {}
-  }
-
-  // Cartouche Candidat
-  doc.setFillColor(248, 250, 252);
-  doc.setDrawColor(203, 213, 225);
-  doc.roundedRect(MARGIN_LEFT, y, photoDataUrl ? CONTENT_WIDTH - 38 : CONTENT_WIDTH, 36, 2, 2, 'FD');
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.setTextColor(0, 102, 179);
-  doc.text('1. IDENTITÉ DU POSTULANT & COORDONNÉES', MARGIN_LEFT + 4, y + 6);
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.setTextColor(30, 41, 59);
-  doc.text(`• Nom complet : ${p.nomComplet} (${p.civilite})`, MARGIN_LEFT + 4, y + 12);
-  doc.text(`• Nationalité : ${p.nationalite} · Tél : ${p.telephone}`, MARGIN_LEFT + 4, y + 17);
-  doc.text(`• Email : ${p.email}`, MARGIN_LEFT + 4, y + 22);
-  doc.text(`• Adresse : ${p.adresse}`, MARGIN_LEFT + 4, y + 27);
-  doc.text(`• Date d'établissement : ${p.dateEffet}`, MARGIN_LEFT + 4, y + 32);
-
-  y += 42;
-
-  // Cartouche Poste & Conditions
-  doc.setFillColor(248, 250, 252);
-  doc.setDrawColor(203, 213, 225);
-  doc.roundedRect(MARGIN_LEFT, y, CONTENT_WIDTH, 42, 2, 2, 'FD');
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.setTextColor(0, 102, 179);
-  doc.text('2. CARACTÉRISTIQUES DU POSTE VISÉ (COLOMBIE-BRITANNIQUE)', MARGIN_LEFT + 4, y + 6);
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.setTextColor(30, 41, 59);
-  doc.text(`• Intitulé du poste : ${p.intitulePoste}`, MARGIN_LEFT + 4, y + 12);
-  doc.text(`• Classification CNP Canada : ${p.codeCnp} · Département : ${p.departement}`, MARGIN_LEFT + 4, y + 17);
-  doc.text(`• Type de contrat : ${p.typeContrat} · Durée essai : ${p.dureePeriodeEssai}`, MARGIN_LEFT + 4, y + 22);
-  doc.text(`• Rémunération : ${p.salaireHoraire.toFixed(2)} $ CAD / h (~${p.salaireMensuel.toLocaleString('fr-CA')} $ CAD / mois)`, MARGIN_LEFT + 4, y + 27);
-  doc.text(`• Heures hebdomadaires : ${p.heuresHebdo} h / semaine (Normes provinciales Colombie-Britannique)`, MARGIN_LEFT + 4, y + 32);
-  doc.text(`• Interlocuteur RH : ${p.managerRecruteur}`, MARGIN_LEFT + 4, y + 37);
-
-  y += 48;
-
-  // Cartouche Session d'Entretien & Modalités
-  doc.setFillColor(254, 252, 246);
-  doc.setDrawColor(212, 160, 23);
-  doc.roundedRect(MARGIN_LEFT, y, CONTENT_WIDTH, 36, 2, 2, 'FD');
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.setTextColor(180, 83, 9);
-  doc.text('3. CONVOCATION ET MODALITÉS DE L’ENTRETIEN', MARGIN_LEFT + 4, y + 6);
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.setTextColor(30, 41, 59);
-  doc.text(`• Date & Heure : ${p.dateEntretien} à ${p.heureEntretien} (Heure Pacifique)`, MARGIN_LEFT + 4, y + 13);
-  doc.text(`• Modalité retenue : ${p.modaliteEntretien}`, MARGIN_LEFT + 4, y + 18);
-  doc.text(`• Lieu ou Lien d'accès : ${p.lieuEntretien}`, MARGIN_LEFT + 4, y + 23);
-  doc.text(`• Code d'accès Candidat : ${p.codeIdCandidature}`, MARGIN_LEFT + 4, y + 28);
-  doc.text(`• Statut de convocation : Dossier vérifié et recevable par la Direction RH`, MARGIN_LEFT + 4, y + 33);
-
-  y += 42;
-
-  // Clause tripartite spécifique si Cas 2
-  if (p.casType === 'agence') {
-    doc.setFillColor(240, 253, 244);
-    doc.setDrawColor(34, 197, 94);
-    doc.roundedRect(MARGIN_LEFT, y, CONTENT_WIDTH, 26, 2, 2, 'FD');
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8.5);
-    doc.setTextColor(21, 128, 61);
-    doc.text('4. ENGAGEMENT DE LIAISON TRIPARTITE & DISPENSE D’ENTRETIEN', MARGIN_LEFT + 4, y + 5);
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.8);
-    doc.setTextColor(30, 41, 59);
-    if (p.dispenseEntretienParGarantie) {
-      doc.text(
-        `[X] OPTION GARANTIE PRESTATAIRE ACTIVÉE : Le cabinet ${p.nomAgence} certifie l’authenticité des qualifications, antécédents et permis du candidat. Le prestataire se porte garant formel, permettant d’extrapoler l’entretien préliminaire vers la validation contractuelle directe.`,
-        MARGIN_LEFT + 4,
-        y + 11,
-        { maxWidth: CONTENT_WIDTH - 8 }
-      );
-    } else {
-      doc.text(
-        `[X] OPTION ENTRETIEN DIRECT RETENUE : Le candidat effectuera l’entretien officiel directement avec l’employeur ${p.nomEntreprise} avec l'assistance et la coordination administrative du cabinet mandataire.`,
-        MARGIN_LEFT + 4,
-        y + 11,
-        { maxWidth: CONTENT_WIDTH - 8 }
-      );
-    }
-    y += 30;
-  }
-
-  // Signatures et tampons au bas de la page 1
-  const sigY = PAGE_HEIGHT - 48;
-  doc.setDrawColor(203, 213, 225);
-  doc.line(MARGIN_LEFT, sigY, PAGE_WIDTH - MARGIN_RIGHT, sigY);
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
-  doc.setTextColor(11, 37, 69);
-  doc.text('Pour l’Employeur (Canada) :', MARGIN_LEFT, sigY + 5);
-  doc.setFont('helvetica', 'normal');
-  doc.text(p.representantEmployeurNom, MARGIN_LEFT, sigY + 9);
-  doc.text(p.representantEmployeurTitre, MARGIN_LEFT, sigY + 13);
-
-  if (cachetDataUrl) {
-    try {
-      doc.addImage(cachetDataUrl, 'PNG', MARGIN_LEFT + 45, sigY + 2, 20, 20);
-    } catch {}
-  }
-  if (signatureDataUrl) {
-    try {
-      doc.addImage(signatureDataUrl, 'PNG', MARGIN_LEFT + 68, sigY + 4, 28, 14);
-    } catch {}
-  }
-
-  doc.setFont('helvetica', 'bold');
-  doc.text(p.casType === 'direct' ? 'Le Candidat (Pour Accord) :' : 'Pour l’Agence / Mandataire CRIC :', PAGE_WIDTH / 2 + 10, sigY + 5);
-  doc.setFont('helvetica', 'normal');
-  doc.text(p.casType === 'direct' ? p.nomComplet : p.representantAgenceNom, PAGE_WIDTH / 2 + 10, sigY + 9);
-  doc.text(p.casType === 'direct' ? 'Lu et approuvé' : `Mandataire agréé (${p.permisCnesst})`, PAGE_WIDTH / 2 + 10, sigY + 13);
-
-  // ==========================================
-  // PAGE 2 : TICKET D'ENTRETIEN OFFICIEL AVEC PHOTO ET CODE-BARRES
-  // ==========================================
-  doc.addPage();
-
-  // Double bordure
-  doc.setDrawColor(212, 160, 23);
-  doc.setLineWidth(0.8);
-  doc.rect(15, 15, PAGE_WIDTH - 30, PAGE_HEIGHT - 30);
-
-  y = 25;
-
-  if (logoEmp) {
-    try {
-      doc.addImage(logoEmp, 'PNG', MARGIN_LEFT, y, 42, 17);
-    } catch {}
-  }
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(14);
-  doc.setTextColor(11, 37, 69);
-  doc.text('COUPON CONVOCATION ENTRETIEN D’EMBAUCHE', PAGE_WIDTH / 2 + 10, y + 7, { align: 'center' });
-  doc.setFontSize(9);
-  doc.setTextColor(100, 116, 139);
-  doc.text('Direction des Ressources Humaines & Mobilité Internationale Canada', PAGE_WIDTH / 2 + 10, y + 13, { align: 'center' });
-
-  y += 26;
-
-  // Ligne de découpe en pointillés
-  doc.setDrawColor(212, 160, 23);
-  doc.setLineDashPattern([2, 2], 0);
-  doc.line(MARGIN_LEFT, y, PAGE_WIDTH - MARGIN_RIGHT, y);
-  doc.setLineDashPattern([], 0);
-
-  y += 8;
-
-  // Si le ticket est non valide (provisoire)
-  if (!p.ticketValide) {
-    doc.setFillColor(254, 242, 242);
-    doc.setDrawColor(239, 68, 68);
-    doc.roundedRect(MARGIN_LEFT, y, CONTENT_WIDTH, 24, 2, 2, 'FD');
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.setTextColor(185, 28, 28);
-    doc.text('⚠️ TICKET D’ENTRETIEN PROVISOIRE — NON VALIDE POUR ACCÈS', PAGE_WIDTH / 2, y + 7, { align: 'center' });
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.8);
-    doc.setTextColor(127, 29, 29);
-    doc.text(
-      'Ce ticket est actuellement un spécimen d’attestation. Il deviendra strictement valide et scannable dès la signature formelle de l’accord tripartite et la confirmation définitive du dossier par la direction RH.',
-      PAGE_WIDTH / 2,
-      y + 14,
-      { align: 'center', maxWidth: CONTENT_WIDTH - 12 }
-    );
-    y += 30;
-  }
-
-  // Grille d'information du ticket
-  doc.setFillColor(255, 255, 255);
-  doc.setDrawColor(203, 213, 225);
-  doc.roundedRect(MARGIN_LEFT, y, CONTENT_WIDTH, 70, 2, 2, 'FD');
-
-  if (photoDataUrl) {
-    try {
-      doc.addImage(photoDataUrl, 'PNG', MARGIN_LEFT + 6, y + 6, 26, 32);
-      doc.setDrawColor(11, 37, 69);
-      doc.rect(MARGIN_LEFT + 6, y + 6, 26, 32);
-    } catch {}
-  }
-
-  const textStartX = photoDataUrl ? MARGIN_LEFT + 38 : MARGIN_LEFT + 8;
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  doc.setTextColor(11, 37, 69);
-  doc.text(`Candidat : ${p.nomComplet}`, textStartX, y + 10);
-  doc.setFontSize(8.5);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(51, 65, 85);
-  doc.text(`Nationalité : ${p.nationalite} · Tél : ${p.telephone}`, textStartX, y + 16);
-  doc.text(`Poste convoqué : ${p.intitulePoste} (CNP ${p.codeCnp})`, textStartX, y + 22);
-  doc.text(`Date & Heure : ${p.dateEntretien} à ${p.heureEntretien}`, textStartX, y + 28);
-  doc.text(`Modalité : ${p.modaliteEntretien}`, textStartX, y + 34);
-  doc.text(`Lieu ou accès : ${p.lieuEntretien}`, textStartX, y + 40);
-  doc.text(`Code ID officiel : ${p.codeIdCandidature}`, textStartX, y + 46);
-
-  // Barcode scannable en bas du ticket
-  if (p.ticketValide) {
-    doc.setFont('courier', 'bold');
-    doc.setFontSize(14);
-    doc.setTextColor(11, 37, 69);
-    doc.text(`* ${p.codeIdCandidature} *`, PAGE_WIDTH / 2, y + 58, { align: 'center' });
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.5);
-    doc.setTextColor(21, 128, 61);
-    doc.text('✓ CODE BARRE NUMÉRIQUE SÉCURISÉ & SCANNABLE EIMT-RH', PAGE_WIDTH / 2, y + 64, { align: 'center' });
-  } else {
-    doc.setFont('courier', 'bold');
-    doc.setFontSize(13);
-    doc.setTextColor(156, 163, 175);
-    doc.text('XXXX-XXXX-PROVISOIRE-NON-VALIDE', PAGE_WIDTH / 2, y + 58, { align: 'center' });
-    doc.setFont('helvetica', 'italic');
-    doc.setFontSize(7.5);
-    doc.setTextColor(220, 38, 38);
-    doc.text('Barcode inactif — En attente de signature tripartite', PAGE_WIDTH / 2, y + 64, { align: 'center' });
-  }
-
-  y += 76;
-
-  // Pièces justificatives exigées le jour de l'entretien
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.setTextColor(11, 37, 69);
-  doc.text('DOCUMENTS REQUIS À PRÉSENTER LE JOUR DE L’ÉCHANGE :', MARGIN_LEFT, y);
-  y += 5;
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(71, 85, 105);
-  const checklist = [
-    '1. Pièce d’identité officielle en cours de validité (Passeport international ou Carte nationale)',
-    '2. Permis de conduire et certifications professionnelles en lien avec le poste convoqué',
-    '3. Justificatifs d’expériences antérieures (certificats de travail ou attestations d’employeurs)',
-    '4. Le présent Coupon de Convocation dument complété et signé'
-  ];
-  checklist.forEach((item) => {
-    doc.text(item, MARGIN_LEFT + 4, y);
-    y += 5;
+  folder.file(`00_${compiled.filename}`, compiled.doc.output('blob'));
+  individuals.forEach((item, idx) => {
+    const prefix = String(idx + 1).padStart(2, '0');
+    folder.file(`${prefix}_${item.filename}`, item.doc.output('blob'));
   });
 
-  const filename = `Dossier_Postulant_${p.nom.toUpperCase()}_${p.prenom}_${p.codeIdCandidature}.pdf`;
-  return { doc, filename };
+  const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+  return {
+    zipBlob,
+    zipFilename: `${rootName}.zip`,
+    pdfCount: individuals.length + 1
+  };
+}
+
+/**
+ * Construit le contenu HTML complet (multi-sections) du Kit Candidat pour export Word (.docx) / HTML.
+ */
+export function buildKitCandidatWordHtml(
+  p: PostulantInfo,
+  d: FichesDocEsData,
+  settings: SiteSettings,
+  customTextOverride?: string,
+  kitOptions?: PostulantKitGenerationOptions
+): string {
+  const models = getDocEsModelsForCasType(p.casType);
+  const isAgence = p.casType === 'agence';
+
+  const tocItems = models
+    .map(
+      (m) =>
+        `<li><strong>${m.number}</strong> — ${m.title} <em>(${m.categoryLabel}${m.isInteractive ? ' · Formulaire interactif' : ''})</em></li>`
+    )
+    .join('');
+
+  const sectionsHtml = models
+    .map((m) => {
+      const rendered = renderDocEsPlainText(m.id, p, d, settings);
+      const docTpl = resolveLayoutTemplateForDocEsModel(
+        m.id,
+        kitOptions?.layoutTemplates,
+        kitOptions?.kitDocLayouts,
+        kitOptions?.layoutTemplates?.doc_es
+      );
+      const primaryColor = docTpl?.primaryColor || '#0B2545';
+      const accentColor = docTpl?.accentColor || '#0066B3';
+      const cleanBody = rendered.content
+        .replace(/^[=\-_]{4,}\s*$/gm, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+      return `
+        <div style="page-break-before: always; border: 1.5px solid ${accentColor}; border-top: 5px solid ${primaryColor}; padding: 20px; margin-top: 24px;">
+          <p style="font-size: 9pt; font-weight: bold; color: ${accentColor}; margin: 0 0 4px 0;">${m.number} · ${m.categoryLabel}</p>
+          <h2 style="font-size: 14pt; color: ${primaryColor}; margin: 0 0 4px 0;">${rendered.title}</h2>
+          <p style="font-size: 9.5pt; color: #475569; margin: 0 0 12px 0;">${rendered.subtitle}</p>
+          <div style="white-space: pre-wrap; font-family: Calibri, Arial, sans-serif; font-size: 10.5pt; line-height: 1.5; color: #1e293b;">${cleanBody}</div>
+        </div>
+      `;
+    })
+    .join('');
+
+  return `
+    <div style="font-family: Calibri, Arial, sans-serif; color: #0f172a;">
+      <h1 style="text-align: center; color: #0B2545; font-size: 16pt;">
+        ${isAgence ? 'KIT CANDIDAT — CANDIDATURE VIA AGENCE DE PLACEMENT' : 'KIT CANDIDAT — CANDIDATURE EN DIRECT'}
+      </h1>
+      <p style="text-align: center; color: #475569; font-size: 10pt;">
+        Réf. ${p.codeIdCandidature} · ${p.nomComplet} · ${p.intitulePoste} (CNP ${p.codeCnp})
+      </p>
+      <p><strong>Documents PDF inclus issus de « Fiches et DOC ES » (${models.length} documents) :</strong></p>
+      <ul>${tocItems}</ul>
+      ${customTextOverride ? `<div style="background:#fef9c3; padding:10px; border:1px solid #eab308; margin:12px 0;">${customTextOverride}</div>` : ''}
+      ${sectionsHtml}
+    </div>
+  `;
 }

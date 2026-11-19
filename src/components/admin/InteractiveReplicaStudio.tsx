@@ -49,7 +49,9 @@ import {
   RotateCw,
   ChevronRight,
   ChevronLeft,
-  Square
+  Square,
+  Columns,
+  SlidersHorizontal
 } from 'lucide-react';
 import { LayoutTargetDocKey } from '../../services/layoutImitationService';
 import {
@@ -64,6 +66,7 @@ import {
   HostingProvider,
   HOSTING_PROVIDER_DOCS,
   EmailQualityAuditResult,
+  VisualFidelityReport,
   deepAnalyzeSourceDocument,
   loadReplicaProject,
   saveReplicaProject,
@@ -71,11 +74,15 @@ import {
   getSavedHostingConfig,
   saveHostingConfig,
   uploadSingleAssetToPublicHost,
+  verifyPublicHttpsImageUrl,
   compileReplicaToEmailHtml,
   auditCompiledEmailHtml,
   repairCompiledEmailHtml,
   exportReplicaProjectToPdf,
   exportReplicaProjectToDocx,
+  computeAspectLockedHeightPct,
+  computeVisualFidelityReport,
+  computeAsyncVisualCoverage,
   computeFastHash
 } from '../../services/documentReplicaService';
 import { ResponsivePaperWrapper } from '../common/ResponsivePaperWrapper';
@@ -391,6 +398,12 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [activeTableCell, setActiveTableCell] = useState<{ elId: string; r: number; c: number } | null>(null);
   const [showLayersPanel, setShowLayersPanel] = useState(false);
+  const [layerKindFilter, setLayerKindFilter] = useState<'all' | 'text' | 'image' | 'table' | 'shape'>('all');
+
+  // Comparateur visuel de fidélité (Étape 4 & 5)
+  const [compareMode, setCompareMode] = useState<'editor' | 'side_by_side' | 'overlay'>('editor');
+  const [overlayOpacityPct, setOverlayOpacityPct] = useState(45);
+  const [fidelityReport, setFidelityReport] = useState<VisualFidelityReport | null>(null);
 
   const [zoomPct, setZoomPct] = useState(100);
   const [isPanMode, setIsPanMode] = useState(false);
@@ -403,9 +416,12 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
 
   // Étape 6 & 7 : Email HTML, Hébergement HTTPS, Audit Qualité
   const [compiledHtml, setCompiledHtml] = useState<string>('');
-  const [emailPreviewDevice, setEmailPreviewDevice] = useState<'desktop' | 'mobile' | 'code'>('desktop');
+  const [emailPreviewDevice, setEmailPreviewDevice] = useState<
+    'desktop' | 'mobile' | 'gmail' | 'outlook' | 'kit' | 'code'
+  >('desktop');
   const [hostingConfig, setHostingConfig] = useState<HostingConfig>(() => getSavedHostingConfig());
   const [isUploadingAll, setIsUploadingAll] = useState(false);
+  const [isVerifyingUrls, setIsVerifyingUrls] = useState(false);
   const [auditResult, setAuditResult] = useState<EmailQualityAuditResult | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [isExportingDocx, setIsExportingDocx] = useState(false);
@@ -454,6 +470,23 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
       setAuditResult(auditCompiledEmailHtml(project, html));
     }
   }, [project, step]);
+
+  // Mettre à jour le rapport objectif de fidélité visuelle en Étapes 4 & 5
+  useEffect(() => {
+    if (!project || (step !== 4 && step !== 5)) return;
+    let active = true;
+    setFidelityReport(computeVisualFidelityReport(project, null));
+    const timer = setTimeout(() => {
+      void computeAsyncVisualCoverage(project, activePageIndex).then((cov) => {
+        if (!active) return;
+        setFidelityReport(computeVisualFidelityReport(project, cov));
+      });
+    }, 220);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [project, step, activePageIndex]);
 
   const commitProjectChange = (updater: (prev: ReplicaProject) => ReplicaProject, recordHistory = true) => {
     setProject((prev) => {
@@ -805,7 +838,17 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
         const dx = pt.xPct - action.startX;
         const dy = pt.yPct - action.startY;
         const { xPct, yPct, wPct, hPct } = action.startRect;
-        const ratio = hPct > 0 ? wPct / hPct : 1;
+
+        // Pour les visuels verrouillés, calculer le ratio exact en % page à partir des dimensions naturelles
+        const targetEl = project.elements.find((x) => x.id === action.elementId);
+        const linkedAsset =
+          targetEl?.kind === 'image' ? project.assets.find((a) => a.id === targetEl.assetId) : undefined;
+        const ratio =
+          action.lockRatio && linkedAsset && linkedAsset.widthPx > 0 && linkedAsset.heightPx > 0
+            ? (linkedAsset.widthPx / linkedAsset.heightPx) * (project.heightMm / project.widthMm)
+            : hPct > 0
+            ? wPct / hPct
+            : 1;
 
         let nx = xPct;
         let ny = yPct;
@@ -831,7 +874,7 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
           if (action.handle === 'n' || action.handle === 's') {
             nw = clamp(nh * ratio, 3, 98 - nx);
           } else {
-            nh = clamp(nw / ratio, 1.5, 98 - ny);
+            nh = clamp(nw / ratio, 1.2, 98 - ny);
           }
         }
 
@@ -992,7 +1035,7 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
       const assetId = createId('asset');
       const elId = createId('img');
       const wPct = clamp(Math.round((dims.w / 794) * 100), 10, 38);
-      const hPct = clamp(Math.round((wPct * (dims.h / Math.max(1, dims.w)) * 794) / 1122), 5, 28);
+      const hPct = computeAspectLockedHeightPct(wPct, dims.w, dims.h, project.widthMm, project.heightMm);
 
       commitProjectChange((prev) => ({
         ...prev,
@@ -1006,7 +1049,8 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
             hostingStatus: 'local',
             widthPx: dims.w,
             heightPx: dims.h,
-            contentHash: computeFastHash(dataUrl)
+            contentHash: computeFastHash(dataUrl),
+            sourceEngine: 'upload'
           }
         ],
         elements: [
@@ -1109,8 +1153,55 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
         `${hostedCount} image(s) hébergée(s) en HTTPS, ${failedCount} erreur(s) — vérifiez vos identifiants ${HOSTING_PROVIDER_DOCS[hostingConfig.activeProvider].label}.`
       );
     } else {
-      onToast(`Toutes les images (${hostedCount}) sont hébergées en HTTPS public.`);
+      onToast(`Toutes les images (${hostedCount}) sont hébergées et vérifiées en HTTPS public.`);
     }
+  };
+
+  const handleVerifyAllHostedUrls = async () => {
+    if (!project) return;
+    const hosted = project.assets.filter((a) => a.publicHttpsUrl && a.publicHttpsUrl.startsWith('https://'));
+    if (hosted.length === 0) {
+      onToast('Aucune URL HTTPS à vérifier — hébergez d’abord vos visuels locaux.');
+      return;
+    }
+    setIsVerifyingUrls(true);
+    let okCount = 0;
+    const nextAssets = [...project.assets];
+    for (let i = 0; i < nextAssets.length; i++) {
+      const a = nextAssets[i];
+      if (!a.publicHttpsUrl || !a.publicHttpsUrl.startsWith('https://')) continue;
+      const check = await verifyPublicHttpsImageUrl(a.publicHttpsUrl);
+      if (check.ok) okCount++;
+      nextAssets[i] = {
+        ...a,
+        httpsVerified: check.ok,
+        httpsVerifyDetail: check.detail
+      };
+    }
+    setProject((p) => (p ? { ...p, assets: nextAssets } : p));
+    setIsVerifyingUrls(false);
+    onToast(`Vérification HTTPS : ${okCount}/${hosted.length} image(s) accessibles publiquement.`);
+  };
+
+  const handleAlignSelectedMulti = (mode: 'left' | 'center' | 'right' | 'top') => {
+    if (!project || selectedIds.length < 2) return;
+    const targets = project.elements.filter((e) => selectedIds.includes(e.id) && !e.locked);
+    if (targets.length < 2) return;
+    const minX = Math.min(...targets.map((e) => e.xPct));
+    const maxR = Math.max(...targets.map((e) => e.xPct + e.wPct));
+    const midX = (minX + maxR) / 2;
+    const minY = Math.min(...targets.map((e) => e.yPct));
+
+    commitProjectChange((prev) => ({
+      ...prev,
+      elements: prev.elements.map((el) => {
+        if (!selectedIds.includes(el.id) || el.locked) return el;
+        if (mode === 'left') return { ...el, xPct: Math.round(minX * 10) / 10 };
+        if (mode === 'right') return { ...el, xPct: Math.round((maxR - el.wPct) * 10) / 10 };
+        if (mode === 'center') return { ...el, xPct: Math.round((midX - el.wPct / 2) * 10) / 10 };
+        return { ...el, yPct: Math.round(minY * 10) / 10 };
+      })
+    }));
   };
 
   const handleRunRepairAudit = () => {
@@ -1236,7 +1327,7 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
                 Étape 1 — Importer le document source à reproduire fidèlement
               </h4>
               <p className="text-xs sm:text-sm text-slate-600">
-                Importez un document officiel (<strong>PDF multi-pages, PNG, JPG, WEBP</strong>). Notre moteur extrait chaque bloc texte réel (police, taille, couleur, position), détecte les tableaux modifiables et découpe vos logos/signatures/cachets directement depuis les pixels sources sans aucun remplacement IA.
+                Importez un document officiel (<strong>PDF, JPG, JPEG, PNG, DOC, DOCX</strong>). Notre moteur hybride extrait chaque bloc texte réel (police, taille, couleur, position), détecte les tableaux et séparateurs vectoriels modifiables et prélève vos logos/signatures/cachets directement depuis la source sans aucune altération IA.
               </p>
             </div>
 
@@ -1260,10 +1351,10 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
               <div className="flex flex-wrap items-center justify-center gap-3">
                 <label className="min-h-[46px] px-5 py-2.5 rounded-xl bg-[#0066B3] hover:bg-[#005291] text-white text-xs sm:text-sm font-bold inline-flex items-center gap-2 cursor-pointer shadow-xs">
                   <Upload className="w-4 h-4" />
-                  <span>Sélectionner un PDF / PNG / JPG / WEBP</span>
+                  <span>Sélectionner PDF / JPG / PNG / DOC / DOCX</span>
                   <input
                     type="file"
-                    accept=".pdf,image/png,image/jpeg,image/webp"
+                    accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,image/png,image/jpeg,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     className="hidden"
                     onChange={(e) => {
                       const f = e.target.files?.[0];
@@ -1323,7 +1414,7 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
               </button>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
               <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
                 <span className="text-slate-500 block">Format &amp; Orientation</span>
                 <strong className="text-sm text-[#0B2545]">
@@ -1338,7 +1429,9 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
                 <strong className="text-lg text-[#0B2545]">
                   {project.elements.filter((e) => e.kind === 'text').length}
                 </strong>
-                <span className="block text-[11px] text-slate-600">Polices, tailles &amp; couleurs</span>
+                <span className="block text-[11px] text-slate-600">
+                  {project.extractionReport?.ocrUsed ? 'OCR + styles extraits' : 'Polices & couleurs exactes'}
+                </span>
               </div>
               <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200">
                 <span className="text-emerald-800 block">Tableaux structurés</span>
@@ -1347,12 +1440,31 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
                 </strong>
                 <span className="block text-[11px] text-slate-600">Cellules modifiables</span>
               </div>
+              <div className="p-3 rounded-xl bg-purple-50/70 border border-purple-200">
+                <span className="text-purple-900 block">Filets &amp; Formes</span>
+                <strong className="text-lg text-purple-950">
+                  {project.elements.filter((e) => e.kind === 'shape').length}
+                </strong>
+                <span className="block text-[11px] text-slate-600">Séparateurs &amp; cadres</span>
+              </div>
               <div className="p-3 rounded-xl bg-amber-50/70 border border-amber-200">
-                <span className="text-amber-900 block">Visuels découpés</span>
+                <span className="text-amber-900 block">Visuels prélevés</span>
                 <strong className="text-lg text-amber-950">{project.assets.length}</strong>
                 <span className="block text-[11px] text-slate-600">Logos, tampons, signatures</span>
               </div>
             </div>
+
+            {project.extractionReport && project.extractionReport.engineNotes.length > 0 && (
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-700 space-y-1">
+                <strong className="text-[#0B2545] block">Journal d’analyse hybride :</strong>
+                {project.extractionReport.engineNotes.map((note, idx) => (
+                  <div key={idx} className="flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>{note}</span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
               <div className="p-4 rounded-xl border border-slate-200 space-y-3">
@@ -1565,33 +1677,138 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
           <div className="space-y-3">
             {/* BANDEAU ÉTAPE 4 OU BARRE D'OUTILS CANVA COMPLÈTE (ÉTAPE 5) */}
             {step === 4 ? (
-              <div className="bg-white rounded-xl border border-slate-200 p-3.5 flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h4 className="text-sm font-extrabold text-[#0B2545]">
-                    Étape 4 — Spécimen interactif fidèle (Page {activePageIndex + 1}/{project.pageCount})
-                  </h4>
-                  <p className="text-xs text-slate-600">
-                    Cliquez ou double-cliquez directement sur tout élément, ou activez l’Éditeur Complet (Étape 5) pour accéder aux calques, tableaux, sélection multiple et outils avancés.
-                  </p>
+              <div className="bg-white rounded-xl border border-slate-200 p-3.5 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-extrabold text-[#0B2545]">
+                      Étape 4 — Spécimen interactif fidèle &amp; Comparateur Visuel (Page {activePageIndex + 1}/{project.pageCount})
+                    </h4>
+                    <p className="text-xs text-slate-600">
+                      Comparez côte à côte ou par superposition contre l’original, ou cliquez directement sur tout élément pour le corriger.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setStep(5)}
+                      className="min-h-[42px] px-4 py-2 rounded-lg bg-[#0066B3] hover:bg-[#005291] text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Edit3 className="w-4 h-4" />
+                      <span>Ouvrir Outils Canva (Étape 5)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setStep(6)}
+                      className="min-h-[42px] px-4 py-2 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Mail className="w-4 h-4" />
+                      <span>Générer Email HTML (Étape 6)</span>
+                    </button>
+                  </div>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setStep(5)}
-                    className="min-h-[42px] px-4 py-2 rounded-lg bg-[#0066B3] hover:bg-[#005291] text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Edit3 className="w-4 h-4" />
-                    <span>Ouvrir Outils Canva (Étape 5)</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setStep(6)}
-                    className="min-h-[42px] px-4 py-2 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Mail className="w-4 h-4" />
-                    <span>Générer Email HTML (Étape 6)</span>
-                  </button>
+
+                {/* BARRE COMPARATEUR VISUEL & DIAGNOSTIC FIDÉLITÉ */}
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs">
+                  <div className="inline-flex bg-slate-100 p-1 rounded-lg font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setCompareMode('editor')}
+                      className={`px-2.5 py-1 rounded-md inline-flex items-center gap-1 cursor-pointer ${
+                        compareMode === 'editor' ? 'bg-white text-[#0B2545] shadow-xs' : 'text-slate-600'
+                      }`}
+                    >
+                      <Eye className="w-3.5 h-3.5" /> Vue Interactive
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!project.sourcePageSnapshots?.[activePageIndex]}
+                      onClick={() => setCompareMode('side_by_side')}
+                      className={`px-2.5 py-1 rounded-md inline-flex items-center gap-1 cursor-pointer disabled:opacity-40 ${
+                        compareMode === 'side_by_side' ? 'bg-white text-[#0B2545] shadow-xs' : 'text-slate-600'
+                      }`}
+                    >
+                      <Columns className="w-3.5 h-3.5" /> Côte à côte (Original / Réplique)
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!project.sourcePageSnapshots?.[activePageIndex]}
+                      onClick={() => setCompareMode('overlay')}
+                      className={`px-2.5 py-1 rounded-md inline-flex items-center gap-1 cursor-pointer disabled:opacity-40 ${
+                        compareMode === 'overlay' ? 'bg-white text-[#0B2545] shadow-xs' : 'text-slate-600'
+                      }`}
+                    >
+                      <SlidersHorizontal className="w-3.5 h-3.5" /> Superposition Calque
+                    </button>
+                  </div>
+
+                  {compareMode === 'overlay' && (
+                    <label className="inline-flex items-center gap-2 font-semibold text-slate-700 bg-blue-50 px-3 py-1 rounded-lg border border-blue-200">
+                      <span>Opacité Original :</span>
+                      <input
+                        type="range"
+                        min={10}
+                        max={90}
+                        value={overlayOpacityPct}
+                        onChange={(e) => setOverlayOpacityPct(Number(e.target.value))}
+                        className="w-24"
+                      />
+                      <span className="font-mono">{overlayOpacityPct}%</span>
+                    </label>
+                  )}
+
+                  {fidelityReport && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`px-2.5 py-1 rounded-lg font-bold inline-flex items-center gap-1 border ${
+                          fidelityReport.fidelityScorePct >= 88
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                            : 'bg-amber-50 text-amber-900 border-amber-200'
+                        }`}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Fidélité vérifiée : {fidelityReport.fidelityScorePct}%</span>
+                      </span>
+                      {fidelityReport.coveragePct !== null && (
+                        <span className="px-2 py-1 rounded-lg bg-slate-100 text-slate-700 font-semibold">
+                          Couverture source : {fidelityReport.coveragePct}%
+                        </span>
+                      )}
+                      {fidelityReport.distortedImagesCount > 0 && (
+                        <span className="px-2 py-1 rounded-lg bg-red-100 text-red-800 font-bold">
+                          {fidelityReport.distortedImagesCount} visuel(s) déformé(s)
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
+
+                {fidelityReport && fidelityReport.issues.filter((i) => i.severity !== 'info').length > 0 && (
+                  <div className="p-2.5 rounded-lg bg-amber-50/80 border border-amber-200 text-[11px] text-amber-950 space-y-1">
+                    {fidelityReport.issues
+                      .filter((i) => i.severity !== 'info')
+                      .slice(0, 3)
+                      .map((issue, idx) => (
+                        <div key={idx} className="flex items-center justify-between gap-2">
+                          <span className="flex items-center gap-1.5">
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                            <span>{issue.message}</span>
+                          </span>
+                          {issue.elementId && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedIds([issue.elementId!]);
+                                setStep(5);
+                              }}
+                              className="px-2 py-0.5 rounded bg-white border border-amber-300 font-bold hover:bg-amber-100 cursor-pointer shrink-0"
+                            >
+                              Sélectionner
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="bg-white rounded-xl border border-slate-200 p-2.5 flex flex-wrap items-center gap-1.5 text-xs">
@@ -1786,14 +2003,91 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
               </div>
             )}
 
+            {/* BARRE MULTI-SÉLECTION (QUAND >= 2 ÉLÉMENTS SÉLECTIONNÉS) */}
+            {(step === 4 || step === 5) && selectedIds.length > 1 && (
+              <div className="bg-blue-50 border border-[#0066B3]/30 rounded-xl px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <span className="font-extrabold text-[#0B2545]">
+                  {selectedIds.length} éléments sélectionnés (glissez-les ensemble ou alignez) :
+                </span>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleAlignSelectedMulti('left')}
+                    className="px-2.5 py-1 rounded bg-white border border-slate-300 hover:bg-slate-100 font-bold cursor-pointer"
+                  >
+                    Aligner Gauche
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAlignSelectedMulti('center')}
+                    className="px-2.5 py-1 rounded bg-white border border-slate-300 hover:bg-slate-100 font-bold cursor-pointer"
+                  >
+                    Centrer H
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAlignSelectedMulti('right')}
+                    className="px-2.5 py-1 rounded bg-white border border-slate-300 hover:bg-slate-100 font-bold cursor-pointer"
+                  >
+                    Aligner Droite
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAlignSelectedMulti('top')}
+                    className="px-2.5 py-1 rounded bg-white border border-slate-300 hover:bg-slate-100 font-bold cursor-pointer"
+                  >
+                    Aligner Haut
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDeleteSelected}
+                    className="px-2.5 py-1 rounded bg-red-50 border border-red-200 text-red-700 hover:bg-red-100 font-bold cursor-pointer"
+                  >
+                    Supprimer ({selectedIds.length})
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* BARRE CONTEXTUELLE D'INSPECTION DE L'ÉLÉMENT SÉLECTIONNÉ */}
             {step === 5 && primarySelected && (
               <div className="bg-white rounded-xl border-2 border-[#0066B3]/30 p-3 space-y-2.5 text-xs">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
-                  <span className="font-extrabold text-[#0B2545]">
-                    Propriétés : {primarySelected.name} ({primarySelected.kind.toUpperCase()})
+                  <span className="font-extrabold text-[#0B2545] flex items-center gap-2">
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] uppercase font-extrabold ${
+                        primarySelected.kind === 'image'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : primarySelected.kind === 'table'
+                          ? 'bg-indigo-100 text-indigo-800'
+                          : primarySelected.kind === 'shape'
+                          ? 'bg-amber-100 text-amber-800'
+                          : 'bg-blue-100 text-blue-800'
+                      }`}
+                    >
+                      {primarySelected.kind === 'image'
+                        ? 'Visuel Graphique'
+                        : primarySelected.kind === 'table'
+                        ? 'Tableau'
+                        : primarySelected.kind === 'shape'
+                        ? 'Décoratif'
+                        : 'Texte Éditable'}
+                    </span>
+                    <span>{primarySelected.name}</span>
                   </span>
                   <div className="flex flex-wrap items-center gap-2">
+                    {primarySelected.kind === 'text' && !primarySelected.locked && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditingTextId((cur) => (cur === primarySelected.id ? null : primarySelected.id))
+                        }
+                        className="px-2.5 py-1 rounded bg-blue-50 hover:bg-blue-100 text-[#0066B3] font-bold inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <Edit3 className="w-3 h-3" />
+                        <span>{editingTextId === primarySelected.id ? 'Terminer texte' : 'Éditer texte'}</span>
+                      </button>
+                    )}
                     <label className="inline-flex items-center gap-1">
                       <span className="text-slate-500">Opacité</span>
                       <input
@@ -2023,6 +2317,25 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
                       />
                       <span>Conserver les proportions</span>
                     </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const asset = assetById.get((primarySelected as ReplicaImageElement).assetId);
+                        if (!asset) return;
+                        const lockedH = computeAspectLockedHeightPct(
+                          primarySelected.wPct,
+                          asset.widthPx,
+                          asset.heightPx,
+                          project.widthMm,
+                          project.heightMm
+                        );
+                        updateSelectedElement({ hPct: lockedH, lockAspectRatio: true });
+                        onToast('Proportions natives exactes restaurées.');
+                      }}
+                      className="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200 font-bold cursor-pointer"
+                    >
+                      Ratio 1:1 original
+                    </button>
                     <label className="px-3 py-1.5 rounded-lg bg-[#0066B3] hover:bg-[#005291] text-white font-bold cursor-pointer inline-flex items-center gap-1.5">
                       <Upload className="w-3.5 h-3.5" />
                       <span>Remplacer cette image</span>
@@ -2195,8 +2508,26 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
               </div>
             )}
 
-            {/* ZONE CENTRALE : FEUILLE CANVA + PANNEAU CALQUES */}
+            {/* ZONE CENTRALE : COMPARATEUR CÔTE À CÔTE + FEUILLE CANVA + PANNEAU CALQUES */}
             <div className="flex flex-col lg:flex-row gap-4 items-start">
+              {compareMode === 'side_by_side' && project.sourcePageSnapshots?.[activePageIndex] && (
+                <div className="w-full lg:w-[46%] rounded-xl bg-slate-100 border border-slate-300 p-2 sm:p-3 space-y-2">
+                  <div className="flex items-center justify-between text-xs font-extrabold text-[#0B2545] px-1">
+                    <span>Document Source Original (Page {activePageIndex + 1})</span>
+                    <span className="text-[11px] font-mono text-slate-500">
+                      {project.widthMm} × {project.heightMm} mm
+                    </span>
+                  </div>
+                  <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+                    <img
+                      src={project.sourcePageSnapshots[activePageIndex]}
+                      alt={`Original page ${activePageIndex + 1}`}
+                      className="w-full h-auto block"
+                    />
+                  </div>
+                </div>
+              )}
+
               <div
                 className={`flex-1 w-full min-w-0 rounded-xl bg-slate-200/80 border border-slate-300 p-2 sm:p-4 overflow-hidden ${
                   isPanMode ? 'cursor-grab active:cursor-grabbing' : ''
@@ -2219,9 +2550,29 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
                         backgroundColor: project.pageBgColor || '#FFFFFF'
                       }}
                     >
+                      {compareMode === 'overlay' && project.sourcePageSnapshots?.[activePageIndex] && (
+                        <img
+                          src={project.sourcePageSnapshots[activePageIndex]}
+                          alt="Calque comparateur source"
+                          draggable={false}
+                          className="absolute inset-0 w-full h-full object-fill pointer-events-none z-[85]"
+                          style={{ opacity: overlayOpacityPct / 100 }}
+                        />
+                      )}
+
                       {pageElements.map((el) => {
                         if (!el.visible) return null;
                         const isSelected = selectedIds.includes(el.id);
+                        const selectionColor =
+                          el.locked
+                            ? '#F59E0B'
+                            : el.kind === 'image'
+                            ? '#059669'
+                            : el.kind === 'table'
+                            ? '#4F46E5'
+                            : el.kind === 'shape'
+                            ? '#D97706'
+                            : '#0066B3';
 
                         return (
                           <div
@@ -2246,14 +2597,26 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
                               opacity: el.opacity / 100,
                               transform: el.rotation ? `rotate(${el.rotation}deg)` : undefined,
                               outline: isSelected
-                                ? el.locked
-                                  ? '2px solid #F59E0B'
-                                  : '2px solid #0066B3'
+                                ? `2px solid ${selectionColor}`
                                 : '1px solid transparent',
                               outlineOffset: '2px',
                               cursor: el.locked ? 'not-allowed' : isPanMode ? 'grab' : 'move'
                             }}
                           >
+                            {isSelected && (
+                              <span
+                                className="absolute -top-5 left-0 px-1.5 py-0.5 rounded text-[9px] font-bold text-white pointer-events-none shadow-xs whitespace-nowrap"
+                                style={{ backgroundColor: selectionColor }}
+                              >
+                                {el.kind === 'image'
+                                  ? 'Visuel'
+                                  : el.kind === 'table'
+                                  ? 'Tableau'
+                                  : el.kind === 'shape'
+                                  ? 'Forme'
+                                  : 'Texte'}
+                              </span>
+                            )}
                             {/* RENDU TEXTE */}
                             {el.kind === 'text' &&
                               (editingTextId === el.id ? (
@@ -2413,19 +2776,23 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
                                 className="w-full h-full"
                                 style={{
                                   borderTop:
-                                    el.shapeType === 'line_h'
+                                    el.shapeType === 'line_h' || el.shapeType === 'rect'
                                       ? `${el.strokeWidthPx}px solid ${el.strokeColor}`
                                       : undefined,
                                   borderLeft:
-                                    el.shapeType === 'line_v'
+                                    el.shapeType === 'line_v' || el.shapeType === 'rect'
+                                      ? `${el.strokeWidthPx}px solid ${el.strokeColor}`
+                                      : undefined,
+                                  borderRight:
+                                    el.shapeType === 'rect'
+                                      ? `${el.strokeWidthPx}px solid ${el.strokeColor}`
+                                      : undefined,
+                                  borderBottom:
+                                    el.shapeType === 'rect'
                                       ? `${el.strokeWidthPx}px solid ${el.strokeColor}`
                                       : undefined,
                                   backgroundColor:
-                                    el.shapeType === 'rect' ? el.fillColor : 'transparent',
-                                  border:
-                                    el.shapeType === 'rect'
-                                      ? `${el.strokeWidthPx}px solid ${el.strokeColor}`
-                                      : undefined
+                                    el.shapeType === 'rect' ? el.fillColor : 'transparent'
                                 }}
                               />
                             )}
@@ -2474,7 +2841,7 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
                 </div>
               </div>
 
-              {/* PANNEAU CALQUES */}
+              {/* PANNEAU CALQUES AVEC FILTRES PAR CATÉGORIE */}
               {showLayersPanel && (
                 <div className="w-full lg:w-72 shrink-0 bg-white rounded-xl border border-slate-200 p-3 space-y-2 max-h-[680px] overflow-y-auto">
                   <div className="flex items-center justify-between border-b border-slate-100 pb-2">
@@ -2485,14 +2852,44 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
                     <span className="text-[10px] text-slate-500">{pageElements.length} objets</span>
                   </div>
 
+                  <div className="flex flex-wrap gap-1 pb-1">
+                    {(
+                      [
+                        { id: 'all', label: 'Tous' },
+                        { id: 'text', label: 'Textes' },
+                        { id: 'image', label: 'Visuels' },
+                        { id: 'table', label: 'Tableaux' },
+                        { id: 'shape', label: 'Formes' }
+                      ] as const
+                    ).map((f) => (
+                      <button
+                        key={f.id}
+                        type="button"
+                        onClick={() => setLayerKindFilter(f.id)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                          layerKindFilter === f.id
+                            ? 'bg-[#0B2545] text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+
                   {[...pageElements]
+                    .filter((el) => layerKindFilter === 'all' || el.kind === layerKindFilter)
                     .sort((a, b) => b.zIndex - a.zIndex)
                     .map((el) => {
                       const active = selectedIds.includes(el.id);
                       return (
                         <div
                           key={el.id}
-                          onClick={() => setSelectedIds([el.id])}
+                          onClick={(e) =>
+                            setSelectedIds((prev) =>
+                              e.shiftKey ? (prev.includes(el.id) ? prev.filter((x) => x !== el.id) : [...prev, el.id]) : [el.id]
+                            )
+                          }
                           className={`p-2 rounded-lg border text-xs flex items-center justify-between gap-1.5 cursor-pointer ${
                             active
                               ? 'bg-blue-50 border-[#0066B3] text-[#0B2545]'
@@ -2501,7 +2898,15 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
                         >
                           <div className="min-w-0 flex-1">
                             <span className="font-bold truncate block">{el.name}</span>
-                            <span className="text-[10px] text-slate-500 uppercase">{el.kind}</span>
+                            <span className="text-[10px] text-slate-500 uppercase">
+                              {el.kind === 'image'
+                                ? `Visuel (${el.visualRole})`
+                                : el.kind === 'table'
+                                ? 'Tableau'
+                                : el.kind === 'shape'
+                                ? 'Décoratif'
+                                : 'Texte'}
+                            </span>
                           </div>
                           <div className="flex items-center gap-1 shrink-0">
                             <button
@@ -2565,34 +2970,33 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <div className="inline-flex bg-slate-100 p-1 rounded-lg text-xs font-bold">
-                  <button
-                    type="button"
-                    onClick={() => setEmailPreviewDevice('desktop')}
-                    className={`px-2.5 py-1.5 rounded-md inline-flex items-center gap-1 cursor-pointer ${
-                      emailPreviewDevice === 'desktop' ? 'bg-white text-[#0B2545] shadow-xs' : 'text-slate-600'
-                    }`}
-                  >
-                    <Monitor className="w-3.5 h-3.5" /> Desktop
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setEmailPreviewDevice('mobile')}
-                    className={`px-2.5 py-1.5 rounded-md inline-flex items-center gap-1 cursor-pointer ${
-                      emailPreviewDevice === 'mobile' ? 'bg-white text-[#0B2545] shadow-xs' : 'text-slate-600'
-                    }`}
-                  >
-                    <Smartphone className="w-3.5 h-3.5" /> Mobile
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setEmailPreviewDevice('code')}
-                    className={`px-2.5 py-1.5 rounded-md inline-flex items-center gap-1 cursor-pointer ${
-                      emailPreviewDevice === 'code' ? 'bg-white text-[#0B2545] shadow-xs' : 'text-slate-600'
-                    }`}
-                  >
-                    <Code2 className="w-3.5 h-3.5" /> Code
-                  </button>
+                <div className="inline-flex flex-wrap bg-slate-100 p-1 rounded-lg text-xs font-bold gap-0.5">
+                  {(
+                    [
+                      { id: 'desktop', label: 'Desktop', icon: Monitor },
+                      { id: 'mobile', label: 'Mobile', icon: Smartphone },
+                      { id: 'gmail', label: 'Gmail', icon: Mail },
+                      { id: 'outlook', label: 'Outlook MSO', icon: Mail },
+                      { id: 'kit', label: 'Kit', icon: Mail },
+                      { id: 'code', label: 'Code', icon: Code2 }
+                    ] as const
+                  ).map((prof) => {
+                    const ProfIcon = prof.icon;
+                    return (
+                      <button
+                        key={prof.id}
+                        type="button"
+                        onClick={() => setEmailPreviewDevice(prof.id)}
+                        className={`px-2 py-1.5 rounded-md inline-flex items-center gap-1 cursor-pointer ${
+                          emailPreviewDevice === prof.id
+                            ? 'bg-white text-[#0B2545] shadow-xs'
+                            : 'text-slate-600'
+                        }`}
+                      >
+                        <ProfIcon className="w-3.5 h-3.5" /> {prof.label}
+                      </button>
+                    );
+                  })}
                 </div>
 
                 <button
@@ -2643,14 +3047,32 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
                 className="w-full h-[440px] p-3 font-mono text-[11px] bg-slate-950 text-emerald-300 rounded-xl border border-slate-700"
               />
             ) : (
-              <div className="bg-slate-200 p-3 rounded-xl flex justify-center overflow-x-auto">
+              <div className="bg-slate-200 p-3 rounded-xl flex flex-col items-center gap-2 overflow-x-auto">
+                {(emailPreviewDevice === 'gmail' || emailPreviewDevice === 'outlook' || emailPreviewDevice === 'kit') && (
+                  <div className="w-full max-w-[740px] bg-white border border-slate-300 rounded-lg px-3.5 py-2 text-[11px] flex flex-wrap items-center justify-between gap-2 text-slate-700">
+                    <span className="font-bold text-[#0B2545]">
+                      Simulation client :{' '}
+                      {emailPreviewDevice === 'gmail'
+                        ? 'Gmail Web (poids HTML ' + (auditResult?.htmlSizeKb ?? 0) + ' Ko / 102 Ko max)'
+                        : emailPreviewDevice === 'outlook'
+                        ? 'Outlook Desktop (Moteur MSO Tableaux + Word)'
+                        : 'Kit / Newsletter Responsive (600px centré)'}
+                    </span>
+                    <span className="text-slate-500">Objet : {project.emailSubject}</span>
+                  </div>
+                )}
                 <iframe
                   title="Aperçu Email HTML Responsive"
                   srcDoc={compiledHtml}
                   className="bg-white rounded-lg border border-slate-300 shadow-sm transition-all"
                   style={{
                     width: emailPreviewDevice === 'mobile' ? '375px' : '100%',
-                    maxWidth: emailPreviewDevice === 'mobile' ? '375px' : '740px',
+                    maxWidth:
+                      emailPreviewDevice === 'mobile'
+                        ? '375px'
+                        : emailPreviewDevice === 'outlook'
+                        ? `${Math.max(600, project.emailMaxWidthPx + 40)}px`
+                        : '740px',
                     height: '520px'
                   }}
                 />
@@ -2677,21 +3099,33 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={handleHostAllAssets}
-                  disabled={isUploadingAll || project.assets.length === 0}
-                  className="min-h-[42px] px-4 py-2 rounded-lg bg-[#0066B3] hover:bg-[#005291] text-white text-xs font-bold inline-flex items-center gap-2 cursor-pointer disabled:opacity-50"
-                >
-                  {isUploadingAll ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Globe className="w-4 h-4" />
-                  )}
-                  <span>
-                    {isUploadingAll ? 'Téléversement HTTPS...' : 'Héberger toutes les images en HTTPS'}
-                  </span>
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleVerifyAllHostedUrls}
+                    disabled={isVerifyingUrls || project.assets.every((a) => !a.publicHttpsUrl)}
+                    className="min-h-[42px] px-3.5 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-45"
+                  >
+                    <ShieldCheck className={`w-4 h-4 ${isVerifyingUrls ? 'animate-pulse text-[#0066B3]' : 'text-emerald-700'}`} />
+                    <span>{isVerifyingUrls ? 'Test HTTPS...' : 'Tester URLs HTTPS'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleHostAllAssets}
+                    disabled={isUploadingAll || project.assets.length === 0}
+                    className="min-h-[42px] px-4 py-2 rounded-lg bg-[#0066B3] hover:bg-[#005291] text-white text-xs font-bold inline-flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                  >
+                    {isUploadingAll ? (
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Globe className="w-4 h-4" />
+                    )}
+                    <span>
+                      {isUploadingAll ? 'Téléversement HTTPS...' : 'Héberger toutes les images en HTTPS'}
+                    </span>
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
@@ -2791,6 +3225,7 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
                         {asset.publicHttpsUrl ? (
                           <span className="text-[11px] text-emerald-700 font-mono truncate block max-w-md">
                             {asset.publicHttpsUrl}
+                            {asset.httpsVerifyDetail ? ` (${asset.httpsVerifyDetail})` : ''}
                           </span>
                         ) : asset.hostingError ? (
                           <span className="text-[11px] text-red-700 font-semibold block">
@@ -2808,14 +3243,18 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
                       <span
                         className={`px-2 py-0.5 rounded text-[11px] font-bold ${
                           asset.hostingStatus === 'hosted'
-                            ? 'bg-emerald-100 text-emerald-800'
+                            ? asset.httpsVerified === false
+                              ? 'bg-amber-100 text-amber-800'
+                              : 'bg-emerald-100 text-emerald-800'
                             : asset.hostingStatus === 'error'
                             ? 'bg-red-100 text-red-800'
                             : 'bg-amber-100 text-amber-800'
                         }`}
                       >
                         {asset.hostingStatus === 'hosted'
-                          ? 'Hébergé HTTPS'
+                          ? asset.httpsVerified
+                            ? 'HTTPS Vérifié'
+                            : 'Hébergé HTTPS'
                           : asset.hostingStatus === 'error'
                           ? 'Erreur'
                           : 'Local'}
@@ -2847,11 +3286,11 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
                     <h4 className="text-sm sm:text-base font-extrabold text-[#0B2545] flex items-center gap-2">
                       <ShieldCheck className="w-4 h-4 text-[#0066B3]" />
                       <span>
-                        Étape 7B — Contrôle de Qualité Email Automatique ({auditResult.scorePct}%)
+                        Étape 7B — Inspecteur Compatibilité Email 10 points ({auditResult.scorePct}% · {auditResult.htmlSizeKb} Ko)
                       </span>
                     </h4>
                     <p className="text-xs text-slate-500">
-                      Vérifie la complétude des textes, l’hébergement HTTPS, les attributs images, zéro JS, responsive 620px et MSO Outlook.
+                      Vérifie imbrication tableaux, CSS inline, URL HTTPS, largeurs max, fallback polices, responsive mobile, MSO Outlook et poids Gmail.
                     </p>
                   </div>
 

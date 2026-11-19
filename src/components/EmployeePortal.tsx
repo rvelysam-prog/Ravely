@@ -224,17 +224,17 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
 
   if (directAccessToken && directError) {
     return (
-      <div className="max-w-md mx-auto my-16 bg-white rounded-2xl border border-red-200 p-8 text-center space-y-4 shadow-sm">
-        <ShieldAlert className="w-10 h-10 text-red-600 mx-auto" />
-        <h2 className="font-display font-bold text-xl text-[#0B2545]">
+      <div className="max-w-md mx-auto my-16 ds-card border-red-200 p-8 text-center space-y-4">
+        <ShieldAlert className="w-10 h-10 text-status-danger mx-auto" aria-hidden="true" />
+        <h2 className="font-display font-bold text-xl text-brand-navy">
           Lien d’accès direct non valide
         </h2>
-        <p className="text-sm text-slate-600">{directError}</p>
+        <p className="text-sm text-ink-secondary">{directError}</p>
         {onCloseModal && (
           <button
             type="button"
             onClick={onCloseModal}
-            className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#0B2545] text-white text-xs font-bold"
+            className="ds-btn-base ds-btn-navy text-xs"
           >
             Retour au site
           </button>
@@ -248,16 +248,16 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
   // ==========================================================================
   if (!activeEmployee || (!employeeToken && !isDirectTokenMode)) {
     return (
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
-        <div className="max-w-md mx-auto bg-white rounded-2xl border border-slate-200 p-6 sm:p-10 shadow-xl relative">
+      <div className="ds-container py-8 sm:py-12">
+        <div className="max-w-md mx-auto ds-card p-6 sm:p-10 shadow-xl relative">
           {onCloseModal && (
             <button
               type="button"
               onClick={onCloseModal}
-              className="absolute top-4 right-4 min-h-[38px] min-w-[38px] rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-600 hover:text-slate-900"
-              aria-label="Fermer"
+              className="absolute top-4 right-4 min-h-[44px] min-w-[44px] rounded-xl bg-surface-subtle hover:bg-surface-border flex items-center justify-center text-ink-secondary hover:text-ink-primary cursor-pointer"
+              aria-label="Fermer l'espace employé"
             >
-              <X className="w-4 h-4" />
+              <X className="w-4 h-4" aria-hidden="true" />
             </button>
           )}
 
@@ -288,41 +288,43 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+              <label htmlFor="emp-login-email" className="block text-xs font-semibold text-ink-primary mb-1.5">
                 Adresse e-mail professionnelle
               </label>
               <input
+                id="emp-login-email"
                 type="email"
                 required
                 autoComplete="username"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="prenom.nom@entreprise.com"
-                className="w-full min-h-[46px] px-4 py-2.5 rounded-xl border border-slate-300 text-sm focus:border-[#0B2545] focus:outline-none"
+                className="ds-input"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+              <label htmlFor="emp-login-password" className="block text-xs font-semibold text-ink-primary mb-1.5">
                 Mot de passe
               </label>
               <div className="relative">
                 <input
+                  id="emp-login-password"
                   type={showPassword ? 'text' : 'password'}
                   required
                   autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
-                  className="w-full min-h-[46px] pl-4 pr-12 py-2.5 rounded-xl border border-slate-300 text-sm focus:border-[#0B2545] focus:outline-none"
+                  className="ds-input pr-12"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((prev) => !prev)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 min-h-[38px] min-w-[38px] flex items-center justify-center text-slate-500 hover:text-slate-800"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 min-h-[42px] min-w-[42px] flex items-center justify-center text-ink-secondary hover:text-ink-primary cursor-pointer"
                   aria-label="Afficher ou masquer le mot de passe"
                 >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  {showPassword ? <EyeOff className="w-4 h-4" aria-hidden="true" /> : <Eye className="w-4 h-4" aria-hidden="true" />}
                 </button>
               </div>
             </div>
@@ -330,14 +332,14 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
             <button
               type="submit"
               disabled={loading}
-              className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-[#0B2545] text-white font-bold text-sm hover:bg-[#134074] transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+              className="ds-btn-base ds-btn-navy w-full min-h-[48px] disabled:opacity-50"
             >
-              <Lock className="w-4 h-4 text-amber-400" />
+              <Lock className="w-4 h-4 text-brand-amber" aria-hidden="true" />
               <span>{loading ? 'Vérification en cours...' : 'Se connecter à l’Espace Employé'}</span>
             </button>
           </form>
 
-          <div className="mt-6 pt-5 border-t border-slate-100 text-xs text-slate-500 text-center">
+          <div className="mt-6 pt-5 border-t border-surface-border text-xs text-ink-secondary text-center">
             En cas d’oubli de votre mot de passe, veuillez contacter la Direction des Ressources Humaines d’{settings.company_name}.
           </div>
         </div>
@@ -350,67 +352,69 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
   // ==========================================================================
   if (!isDirectTokenMode && activeEmployee.must_change_password) {
     return (
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-20">
-        <div className="max-w-md mx-auto bg-white rounded-2xl border border-amber-400 p-6 sm:p-10 shadow-sm">
+      <div className="ds-container py-12 sm:py-20">
+        <div className="max-w-md mx-auto ds-card border-brand-amber p-6 sm:p-10">
           <div className="flex items-center gap-3 mb-4">
-            <div className="w-11 h-11 rounded-xl bg-amber-400/20 text-[#0B2545] flex items-center justify-center shrink-0">
-              <KeyRound className="w-5 h-5" />
+            <div className="w-11 h-11 rounded-xl bg-brand-amber/20 text-brand-navy flex items-center justify-center shrink-0">
+              <KeyRound className="w-5 h-5" aria-hidden="true" />
             </div>
             <div>
-              <span className="text-xs font-mono text-amber-700 font-semibold">
+              <span className="text-xs font-mono tabular-nums text-amber-700 font-semibold">
                 Matricule {activeEmployee.matricule}
               </span>
-              <h1 className="font-display font-bold text-xl text-[#0B2545]">
+              <h1 className="font-display font-bold text-xl text-brand-navy">
                 Changement de mot de passe requis
               </h1>
             </div>
           </div>
 
-          <p className="text-xs sm:text-sm text-slate-600 mb-6 leading-relaxed">
+          <p className="text-xs sm:text-sm text-ink-secondary mb-6 leading-relaxed">
             Bienvenue <strong>{activeEmployee.nom_complet || `${activeEmployee.prenom} ${activeEmployee.nom}`}</strong>. Pour votre première connexion à l’<strong>Espace Employé</strong>, vous devez définir un nouveau mot de passe personnel (minimum 8 caractères) avant d’accéder à votre dossier et à votre contrat.
           </p>
 
           {error && (
-            <div className="mb-4 p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs sm:text-sm">
+            <div role="alert" className="mb-4 p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-900 text-xs sm:text-sm">
               {error}
             </div>
           )}
 
           <form onSubmit={handleFirstPasswordChange} className="space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+              <label htmlFor="emp-new-password" className="block text-xs font-semibold text-ink-primary mb-1.5">
                 Nouveau mot de passe personnel (min. 8 caractères) *
               </label>
               <input
+                id="emp-new-password"
                 type="password"
                 required
                 minLength={8}
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 placeholder="Nouveau mot de passe sécurisé"
-                className="w-full min-h-[46px] px-4 py-2.5 rounded-xl border border-slate-300 text-sm focus:border-[#0B2545] focus:outline-none"
+                className="ds-input"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+              <label htmlFor="emp-confirm-password" className="block text-xs font-semibold text-ink-primary mb-1.5">
                 Confirmer le nouveau mot de passe *
               </label>
               <input
+                id="emp-confirm-password"
                 type="password"
                 required
                 minLength={8}
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="Répétez le nouveau mot de passe"
-                className="w-full min-h-[46px] px-4 py-2.5 rounded-xl border border-slate-300 text-sm focus:border-[#0B2545] focus:outline-none"
+                className="ds-input"
               />
             </div>
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-[#0B2545] text-white font-bold text-sm hover:bg-[#134074] transition-colors"
+              className="ds-btn-base ds-btn-navy w-full min-h-[48px]"
             >
               Valider et accéder à mon dossier employé
             </button>
@@ -419,7 +423,7 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
           <button
             type="button"
             onClick={onEmployeeLogout}
-            className="mt-4 w-full min-h-[44px] text-xs font-medium text-slate-500 hover:text-slate-800"
+            className="mt-4 w-full min-h-[44px] text-xs font-medium text-ink-secondary hover:text-ink-primary cursor-pointer"
           >
             Annuler et se déconnecter
           </button>
@@ -469,13 +473,13 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
 
   return (
     <div
-      className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 space-y-8 protected-contract-viewer no-print-contract"
+      className="ds-container py-8 sm:py-12 space-y-8 protected-contract-viewer no-print-contract"
       onContextMenu={handleContextMenu}
     >
       {/* Top Bar of Employee Portal */}
-      <div className="bg-[#0B2545] text-white rounded-2xl p-6 sm:p-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border border-amber-400/30">
+      <div className="bg-brand-navy text-white rounded-2xl p-6 sm:p-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border border-brand-gold/30">
         <div className="space-y-1">
-          <div className="text-xs font-mono text-amber-400">
+          <div className="text-xs font-mono tabular-nums text-brand-amber">
             Espace Employé Sécurisé · Matricule {activeEmployee.matricule} · Statut Vérifié
           </div>
           <h1 className="font-display font-bold text-2xl sm:text-3xl text-white">
@@ -486,14 +490,14 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-2 self-start sm:self-auto">
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
           {!isDirectTokenMode && (
             <button
               type="button"
               onClick={onEmployeeLogout}
-              className="min-h-[44px] px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap"
+              className="ds-btn-base bg-white/10 hover:bg-white/20 text-white text-xs sm:text-sm"
             >
-              <LogOut className="w-4 h-4 text-amber-400" />
+              <LogOut className="w-4 h-4 text-brand-amber" aria-hidden="true" />
               <span>Déconnexion</span>
             </button>
           )}
@@ -501,9 +505,9 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
             <button
               type="button"
               onClick={onCloseModal}
-              className="min-h-[44px] px-4 py-2.5 rounded-xl bg-amber-400 text-[#0B2545] text-xs sm:text-sm font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap"
+              className="ds-btn-base ds-btn-primary text-xs sm:text-sm"
             >
-              <X className="w-4 h-4" />
+              <X className="w-4 h-4" aria-hidden="true" />
               <span>Fermer</span>
             </button>
           )}
@@ -511,24 +515,24 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
       </div>
 
       {passwordChangeSuccess && (
-        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-sm flex items-center gap-2.5">
-          <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+        <div role="status" className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-950 text-sm flex items-center gap-2.5">
+          <CheckCircle2 className="w-5 h-5 text-status-success shrink-0" aria-hidden="true" />
           <span>{passwordChangeSuccess}</span>
         </div>
       )}
 
       {securityNotice && (
-        <div className="p-4 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs sm:text-sm flex items-center gap-2.5">
-          <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0" />
+        <div role="alert" className="p-4 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 text-xs sm:text-sm flex items-center gap-2.5">
+          <ShieldAlert className="w-5 h-5 text-status-warning shrink-0" aria-hidden="true" />
           <span>{securityNotice}</span>
         </div>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         {/* Left Column: Employee Identity Card */}
-        <div className="lg:col-span-4 bg-white rounded-2xl border border-slate-200 p-6 sm:p-7 space-y-6">
+        <div className="lg:col-span-4 ds-card p-6 sm:p-7 space-y-6">
           <div className="flex flex-col items-center text-center">
-            <div className="w-36 h-36 rounded-2xl overflow-hidden border-2 border-[#0B2545] shadow-sm bg-slate-100 mb-4">
+            <div className="w-36 h-36 rounded-2xl overflow-hidden border-2 border-brand-navy shadow-sm bg-surface-subtle mb-4">
               <img
                 src={displayPhoto}
                 alt={`Photo d'identité de ${fullNameUpper}`}
@@ -537,68 +541,68 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
                 className="w-full h-full object-cover pointer-events-none select-none"
               />
             </div>
-            <span className="font-mono text-xs font-semibold text-slate-500">
+            <span className="font-mono tabular-nums text-xs font-semibold text-ink-secondary">
               Matricule : {activeEmployee.matricule}
             </span>
-            <h2 className="font-display font-bold text-xl text-[#0B2545] mt-0.5">
+            <h2 className="font-display font-bold text-xl text-brand-navy mt-0.5">
               {civilite} {fullNameUpper}
             </h2>
-            <p className="text-xs text-slate-600 mt-1">{activeEmployee.poste}</p>
+            <p className="text-xs text-ink-secondary mt-1">{activeEmployee.poste}</p>
           </div>
 
-          <dl className="space-y-3 text-sm pt-4 border-t border-slate-100">
-            <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
-              <dt className="text-slate-500 text-xs">Matricule</dt>
-              <dd className="font-mono tabular-nums font-bold text-[#0B2545]">
+          <dl className="space-y-3 text-sm pt-4 border-t border-surface-border">
+            <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-surface-border">
+              <dt className="text-ink-secondary text-xs">Matricule</dt>
+              <dd className="font-mono tabular-nums font-bold text-brand-navy">
                 {activeEmployee.matricule}
               </dd>
             </div>
 
-            <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
-              <dt className="text-slate-500 text-xs">Civilité &amp; Nom complet</dt>
-              <dd className="font-semibold text-blue-700 text-right">
+            <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-surface-border">
+              <dt className="text-ink-secondary text-xs">Civilité &amp; Nom complet</dt>
+              <dd className="font-semibold text-brand-blue text-right">
                 {civilite} {fullNameUpper}
               </dd>
             </div>
 
-            <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
-              <dt className="text-slate-500 text-xs">Date de naissance</dt>
-              <dd className="font-mono text-xs font-semibold text-slate-900">
+            <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-surface-border">
+              <dt className="text-ink-secondary text-xs">Date de naissance</dt>
+              <dd className="font-mono tabular-nums text-xs font-semibold text-ink-primary">
                 {dateNaissance} ({nationalite})
               </dd>
             </div>
 
-            <div className="flex items-start justify-between gap-2 pb-2.5 border-b border-slate-100">
-              <dt className="text-slate-500 text-xs shrink-0">Poste occupé</dt>
-              <dd className="font-semibold text-slate-900 text-right">
+            <div className="flex items-start justify-between gap-2 pb-2.5 border-b border-surface-border">
+              <dt className="text-ink-secondary text-xs shrink-0">Poste occupé</dt>
+              <dd className="font-semibold text-ink-primary text-right">
                 {activeEmployee.poste}
               </dd>
             </div>
 
-            <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
-              <dt className="text-slate-500 text-xs">Type de contrat</dt>
-              <dd className="font-semibold text-[#134074] text-right">
+            <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-surface-border">
+              <dt className="text-ink-secondary text-xs">Type de contrat</dt>
+              <dd className="font-semibold text-brand-navy-mid text-right">
                 {isCDD ? `CDD (du ${dateEffet} au ${dateFinCdd})` : 'CDI (Durée indéterminée)'}
               </dd>
             </div>
 
-            <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
-              <dt className="text-slate-500 text-xs">Salaire brut mensuel</dt>
+            <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-surface-border">
+              <dt className="text-ink-secondary text-xs">Salaire brut mensuel</dt>
               <dd className="font-mono tabular-nums font-bold text-[#0000AA]">
                 {formattedSalaryWithCurrency}
               </dd>
             </div>
 
             <div className="flex items-center justify-between gap-2">
-              <dt className="text-slate-500 text-xs">Date d’effet</dt>
-              <dd className="font-mono tabular-nums font-semibold text-slate-900">
+              <dt className="text-ink-secondary text-xs">Date d’effet</dt>
+              <dd className="font-mono tabular-nums font-semibold text-ink-primary">
                 {dateEffet}
               </dd>
             </div>
           </dl>
 
-          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 text-xs text-slate-600 space-y-1">
-            <p className="font-semibold text-[#0B2545]">Dossier Individuel Certifié — NE: 799094917</p>
+          <div className="p-3.5 rounded-xl bg-surface-subtle border border-surface-border text-xs text-ink-secondary space-y-1">
+            <p className="font-semibold text-brand-navy">Dossier Individuel Certifié — NE: 799094917</p>
             <p>
               Rattaché au siège d’{settings.company_name} ({settings.address}).
             </p>
@@ -606,16 +610,16 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
         </div>
 
         {/* Right Column: Integrated Non-Downloadable A4 Contract Viewer */}
-        <div className="lg:col-span-8 bg-white rounded-2xl border border-slate-200 overflow-hidden">
+        <div className="lg:col-span-8 ds-card overflow-hidden">
           {/* Viewer Toolbar (Zero Download Button for Employee!) */}
-          <div className="bg-slate-900 text-white px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-800">
+          <div className="bg-brand-navy-deep text-white px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-3 border-b border-white/10">
             <div className="flex items-center gap-2.5">
-              <FileText className="w-5 h-5 text-amber-400 shrink-0" />
+              <FileText className="w-5 h-5 text-brand-amber shrink-0" aria-hidden="true" />
               <div>
                 <h2 className="text-sm font-bold text-white">
                   Contrat de Travail ({isCDD ? 'à durée déterminée' : 'à durée indéterminée'}) — {activeEmployee.matricule}.pdf
                 </h2>
-                <p className="text-[11px] text-slate-400">
+                <p className="text-xs text-slate-300">
                   Consultation intégrée sécurisée · Téléchargement réservé à l’administration
                 </p>
               </div>
@@ -623,12 +627,12 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
 
             <div className="flex flex-wrap items-center gap-2">
               {hasCustomPdfData && (
-                <div className="flex items-center bg-slate-800 rounded-lg p-0.5 text-xs">
+                <div className="flex items-center bg-brand-navy-elevated rounded-xl p-1 text-xs border border-white/10">
                   <button
                     type="button"
                     onClick={() => setViewerMode('document')}
-                    className={`px-2.5 py-1 rounded-md font-medium transition-colors ${
-                      viewerMode === 'document' ? 'bg-amber-400 text-[#0B2545]' : 'text-slate-300'
+                    className={`min-h-[38px] px-3 py-1 rounded-lg font-medium transition-colors cursor-pointer ${
+                      viewerMode === 'document' ? 'bg-brand-amber text-brand-navy-deep font-bold' : 'text-slate-300 hover:text-white'
                     }`}
                   >
                     Aperçu A4 Officiel
@@ -636,8 +640,8 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
                   <button
                     type="button"
                     onClick={() => setViewerMode('pdf-native')}
-                    className={`px-2.5 py-1 rounded-md font-medium transition-colors ${
-                      viewerMode === 'pdf-native' ? 'bg-amber-400 text-[#0B2545]' : 'text-slate-300'
+                    className={`min-h-[38px] px-3 py-1 rounded-lg font-medium transition-colors cursor-pointer ${
+                      viewerMode === 'pdf-native' ? 'bg-brand-amber text-brand-navy-deep font-bold' : 'text-slate-300 hover:text-white'
                     }`}
                   >
                     Lecteur PDF
@@ -645,23 +649,23 @@ export const EmployeePortal: React.FC<EmployeePortalProps> = ({
                 </div>
               )}
 
-              <div className="flex items-center gap-1 bg-slate-800 rounded-lg px-2 py-1">
+              <div className="flex items-center gap-1 bg-brand-navy-elevated rounded-xl px-1.5 py-1 border border-white/10">
                 <button
                   type="button"
                   onClick={() => setZoomLevel((z) => Math.max(85, z - 10))}
-                  className="p-1 text-slate-300 hover:text-white"
+                  className="min-h-[38px] min-w-[38px] flex items-center justify-center text-slate-300 hover:text-white cursor-pointer"
                   aria-label="Réduire le zoom"
                 >
-                  <ZoomOut className="w-4 h-4" />
+                  <ZoomOut className="w-4 h-4" aria-hidden="true" />
                 </button>
                 <span className="font-mono tabular-nums text-xs px-1.5">{zoomLevel}%</span>
                 <button
                   type="button"
                   onClick={() => setZoomLevel((z) => Math.min(125, z + 10))}
-                  className="p-1 text-slate-300 hover:text-white"
+                  className="min-h-[38px] min-w-[38px] flex items-center justify-center text-slate-300 hover:text-white cursor-pointer"
                   aria-label="Augmenter le zoom"
                 >
-                  <ZoomIn className="w-4 h-4" />
+                  <ZoomIn className="w-4 h-4" aria-hidden="true" />
                 </button>
               </div>
             </div>

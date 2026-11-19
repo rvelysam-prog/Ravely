@@ -2,19 +2,10 @@ import React, { useState } from 'react';
 import {
   UserPlus,
   ShieldCheck,
-  CheckCircle2,
-  AlertTriangle,
-  Lock,
   LogOut,
   Building2,
-  FileText,
   User,
-  Calendar,
-  Phone,
-  Mail,
-  MapPin,
-  Globe,
-  Briefcase
+  X
 } from 'lucide-react';
 import { Employee, SiteSettings } from '../../types';
 import {
@@ -26,6 +17,7 @@ import {
 } from '../../services/staticStorage';
 import { AdminAuthSession } from '../../services/multisiteService';
 import { BrandLogo } from '../BrandLogo';
+import { ActionButton, StatusNotice, SurfaceCard } from '../ui/DesignSystem';
 
 interface SecretaireAdminBackofficeProps {
   settings: SiteSettings;
@@ -46,7 +38,9 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
   const [nextMatricule, setNextMatricule] = useState<string>(() => getNextMatricule(employees));
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(
+    null
+  );
 
   // Formulaire strict Secrétariat : Identité uniquement
   // Sont exclus : choix de poste/département, contrat automatique, promesse d'embauche, salaires, conditions hébergement
@@ -153,7 +147,9 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
       const fresh = await fetchEmployeesFromFirestore();
       setEmployees(fresh);
       setIsModalOpen(false);
-      showToast(`Fiche d'identité créée avec succès pour ${nomComplet} (${nextMatricule}). Transmise au RH pour affectation de poste.`);
+      showToast(
+        `Fiche d'identité créée avec succès pour ${nomComplet} (${nextMatricule}). Transmise au RH pour affectation de poste.`
+      );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erreur lors de l’enregistrement.';
       showToast(msg, 'error');
@@ -163,22 +159,22 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
   };
 
   return (
-    <div className="min-h-screen bg-[#F8F9FA] flex flex-col">
+    <div className="min-h-screen bg-surface-canvas flex flex-col">
       {/* Top Header Secrétariat */}
-      <header className="bg-[#0B1220] text-white border-b border-white/10 sticky top-0 z-30 shadow-md">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 min-h-[72px] py-2 sm:py-0 flex flex-wrap items-center justify-between gap-2 sm:gap-4">
+      <header className="bg-brand-navy-deep text-white border-b border-white/10 sticky top-0 z-30 shadow-md">
+        <div className="ds-container min-h-[72px] py-2 sm:py-0 flex flex-wrap items-center justify-between gap-2 sm:gap-4">
           <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
             <BrandLogo size="header" companyName={settings.company_name} />
             <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="font-bold text-sm sm:text-base text-white tracking-wide truncate max-w-[160px] sm:max-w-none">
                   {settings.company_name}
                 </span>
-                <span className="bg-amber-400 text-slate-950 font-bold text-[10px] uppercase px-2 py-0.5 rounded-full">
-                  Secrétariat
+                <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-brand-gold">
+                  · Secrétariat
                 </span>
               </div>
-              <p className="text-[11px] sm:text-xs text-gray-400 hidden sm:block">
+              <p className="text-xs text-slate-300 hidden sm:block">
                 Espace de gestion administrative des identités salariés
               </p>
             </div>
@@ -187,27 +183,29 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
           <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             <div className="hidden sm:flex flex-col text-right">
               <span className="text-xs font-semibold text-white">{session.username}</span>
-              <span className="text-[10px] text-amber-400 font-mono">
-                {session.role === 'super_admin_rh' ? 'Super Admin (Vue Secrétariat)' : 'Accès Limité Secrétariat'}
+              <span className="text-[11px] text-brand-gold font-mono">
+                {session.role === 'super_admin_rh'
+                  ? 'Super Admin (Vue Secrétariat)'
+                  : 'Accès Limité Secrétariat'}
               </span>
             </div>
 
             {session.role === 'super_admin_rh' && onSwitchToRhBackoffice && (
-              <button
-                type="button"
+              <ActionButton
+                variant="primary"
                 onClick={onSwitchToRhBackoffice}
-                className="px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-400 hover:bg-amber-300 text-slate-950 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+                className="text-xs px-3.5"
                 title="Basculer vers le Backoffice RH complet"
               >
-                <Building2 className="w-3.5 h-3.5" />
+                <Building2 className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Retour Espace RH</span>
-              </button>
+              </ActionButton>
             )}
 
             <button
               type="button"
               onClick={onBackToSite}
-              className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-white/10 hover:bg-white/20 text-white transition-colors"
+              className="ds-btn-base bg-white/10 hover:bg-white/20 text-white text-xs px-3.5"
             >
               Voir le Site
             </button>
@@ -215,9 +213,9 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
             <button
               type="button"
               onClick={onLogout}
-              className="px-3.5 py-2 rounded-xl text-xs font-bold bg-red-600 hover:bg-red-700 text-white transition-colors flex items-center gap-1.5"
+              className="ds-btn-base bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-3.5"
             >
-              <LogOut className="w-3.5 h-3.5" />
+              <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
               <span>Déconnexion</span>
             </button>
           </div>
@@ -225,67 +223,79 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
       </header>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 w-full space-y-6">
-        {/* Toast feedback */}
-        {statusMsg && (
-          <div
-            className={`p-4 rounded-2xl border text-sm flex items-center gap-3 shadow-sm ${
-              statusMsg.type === 'success'
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                : 'bg-red-50 border-red-200 text-red-800'
-            }`}
-          >
-            {statusMsg.type === 'success' ? (
-              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-            ) : (
-              <AlertTriangle className="w-5 h-5 text-red-600 shrink-0" />
-            )}
-            <span>{statusMsg.text}</span>
-          </div>
-        )}
+      <main className="ds-container py-8 flex-1 space-y-6">
+        {statusMsg && <StatusNotice variant={statusMsg.type}>{statusMsg.text}</StatusNotice>}
 
         {/* Bannière de cadrage des compétences Secrétariat */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <SurfaceCard className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
-              <ShieldCheck className="w-5 h-5 text-blue-700" />
-              <h1 className="font-bold text-lg text-slate-900">
+              <ShieldCheck className="w-5 h-5 text-brand-blue" aria-hidden="true" />
+              <h1 className="font-bold text-lg text-ink-primary">
                 Portail Administratif Secrétariat
               </h1>
             </div>
-            <p className="text-xs text-slate-600">
-              Votre mission : Saisie des données d'identité des salariés. Les attributions de postes, contrats et documents officiels sont gérés exclusivement par la Direction RH.
+            <p className="text-xs sm:text-sm text-ink-secondary max-w-[68ch]">
+              Votre mission : Saisie des données d&apos;identité des salariés. Les attributions de
+              postes, contrats et documents officiels sont gérés exclusivement par la Direction RH.
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={handleOpenAddModal}
-            className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#0B2545] hover:bg-[#134074] text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-sm transition-colors whitespace-nowrap cursor-pointer"
-          >
-            <UserPlus className="w-4 h-4 text-amber-400" />
+          <ActionButton variant="navy" onClick={handleOpenAddModal}>
+            <UserPlus className="w-4 h-4 text-brand-amber" aria-hidden="true" />
             <span>Nouveau Salarié (Saisie Identité)</span>
-          </button>
-        </div>
+          </ActionButton>
+        </SurfaceCard>
 
         {/* Liste des salariés saisis (Vue restreinte : identité uniquement, sans salaires ni contrats) */}
-        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
-          <div className="p-4 sm:p-5 border-b border-slate-200 flex items-center justify-between">
+        <SurfaceCard padded={false} className="overflow-hidden">
+          <div className="p-4 sm:p-5 border-b border-surface-border flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <User className="w-4 h-4 text-slate-500" />
-              <h2 className="font-bold text-sm text-slate-800">
+              <User className="w-4 h-4 text-ink-muted" aria-hidden="true" />
+              <h2 className="font-bold text-sm text-ink-primary tabular-nums">
                 Salariés Enregistrés ({employees.length})
               </h2>
             </div>
-            <span className="text-[11px] text-slate-500 font-mono">
+            <span className="text-xs text-ink-secondary font-mono">
               Données protégées · Lecture restreinte
             </span>
           </div>
 
-          <div className="overflow-x-auto">
+          {/* Cartes mobiles */}
+          <div className="md:hidden divide-y divide-surface-border">
+            {employees.map((emp) => {
+              const isWaiting = emp.poste === 'En attente d’attribution RH';
+              return (
+                <div key={emp.id} className="p-4 space-y-2 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono tabular-nums font-bold text-brand-navy">
+                      {emp.matricule}
+                    </span>
+                    <span
+                      className={`font-semibold ${
+                        isWaiting ? 'text-brand-blue' : 'text-status-success'
+                      }`}
+                    >
+                      {isWaiting ? 'Transmis au RH' : 'Pris en charge RH'}
+                    </span>
+                  </div>
+                  <div className="font-bold text-sm text-ink-primary">
+                    {emp.civilite} {emp.nom_complet}
+                  </div>
+                  <div className="font-mono text-ink-secondary break-all">{emp.email}</div>
+                  <div className="text-ink-secondary tabular-nums">
+                    {emp.telephone || '—'} · {emp.nationalite || 'Canadienne'}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Tableau desktop */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
+                <tr className="bg-surface-subtle border-b border-surface-border text-ink-secondary font-semibold">
                   <th className="py-3 px-4">Matricule</th>
                   <th className="py-3 px-4">Civilité &amp; Nom complet</th>
                   <th className="py-3 px-4">Email</th>
@@ -294,57 +304,70 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
                   <th className="py-3 px-4">Statut RH</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 text-slate-700">
-                {employees.map((emp) => (
-                  <tr key={emp.id} className="hover:bg-slate-50/60 transition-colors">
-                    <td className="py-3 px-4 font-mono font-bold text-[#0B2545]">
-                      {emp.matricule}
-                    </td>
-                    <td className="py-3 px-4 font-semibold text-slate-900">
-                      {emp.civilite} {emp.nom_complet}
-                    </td>
-                    <td className="py-3 px-4 font-mono text-slate-600">
-                      {emp.email}
-                    </td>
-                    <td className="py-3 px-4 font-mono text-slate-600">
-                      {emp.telephone || '—'}
-                    </td>
-                    <td className="py-3 px-4">
-                      {emp.nationalite || 'Canadienne'}
-                    </td>
-                    <td className="py-3 px-4">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-                        {emp.poste === 'En attente d’attribution RH' ? 'Transmis au RH' : 'Pris en charge RH'}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+              <tbody className="divide-y divide-surface-border text-ink-primary">
+                {employees.map((emp) => {
+                  const isWaiting = emp.poste === 'En attente d’attribution RH';
+                  return (
+                    <tr key={emp.id} className="hover:bg-surface-subtle/70 transition-colors">
+                      <td className="py-3 px-4 font-mono tabular-nums font-bold text-brand-navy">
+                        {emp.matricule}
+                      </td>
+                      <td className="py-3 px-4 font-semibold text-ink-primary">
+                        {emp.civilite} {emp.nom_complet}
+                      </td>
+                      <td className="py-3 px-4 font-mono text-ink-secondary">{emp.email}</td>
+                      <td className="py-3 px-4 font-mono tabular-nums text-ink-secondary">
+                        {emp.telephone || '—'}
+                      </td>
+                      <td className="py-3 px-4">{emp.nationalite || 'Canadienne'}</td>
+                      <td className="py-3 px-4">
+                        <span
+                          className={`font-semibold ${
+                            isWaiting ? 'text-brand-blue' : 'text-status-success'
+                          }`}
+                        >
+                          {isWaiting ? 'Transmis au RH' : 'Pris en charge RH'}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-        </div>
+        </SurfaceCard>
       </main>
 
       {/* Modal Saisie Salarié STRICT SECRÉTARIAT */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl border border-slate-200 max-w-2xl w-full p-6 shadow-2xl my-8 max-h-[92vh] overflow-y-auto space-y-5">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="sec-add-employee-title"
+          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+        >
+          <div className="bg-white rounded-2xl border border-surface-border max-w-2xl w-full p-6 shadow-2xl my-8 max-h-[92vh] overflow-y-auto space-y-5">
+            <div className="flex items-center justify-between pb-3 border-b border-surface-border gap-3">
               <div>
-                <h3 className="font-bold text-base text-[#0B2545] flex items-center gap-2">
-                  <UserPlus className="w-5 h-5 text-amber-500" />
-                  <span>Enregistrer l'identité d'un salarié ({nextMatricule})</span>
+                <h3
+                  id="sec-add-employee-title"
+                  className="font-bold text-base text-brand-navy flex items-center gap-2"
+                >
+                  <UserPlus className="w-5 h-5 text-brand-amber" aria-hidden="true" />
+                  <span>Enregistrer l&apos;identité d&apos;un salarié ({nextMatricule})</span>
                 </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Formulaire réservé au Secrétariat · Les paramètres contractuels seront complétés par le RH.
+                <p className="text-xs text-ink-secondary mt-0.5">
+                  Formulaire réservé au Secrétariat · Les paramètres contractuels seront complétés
+                  par le RH.
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setIsModalOpen(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+                aria-label="Fermer le formulaire"
+                className="min-h-[44px] min-w-[44px] rounded-xl text-ink-secondary hover:text-ink-primary hover:bg-surface-subtle flex items-center justify-center cursor-pointer shrink-0"
               >
-                ✕
+                <X className="w-4 h-4" aria-hidden="true" />
               </button>
             </div>
 
@@ -352,10 +375,14 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
               {/* Row 1: Civilité & Nom */}
               <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
                 <div className="sm:col-span-3">
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label
+                    htmlFor="sec-civilite"
+                    className="block text-xs font-semibold text-ink-primary mb-1"
+                  >
                     Civilité *
                   </label>
                   <select
+                    id="sec-civilite"
                     value={identityForm.civilite}
                     onChange={(e) =>
                       setIdentityForm({
@@ -363,7 +390,7 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
                         civilite: e.target.value as 'Monsieur' | 'Madame'
                       })
                     }
-                    className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm bg-white font-medium"
+                    className="ds-input text-xs sm:text-sm font-medium cursor-pointer"
                   >
                     <option value="Monsieur">Monsieur</option>
                     <option value="Madame">Madame</option>
@@ -371,10 +398,14 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
                 </div>
 
                 <div className="sm:col-span-4">
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label
+                    htmlFor="sec-prenom"
+                    className="block text-xs font-semibold text-ink-primary mb-1"
+                  >
                     Prénom *
                   </label>
                   <input
+                    id="sec-prenom"
                     type="text"
                     required
                     value={identityForm.prenom}
@@ -387,15 +418,19 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
                       });
                     }}
                     placeholder="Ex: Jean-Pierre"
-                    className="w-full min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm"
+                    className="ds-input text-xs sm:text-sm"
                   />
                 </div>
 
                 <div className="sm:col-span-5">
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label
+                    htmlFor="sec-nom"
+                    className="block text-xs font-semibold text-ink-primary mb-1"
+                  >
                     Nom de famille *
                   </label>
                   <input
+                    id="sec-nom"
                     type="text"
                     required
                     value={identityForm.nom}
@@ -408,7 +443,7 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
                       });
                     }}
                     placeholder="Ex: KAMGA"
-                    className="w-full min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm"
+                    className="ds-input text-xs sm:text-sm"
                   />
                 </div>
               </div>
@@ -416,25 +451,33 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
               {/* Row 2: Date de naissance + Sexe + Nationalité */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label
+                    htmlFor="sec-dob"
+                    className="block text-xs font-semibold text-ink-primary mb-1"
+                  >
                     Date de naissance *
                   </label>
                   <input
+                    id="sec-dob"
                     type="date"
                     required
                     value={identityForm.date_naissance}
                     onChange={(e) =>
                       setIdentityForm({ ...identityForm, date_naissance: e.target.value })
                     }
-                    className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-mono"
+                    className="ds-input text-xs sm:text-sm font-mono"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label
+                    htmlFor="sec-sexe"
+                    className="block text-xs font-semibold text-ink-primary mb-1"
+                  >
                     Genre / Sexe
                   </label>
                   <select
+                    id="sec-sexe"
                     value={identityForm.sexe}
                     onChange={(e) =>
                       setIdentityForm({
@@ -442,7 +485,7 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
                         sexe: e.target.value as 'Masculin' | 'Féminin'
                       })
                     }
-                    className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm bg-white font-medium"
+                    className="ds-input text-xs sm:text-sm font-medium cursor-pointer"
                   >
                     <option value="Masculin">Masculin</option>
                     <option value="Féminin">Féminin</option>
@@ -450,10 +493,14 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label
+                    htmlFor="sec-nationalite"
+                    className="block text-xs font-semibold text-ink-primary mb-1"
+                  >
                     Nationalité *
                   </label>
                   <input
+                    id="sec-nationalite"
                     type="text"
                     required
                     value={identityForm.nationalite}
@@ -461,7 +508,7 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
                       setIdentityForm({ ...identityForm, nationalite: e.target.value })
                     }
                     placeholder="Ex: Canadienne, Française..."
-                    className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm"
+                    className="ds-input text-xs sm:text-sm"
                   />
                 </div>
               </div>
@@ -469,25 +516,33 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
               {/* Row 3: Pièce d'identité + Téléphone */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label
+                    htmlFor="sec-id-doc"
+                    className="block text-xs font-semibold text-ink-primary mb-1"
+                  >
                     N° Pièce d’identité (Passeport / Permis / NAS)
                   </label>
                   <input
+                    id="sec-id-doc"
                     type="text"
                     value={identityForm.numero_piece_identite}
                     onChange={(e) =>
                       setIdentityForm({ ...identityForm, numero_piece_identite: e.target.value })
                     }
                     placeholder="Ex: C01294857"
-                    className="w-full min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-mono uppercase"
+                    className="ds-input text-xs sm:text-sm font-mono uppercase"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label
+                    htmlFor="sec-phone"
+                    className="block text-xs font-semibold text-ink-primary mb-1"
+                  >
                     Téléphone personnel *
                   </label>
                   <input
+                    id="sec-phone"
                     type="tel"
                     required
                     value={identityForm.telephone}
@@ -495,7 +550,7 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
                       setIdentityForm({ ...identityForm, telephone: e.target.value })
                     }
                     placeholder="Ex: +1 (604) 555-0194"
-                    className="w-full min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-mono"
+                    className="ds-input text-xs sm:text-sm font-mono"
                   />
                 </div>
               </div>
@@ -503,10 +558,14 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
               {/* Row 4: Email + Contact d'urgence */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label
+                    htmlFor="sec-email"
+                    className="block text-xs font-semibold text-ink-primary mb-1"
+                  >
                     Adresse email du salarié *
                   </label>
                   <input
+                    id="sec-email"
                     type="email"
                     required
                     value={identityForm.email}
@@ -514,32 +573,40 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
                       setIdentityForm({ ...identityForm, email: e.target.value })
                     }
                     placeholder="salarie@example.com"
-                    className="w-full min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-mono"
+                    className="ds-input text-xs sm:text-sm font-mono"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label
+                    htmlFor="sec-urgence"
+                    className="block text-xs font-semibold text-ink-primary mb-1"
+                  >
                     Contact d’urgence (Nom &amp; Tél)
                   </label>
                   <input
+                    id="sec-urgence"
                     type="text"
                     value={identityForm.contact_urgence}
                     onChange={(e) =>
                       setIdentityForm({ ...identityForm, contact_urgence: e.target.value })
                     }
                     placeholder="Ex: Marie Kamga (+1 604 555-0199)"
-                    className="w-full min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm"
+                    className="ds-input text-xs sm:text-sm"
                   />
                 </div>
               </div>
 
               {/* Row 5: Adresse complète de résidence */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label
+                  htmlFor="sec-adresse"
+                  className="block text-xs font-semibold text-ink-primary mb-1"
+                >
                   Adresse complète de résidence *
                 </label>
                 <input
+                  id="sec-adresse"
                   type="text"
                   required
                   value={identityForm.adresse}
@@ -547,25 +614,26 @@ export const SecretaireAdminBackoffice: React.FC<SecretaireAdminBackofficeProps>
                     setIdentityForm({ ...identityForm, adresse: e.target.value })
                   }
                   placeholder="Numéro, Rue, Ville, Province/Région, Code postal"
-                  className="w-full min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm"
+                  className="ds-input text-xs sm:text-sm"
                 />
               </div>
 
-              <div className="pt-4 border-t border-slate-200 flex items-center justify-end gap-3">
-                <button
-                  type="button"
+              <div className="pt-4 border-t border-surface-border flex items-center justify-end gap-3">
+                <ActionButton
+                  variant="secondary"
                   onClick={() => setIsModalOpen(false)}
-                  className="min-h-[42px] px-4 py-2 rounded-xl border border-slate-300 text-slate-700 text-xs sm:text-sm font-semibold hover:bg-slate-50"
+                  className="text-xs sm:text-sm"
                 >
                   Annuler
-                </button>
-                <button
+                </ActionButton>
+                <ActionButton
                   type="submit"
+                  variant="navy"
                   disabled={saving}
-                  className="min-h-[42px] px-6 py-2 rounded-xl bg-[#0B2545] text-white text-xs sm:text-sm font-bold hover:bg-[#134074] transition-colors disabled:opacity-50"
+                  className="text-xs sm:text-sm"
                 >
                   {saving ? 'Enregistrement...' : 'Enregistrer le salarié'}
-                </button>
+                </ActionButton>
               </div>
             </form>
           </div>

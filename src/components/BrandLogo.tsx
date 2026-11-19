@@ -31,7 +31,7 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
 
   return (
     <div
-      className={`${sizeClasses} bg-white rounded-xl px-2 py-1 shadow-xs border border-gray-200/80 flex items-center justify-center shrink-0 overflow-hidden`}
+      className={`${sizeClasses} bg-white rounded-xl px-2 py-1 shadow-xs border border-surface-border flex items-center justify-center shrink-0 overflow-hidden`}
     >
       {hasCustomImage ? (
         <img

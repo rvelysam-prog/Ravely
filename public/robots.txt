@@ -1,0 +1,13 @@
+User-agent: *
+Allow: /
+Allow: /services
+Allow: /apropos
+Allow: /contact
+Allow: /offres
+Allow: /entretien
+
+Disallow: /admin
+Disallow: /admin.html
+Disallow: /employe
+Disallow: /employe.html
+Disallow: /secretariat

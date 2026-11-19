@@ -5,16 +5,199 @@
  */
 
 import { jsPDF } from 'jspdf';
-import { PostulantInfo } from './postulantDossierService';
+import type { PostulantInfo, RecrutementCasType } from './postulantDossierService';
 import { SiteSettings } from '../types';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import {
+  ActorScopeId,
+  DEFAULT_PDF_ASSETS_CONFIG,
+  ImportedAssetKey,
+  PdfAssetItemSettings,
+  PdfImportedAssetsConfig,
+  UploadedAssetUrlsMap,
+  renderAssetWithSettingsForPdf
+} from './departmentsAndEmailService';
+import { loadStaticImageAsPngDataUrl } from './contractPdfGenerator';
+import {
+  LayoutTemplatesMap,
   ReferenceLayoutTemplate,
   SpatialBlueprint,
   hexToRgbTuple,
   resolveEffectiveLayout
 } from './layoutImitationService';
+
+export interface DocEsModelMeta {
+  id: number;
+  canal: RecrutementCasType;
+  category: 'interne' | 'externe' | 'tripartite';
+  categoryLabel: string;
+  number: string;
+  title: string;
+  isInteractive: boolean;
+  description: string;
+}
+
+export const DOC_ES_MODELS_CATALOG: DocEsModelMeta[] = [
+  // PARTIE 1 : Candidature en direct (Modèles 1 à 8)
+  {
+    id: 1,
+    canal: 'direct',
+    category: 'interne',
+    categoryLabel: "Données enregistrées par l'entreprise",
+    number: 'MODÈLE 1',
+    title: 'Fiche de synthèse du candidat (Profil ATS)',
+    isInteractive: false,
+    description: 'Identification, compétences clés, critères validation RH et historique ATS'
+  },
+  {
+    id: 2,
+    canal: 'direct',
+    category: 'interne',
+    categoryLabel: "Données enregistrées par l'entreprise",
+    number: 'MODÈLE 2',
+    title: "Grille d'évaluation initiale (Entretien RH / Manager)",
+    isInteractive: false,
+    description: 'Notes de 1 à 4, points forts, axes à creuser et décision finale'
+  },
+  {
+    id: 3,
+    canal: 'direct',
+    category: 'interne',
+    categoryLabel: "Données enregistrées par l'entreprise",
+    number: 'MODÈLE 3',
+    title: 'Historique de planification des entretiens',
+    isInteractive: false,
+    description: 'Suivi des étapes 1, 2, 3 avec horaires, intervenants et logistique'
+  },
+  {
+    id: 4,
+    canal: 'direct',
+    category: 'externe',
+    categoryLabel: 'Formulaires et fiches à remettre au candidat',
+    number: 'MODÈLE 4',
+    title: "Livret d'accueil candidat (Culture d'entreprise)",
+    isInteractive: false,
+    description: 'Histoire, mission, 3 valeurs fondamentales et cadre de travail'
+  },
+  {
+    id: 5,
+    canal: 'direct',
+    category: 'externe',
+    categoryLabel: 'Formulaires et fiches à remettre au candidat',
+    number: 'MODÈLE 5',
+    title: 'Fiche de poste détaillée',
+    isInteractive: false,
+    description: 'Missions, environnement technique, rémunération et avantages'
+  },
+  {
+    id: 6,
+    canal: 'direct',
+    category: 'externe',
+    categoryLabel: 'Formulaires et fiches à remettre au candidat',
+    number: 'MODÈLE 6',
+    title: "Formulaire de demande d'emploi interne (Fiche de candidature)",
+    isInteractive: true,
+    description: 'Formulaire interactif avec composante, diplômes, motivations et signature'
+  },
+  {
+    id: 7,
+    canal: 'direct',
+    category: 'externe',
+    categoryLabel: 'Formulaires et fiches à remettre au candidat',
+    number: 'MODÈLE 7',
+    title: 'Autorisation de vérification des références professionnelles',
+    isInteractive: true,
+    description: "Formulaire interactif d'accord et contacts de référence 1 & 2"
+  },
+  {
+    id: 8,
+    canal: 'direct',
+    category: 'externe',
+    categoryLabel: 'Formulaires et fiches à remettre au candidat',
+    number: 'MODÈLE 8',
+    title: 'Accès aux tests de sélection & modalités',
+    isInteractive: false,
+    description: 'Questionnaire de personnalité soft skills et test technique hard skills'
+  },
+
+  // PARTIE 2 : Candidature via Agence de placement (Modèles 9 à 15)
+  {
+    id: 9,
+    canal: 'agence',
+    category: 'interne',
+    categoryLabel: "Documents entre l'agence et l'employeur",
+    number: 'MODÈLE 9',
+    title: 'Brief de recrutement entreprise',
+    isInteractive: false,
+    description: "Critères indispensables no-go, contexte d'attractivité et budget global"
+  },
+  {
+    id: 10,
+    canal: 'agence',
+    category: 'interne',
+    categoryLabel: "Documents entre l'agence et l'employeur",
+    number: 'MODÈLE 10',
+    title: 'Contrat de prestation de services (Extrait RH)',
+    isInteractive: false,
+    description: 'Conditions financières, honoraires et clause de garantie de remplacement'
+  },
+  {
+    id: 11,
+    canal: 'agence',
+    category: 'interne',
+    categoryLabel: "Documents entre l'agence et l'employeur",
+    number: 'MODÈLE 11',
+    title: 'Dossier de présentation candidat (CV anonymisé)',
+    isInteractive: false,
+    description: 'Note de synthèse du consultant et extrait du parcours anonymisé'
+  },
+  {
+    id: 12,
+    canal: 'agence',
+    category: 'externe',
+    categoryLabel: "Documents entre l'agence et le candidat",
+    number: 'MODÈLE 12',
+    title: "Fiche d'inscription en agence du candidat",
+    isInteractive: true,
+    description: 'Formulaire interactif : état civil, recherche et cadre administratif'
+  },
+  {
+    id: 13,
+    canal: 'agence',
+    category: 'externe',
+    categoryLabel: "Documents entre l'agence et le candidat",
+    number: 'MODÈLE 13',
+    title: 'Accord de protection et transmission des données (RGPD)',
+    isInteractive: true,
+    description: 'Formulaire interactif de consentement informatique et vivier'
+  },
+  {
+    id: 14,
+    canal: 'agence',
+    category: 'externe',
+    categoryLabel: "Documents entre l'agence et le candidat",
+    number: 'MODÈLE 14',
+    title: "Fiche de préparation à l'entretien (Conseils)",
+    isInteractive: false,
+    description: 'Profil des managers interlocuteurs, attentes et conseils de pitch'
+  },
+  {
+    id: 15,
+    canal: 'agence',
+    category: 'tripartite',
+    categoryLabel: 'Document de liaison tripartite',
+    number: 'MODÈLE 15',
+    title: "Fiche de liaison d'entretien tripartite (Bon de présentation)",
+    isInteractive: false,
+    description: "Reconnaissance d'antériorité signée entre agence, employeur et candidat"
+  }
+];
+
+export function getDocEsModelsForCasType(casType: RecrutementCasType): DocEsModelMeta[] {
+  const targetCanal: RecrutementCasType = casType === 'agence' ? 'agence' : 'direct';
+  return DOC_ES_MODELS_CATALOG.filter((m) => m.canal === targetCanal);
+}
 
 export interface FichesDocEsData {
   // --- Modèle 1 : Fiche de synthèse (Profil ATS) ---
@@ -369,6 +552,21 @@ export async function loadFichesDocEsData(
     }
   } catch {}
 
+  return fallback;
+}
+
+export function loadStoredFichesDocEsSync(
+  postulantId: string,
+  fallback: FichesDocEsData
+): FichesDocEsData {
+  try {
+    if (typeof localStorage === 'undefined') return fallback;
+    const raw = localStorage.getItem(LOCAL_STORAGE_FICHES_DOC_ES_KEY);
+    if (raw) {
+      const map = JSON.parse(raw);
+      if (map[postulantId]) return { ...fallback, ...map[postulantId] };
+    }
+  } catch {}
   return fallback;
 }
 
@@ -885,33 +1083,761 @@ ${d.consultantAgenceNom}         ${p.representantEmployeurNom}         ${p.nomCo
   }
 }
 
+export interface DocEsAssetSlotResolved {
+  key: ImportedAssetKey;
+  url: string;
+  cfg: PdfAssetItemSettings;
+}
+
+export interface DocEsResolvedActorVisuals {
+  primaryActor: ActorScopeId;
+  secondaryActor?: ActorScopeId;
+  logo: DocEsAssetSlotResolved;
+  logoSecondary?: DocEsAssetSlotResolved;
+  signature: DocEsAssetSlotResolved;
+  signatureSecondary?: DocEsAssetSlotResolved;
+  cachet: DocEsAssetSlotResolved;
+  cachetSecondary?: DocEsAssetSlotResolved;
+  filigrane: DocEsAssetSlotResolved;
+  arrierePlan: DocEsAssetSlotResolved;
+  barcode: DocEsAssetSlotResolved;
+  qrcode: DocEsAssetSlotResolved;
+  photoUrl?: string;
+}
+
+export interface DocEsPreloadedImages {
+  logoEmp?: string;
+  logoAgence?: string;
+  signature?: string;
+  signatureSecondary?: string;
+  cachet?: string;
+  cachetSecondary?: string;
+  filigrane?: string;
+  arrierePlan?: string;
+  barcode?: string;
+  qrcode?: string;
+  photo?: string;
+  cfgs?: {
+    logo?: PdfAssetItemSettings;
+    logoSecondary?: PdfAssetItemSettings;
+    signature?: PdfAssetItemSettings;
+    signatureSecondary?: PdfAssetItemSettings;
+    cachet?: PdfAssetItemSettings;
+    cachetSecondary?: PdfAssetItemSettings;
+    filigrane?: PdfAssetItemSettings;
+    arrierePlan?: PdfAssetItemSettings;
+    barcode?: PdfAssetItemSettings;
+    qrcode?: PdfAssetItemSettings;
+  };
+}
+
+export type KitLayoutPresetId =
+  | 'auto_doc'
+  | 'executif_navy'
+  | 'moderne_azur'
+  | 'notarial_double'
+  | 'grille_ats'
+  | 'protocole_canada'
+  | 'modele_importe'
+  | 'import_t9'
+  | 'import_t10'
+  | 'import_t11'
+  | 'import_t12';
+
+export interface KitLayoutPresetMeta {
+  id: KitLayoutPresetId;
+  label: string;
+  shortDesc: string;
+  primaryColor: string;
+  accentColor: string;
+}
+
+export const KIT_LAYOUT_PRESETS: KitLayoutPresetMeta[] = [
+  {
+    id: 'auto_doc',
+    label: 'Automatique (Adapté au document)',
+    shortDesc: 'Mise en page dédiée selon la nature du document (ATS, Formulaire, Contrat ou Guide)',
+    primaryColor: '#0B2545',
+    accentColor: '#D4A017'
+  },
+  {
+    id: 'executif_navy',
+    label: 'Exécutif Navy & Or',
+    shortDesc: 'Bandeau plein bleu marine, filet or diplomatique, cadre officiel',
+    primaryColor: '#0B2545',
+    accentColor: '#D4A017'
+  },
+  {
+    id: 'moderne_azur',
+    label: 'Moderne Azur Épuré',
+    shortDesc: 'Barre supérieure azur, cartes aérées sans bordure lourde',
+    primaryColor: '#0066B3',
+    accentColor: '#38BDF8'
+  },
+  {
+    id: 'notarial_double',
+    label: 'Officiel Notarial Double Filet',
+    shortDesc: 'Typographie Serif classique, double cadre solennel et zone tripartite',
+    primaryColor: '#1E293B',
+    accentColor: '#94A3B8'
+  },
+  {
+    id: 'grille_ats',
+    label: 'Analytique RH & Grille ATS',
+    shortDesc: 'Bande verticale émeraude, pastille références et métadonnées encadrées',
+    primaryColor: '#065F46',
+    accentColor: '#10B981'
+  },
+  {
+    id: 'protocole_canada',
+    label: 'Protocole Canadien Bilingue',
+    shortDesc: 'En-tête scindé rouge érable & marine avec bloc QR vérification',
+    primaryColor: '#991B1B',
+    accentColor: '#0B2545'
+  },
+  {
+    id: 'modele_importe',
+    label: 'Modèle Importé DOC ES (Imitation)',
+    shortDesc: 'Applique le document de référence importé dans Fiches & DOC ES',
+    primaryColor: '#0B2545',
+    accentColor: '#0066B3'
+  }
+];
+
+export type KitDocLayoutMap = Record<number, string>;
+export type KitDocVisualScopeMap = Record<number, ActorScopeId | 'auto'>;
+
+const LS_KIT_DOC_LAYOUTS_KEY = 'atlantic_kit_doc_layouts_v1';
+const LS_KIT_DOC_VISUAL_SCOPES_KEY = 'atlantic_kit_doc_visual_scopes_v1';
+
+export function loadKitDocLayoutsSync(): KitDocLayoutMap {
+  try {
+    if (typeof localStorage === 'undefined') return {};
+    const raw = localStorage.getItem(LS_KIT_DOC_LAYOUTS_KEY);
+    return raw ? (JSON.parse(raw) as KitDocLayoutMap) : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function saveKitDocLayouts(map: KitDocLayoutMap): Promise<void> {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(LS_KIT_DOC_LAYOUTS_KEY, JSON.stringify(map));
+    }
+  } catch {}
+  try {
+    await setDoc(
+      doc(db, 'document_layout_templates', 'kit_doc_layouts'),
+      { map, updatedAt: new Date().toISOString() },
+      { merge: true }
+    );
+  } catch {}
+}
+
+export async function loadKitDocLayoutsFromFirestore(): Promise<KitDocLayoutMap> {
+  const local = loadKitDocLayoutsSync();
+  try {
+    const snap = await getDoc(doc(db, 'document_layout_templates', 'kit_doc_layouts'));
+    if (snap.exists()) {
+      const data = snap.data() as { map?: KitDocLayoutMap };
+      if (data?.map) {
+        const merged = { ...local, ...data.map };
+        try {
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem(LS_KIT_DOC_LAYOUTS_KEY, JSON.stringify(merged));
+          }
+        } catch {}
+        return merged;
+      }
+    }
+  } catch {}
+  return local;
+}
+
+export function loadKitDocVisualScopesSync(): KitDocVisualScopeMap {
+  try {
+    if (typeof localStorage === 'undefined') return {};
+    const raw = localStorage.getItem(LS_KIT_DOC_VISUAL_SCOPES_KEY);
+    return raw ? (JSON.parse(raw) as KitDocVisualScopeMap) : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function saveKitDocVisualScopes(map: KitDocVisualScopeMap): Promise<void> {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(LS_KIT_DOC_VISUAL_SCOPES_KEY, JSON.stringify(map));
+    }
+  } catch {}
+  try {
+    await setDoc(
+      doc(db, 'document_layout_templates', 'kit_doc_visual_scopes'),
+      { map, updatedAt: new Date().toISOString() },
+      { merge: true }
+    );
+  } catch {}
+}
+
+export async function loadKitDocVisualScopesFromFirestore(): Promise<KitDocVisualScopeMap> {
+  const local = loadKitDocVisualScopesSync();
+  try {
+    const snap = await getDoc(doc(db, 'document_layout_templates', 'kit_doc_visual_scopes'));
+    if (snap.exists()) {
+      const data = snap.data() as { map?: KitDocVisualScopeMap };
+      if (data?.map) {
+        const merged = { ...local, ...data.map };
+        try {
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem(LS_KIT_DOC_VISUAL_SCOPES_KEY, JSON.stringify(merged));
+          }
+        } catch {}
+        return merged;
+      }
+    }
+  } catch {}
+  return local;
+}
+
+function buildPresetReferenceLayout(
+  presetId: Exclude<KitLayoutPresetId, 'auto_doc' | 'modele_importe' | 'import_t9' | 'import_t10' | 'import_t11' | 'import_t12'>,
+  modelId: number
+): ReferenceLayoutTemplate {
+  const base: Omit<
+    ReferenceLayoutTemplate,
+    | 'primaryColor'
+    | 'accentColor'
+    | 'headerBgColor'
+    | 'headerTextColor'
+    | 'borderColor'
+    | 'borderStyle'
+    | 'headerStyle'
+    | 'headerAlign'
+    | 'fontFamily'
+    | 'blockSpacing'
+    | 'logoPlacement'
+    | 'signaturePlacement'
+    | 'spatialBlueprint'
+    | 'detectedSummary'
+  > = {
+    docKey: 'doc_es',
+    sourceFileName: `Gabarit_${presetId}_M${modelId}`,
+    sourceFileType: 'pdf',
+    analyzedAt: new Date().toISOString(),
+    previewThumbnailUrl: '',
+    pageFormat: 'a4',
+    orientation: 'portrait',
+    marginsMm: { top: 16, right: 16, bottom: 16, left: 16 },
+    bodyTextColor: '#1E293B',
+    pageBgColor: '#FFFFFF',
+    hasTablesDetected: modelId === 1 || modelId === 2 || modelId === 3 || modelId === 9,
+    detectedElements: ['logo', 'signature', 'cachet'],
+    ignoredMissingElements: []
+  };
+
+  if (presetId === 'moderne_azur') {
+    return {
+      ...base,
+      primaryColor: '#0066B3',
+      accentColor: '#38BDF8',
+      highlightTintColor: '#E0F2FE',
+      headerBgColor: '#0066B3',
+      headerTextColor: '#FFFFFF',
+      borderColor: '#BAE6FD',
+      borderStyle: 'card_blocks',
+      headerStyle: 'entete_epure',
+      headerAlign: 'left',
+      fontFamily: 'helvetica',
+      blockSpacing: 'airy',
+      logoPlacement: 'top_left',
+      signaturePlacement: 'bottom_right',
+      detectedSummary: 'Moderne Azur Épuré',
+      spatialBlueprint: {
+        headerLayout: 'top_accent_bar',
+        headerHasDivider: true,
+        headerBannerHeightMm: 0,
+        metaLayout: 'two_col_asymmetric',
+        hasRefPill: true,
+        titleAlign: 'left',
+        titleHasBox: false,
+        titleHasUnderline: true,
+        titleUppercase: false,
+        titleHasSubtitle: true,
+        bodyLayout: 'cards',
+        hasLeftAccentStripe: false,
+        hasSectionDividers: true,
+        tableHeaderStyle: 'tinted',
+        signatureLayout: 'two_col_fait_a_right_sig',
+        signatureHasTopBorder: true,
+        footerLayout: 'qr_legal_page',
+        hasFooterDivider: true,
+        hasTopRightMarker: false
+      }
+    };
+  }
+
+  if (presetId === 'notarial_double') {
+    return {
+      ...base,
+      pageBgColor: '#FDFCF8',
+      primaryColor: '#1E293B',
+      accentColor: '#94A3B8',
+      highlightTintColor: '#F1F5F9',
+      headerBgColor: '#1E293B',
+      headerTextColor: '#FFFFFF',
+      borderColor: '#334155',
+      borderStyle: 'double',
+      headerStyle: 'encadre_classique',
+      headerAlign: 'center',
+      fontFamily: 'times',
+      blockSpacing: 'standard',
+      logoPlacement: 'top_center',
+      signaturePlacement: 'bottom_split',
+      detectedSummary: 'Officiel Notarial Double Filet',
+      spatialBlueprint: {
+        headerLayout: 'centered_stack',
+        headerHasDivider: true,
+        headerBannerHeightMm: 0,
+        metaLayout: 'two_col_equal',
+        hasRefPill: false,
+        titleAlign: 'center',
+        titleHasBox: true,
+        titleHasUnderline: false,
+        titleUppercase: true,
+        titleHasSubtitle: true,
+        bodyLayout: 'numbered_sections',
+        hasLeftAccentStripe: false,
+        hasSectionDividers: false,
+        tableHeaderStyle: 'bordered_plain',
+        signatureLayout: 'three_col_footer',
+        signatureHasTopBorder: true,
+        footerLayout: 'centered_legal',
+        hasFooterDivider: true,
+        hasTopRightMarker: false
+      }
+    };
+  }
+
+  if (presetId === 'grille_ats') {
+    return {
+      ...base,
+      primaryColor: '#065F46',
+      accentColor: '#10B981',
+      highlightTintColor: '#D1FAE5',
+      headerBgColor: '#065F46',
+      headerTextColor: '#FFFFFF',
+      borderColor: '#065F46',
+      borderStyle: 'simple',
+      headerStyle: 'split_officiel',
+      headerAlign: 'split',
+      fontFamily: 'helvetica',
+      blockSpacing: 'compact',
+      logoPlacement: 'top_left',
+      signaturePlacement: 'bottom_right',
+      detectedSummary: 'Analytique RH & Grille ATS',
+      spatialBlueprint: {
+        headerLayout: 'split_lr',
+        headerHasDivider: true,
+        headerBannerHeightMm: 0,
+        metaLayout: 'boxed_grid',
+        hasRefPill: true,
+        titleAlign: 'left',
+        titleHasBox: false,
+        titleHasUnderline: true,
+        titleUppercase: true,
+        titleHasSubtitle: true,
+        bodyLayout: 'cards',
+        hasLeftAccentStripe: true,
+        hasSectionDividers: true,
+        tableHeaderStyle: 'filled_primary',
+        signatureLayout: 'two_col_bipartite',
+        signatureHasTopBorder: true,
+        footerLayout: 'rule_with_page',
+        hasFooterDivider: true,
+        hasTopRightMarker: true
+      }
+    };
+  }
+
+  if (presetId === 'protocole_canada') {
+    return {
+      ...base,
+      primaryColor: '#991B1B',
+      accentColor: '#0B2545',
+      highlightTintColor: '#FEE2E2',
+      headerBgColor: '#0B2545',
+      headerTextColor: '#FFFFFF',
+      borderColor: '#991B1B',
+      borderStyle: 'official_band',
+      headerStyle: 'split_officiel',
+      headerAlign: 'split',
+      fontFamily: 'helvetica',
+      blockSpacing: 'standard',
+      logoPlacement: 'top_left',
+      signaturePlacement: 'bottom_split',
+      detectedSummary: 'Protocole Canadien Bilingue',
+      spatialBlueprint: {
+        headerLayout: 'split_lr',
+        headerHasDivider: true,
+        headerBannerHeightMm: 0,
+        metaLayout: 'two_col_asymmetric',
+        hasRefPill: true,
+        titleAlign: 'center',
+        titleHasBox: true,
+        titleHasUnderline: true,
+        titleUppercase: true,
+        titleHasSubtitle: true,
+        bodyLayout: 'numbered_sections',
+        hasLeftAccentStripe: false,
+        hasSectionDividers: true,
+        tableHeaderStyle: 'filled_primary',
+        signatureLayout: 'two_col_bipartite',
+        signatureHasTopBorder: true,
+        footerLayout: 'qr_legal_page',
+        hasFooterDivider: true,
+        hasTopRightMarker: false
+      }
+    };
+  }
+
+  // executif_navy (default crisp executive)
+  return {
+    ...base,
+    primaryColor: '#0B2545',
+    accentColor: '#D4A017',
+    highlightTintColor: '#FEF3C7',
+    headerBgColor: '#0B2545',
+    headerTextColor: '#FFFFFF',
+    borderColor: '#0B2545',
+    borderStyle: 'official_band',
+    headerStyle: 'bandeau_plein',
+    headerAlign: 'left',
+    fontFamily: 'helvetica',
+    blockSpacing: 'standard',
+    logoPlacement: 'top_left',
+    signaturePlacement: 'bottom_right',
+    detectedSummary: 'Exécutif Navy & Or',
+    spatialBlueprint: {
+      headerLayout: 'filled_banner',
+      headerHasDivider: false,
+      headerBannerHeightMm: 22,
+      metaLayout: 'two_col_asymmetric',
+      hasRefPill: true,
+      titleAlign: 'center',
+      titleHasBox: false,
+      titleHasUnderline: true,
+      titleUppercase: true,
+      titleHasSubtitle: true,
+      bodyLayout: 'numbered_sections',
+      hasLeftAccentStripe: false,
+      hasSectionDividers: true,
+      tableHeaderStyle: 'filled_primary',
+      signatureLayout: 'two_col_fait_a_right_sig',
+      signatureHasTopBorder: true,
+      footerLayout: 'qr_legal_page',
+      hasFooterDivider: true,
+      hasTopRightMarker: false
+    }
+  };
+}
+
+export function getRecommendedPresetForModel(modelId: number): Exclude<KitLayoutPresetId, 'auto_doc' | 'modele_importe' | 'import_t9' | 'import_t10' | 'import_t11' | 'import_t12'> {
+  if ([1, 2, 3, 9, 11].includes(modelId)) return 'grille_ats';
+  if ([4, 5, 8, 14].includes(modelId)) return 'moderne_azur';
+  if ([6, 7, 12, 13].includes(modelId)) return 'protocole_canada';
+  if ([10, 15].includes(modelId)) return 'notarial_double';
+  return 'executif_navy';
+}
+
+export function resolveLayoutTemplateForDocEsModel(
+  modelId: number,
+  layoutTemplates?: LayoutTemplatesMap,
+  kitDocLayouts?: KitDocLayoutMap,
+  fallbackDocEsTemplate?: ReferenceLayoutTemplate
+): ReferenceLayoutTemplate {
+  const chosenKey = kitDocLayouts?.[modelId] || 'auto_doc';
+
+  if (chosenKey === 'modele_importe') {
+    if (layoutTemplates?.doc_es) return layoutTemplates.doc_es;
+    if (fallbackDocEsTemplate) return fallbackDocEsTemplate;
+  }
+  if (chosenKey === 'import_t9' && layoutTemplates?.t9) return layoutTemplates.t9;
+  if (chosenKey === 'import_t10' && layoutTemplates?.t10) return layoutTemplates.t10;
+  if (chosenKey === 'import_t11' && layoutTemplates?.t11) return layoutTemplates.t11;
+  if (chosenKey === 'import_t12' && layoutTemplates?.t12) return layoutTemplates.t12;
+
+  if (chosenKey === 'auto_doc') {
+    if (fallbackDocEsTemplate && !kitDocLayouts?.[modelId]) {
+      return fallbackDocEsTemplate;
+    }
+    return buildPresetReferenceLayout(getRecommendedPresetForModel(modelId), modelId);
+  }
+
+  if (
+    chosenKey === 'executif_navy' ||
+    chosenKey === 'moderne_azur' ||
+    chosenKey === 'notarial_double' ||
+    chosenKey === 'grille_ats' ||
+    chosenKey === 'protocole_canada'
+  ) {
+    return buildPresetReferenceLayout(chosenKey, modelId);
+  }
+
+  return (
+    fallbackDocEsTemplate ||
+    layoutTemplates?.doc_es ||
+    buildPresetReferenceLayout(getRecommendedPresetForModel(modelId), modelId)
+  );
+}
+
+function getAssetKeysForActorScope(actor: ActorScopeId): {
+  logo: ImportedAssetKey;
+  signature: ImportedAssetKey;
+  cachet: ImportedAssetKey;
+  filigrane: ImportedAssetKey;
+  arrierePlan: ImportedAssetKey;
+  barcode: ImportedAssetKey;
+  qrcode: ImportedAssetKey;
+} {
+  if (actor === 'employeur') {
+    return {
+      logo: 'logo',
+      signature: 'signature',
+      cachet: 'cachet',
+      filigrane: 'filigrane',
+      arrierePlan: 'arrierePlan',
+      barcode: 'barcodeEmployeur',
+      qrcode: 'qrcodeEmployeur'
+    };
+  }
+  if (actor === 'prestataire') {
+    return {
+      logo: 'logoPrestataire',
+      signature: 'signaturePrestataire',
+      cachet: 'cachetPrestataire',
+      filigrane: 'filigranePrestataire',
+      arrierePlan: 'arrierePlanPrestataire',
+      barcode: 'barcodePrestataire',
+      qrcode: 'qrcodePrestataire'
+    };
+  }
+  return {
+    logo: `${actor}_logo` as ImportedAssetKey,
+    signature: `${actor}_signature` as ImportedAssetKey,
+    cachet: `${actor}_cachet` as ImportedAssetKey,
+    filigrane: `${actor}_filigrane` as ImportedAssetKey,
+    arrierePlan: `${actor}_arrierePlan` as ImportedAssetKey,
+    barcode: `${actor}_barcode` as ImportedAssetKey,
+    qrcode: `${actor}_qrcode` as ImportedAssetKey
+  };
+}
+
+export function resolveActorAssetsForDocEsModel(
+  modelId: number,
+  p: PostulantInfo,
+  uploadedAssets: UploadedAssetUrlsMap = {},
+  assetsConfig: PdfImportedAssetsConfig = DEFAULT_PDF_ASSETS_CONFIG,
+  scopeOverride?: ActorScopeId | 'auto'
+): DocEsResolvedActorVisuals {
+  const isAgenceModel = modelId >= 9 || p.casType === 'agence';
+  const primaryActor: ActorScopeId =
+    scopeOverride && scopeOverride !== 'auto'
+      ? scopeOverride
+      : isAgenceModel
+      ? 'prestataire'
+      : 'employeur';
+
+  const primaryKeys = getAssetKeysForActorScope(primaryActor);
+  const empKeys = getAssetKeysForActorScope('employeur');
+
+  const pickWithFallback = (
+    slot: keyof typeof primaryKeys,
+    directUrlFallback?: string
+  ): DocEsAssetSlotResolved => {
+    const pKey = primaryKeys[slot];
+    const pUrl = uploadedAssets[pKey];
+    if (pUrl && pUrl.trim()) {
+      return {
+        key: pKey,
+        url: pUrl,
+        cfg:
+          assetsConfig[pKey] ||
+          DEFAULT_PDF_ASSETS_CONFIG[pKey] ||
+          DEFAULT_PDF_ASSETS_CONFIG[empKeys[slot]] ||
+          DEFAULT_PDF_ASSETS_CONFIG.logo
+      };
+    }
+    const eKey = empKeys[slot];
+    const eUrl = uploadedAssets[eKey] || directUrlFallback || '';
+    return {
+      key: eKey,
+      url: eUrl,
+      cfg:
+        assetsConfig[eKey] ||
+        DEFAULT_PDF_ASSETS_CONFIG[eKey] ||
+        DEFAULT_PDF_ASSETS_CONFIG.logo
+    };
+  };
+
+  const result: DocEsResolvedActorVisuals = {
+    primaryActor,
+    logo: pickWithFallback('logo', primaryActor === 'prestataire' ? p.logoAgenceUrl || p.logoUrl : p.logoUrl),
+    signature: pickWithFallback('signature', p.signatureUrl),
+    cachet: pickWithFallback('cachet', p.cachetUrl),
+    filigrane: pickWithFallback('filigrane', p.filigraneUrl),
+    arrierePlan: pickWithFallback('arrierePlan'),
+    barcode: pickWithFallback('barcode'),
+    qrcode: pickWithFallback('qrcode'),
+    photoUrl: uploadedAssets.photoCandidat || p.photoUrl
+  };
+
+  // Pour les documents bipartite / tripartite (Modèles 9, 10, 11, 15), inclure aussi le second acteur (Employeur)
+  if ((modelId >= 9 && [9, 10, 11, 15].includes(modelId)) || (isAgenceModel && primaryActor === 'prestataire')) {
+    result.secondaryActor = 'employeur';
+    const empLogo = uploadedAssets[empKeys.logo] || p.logoUrl || '';
+    const empSig = uploadedAssets[empKeys.signature] || p.signatureUrl || '';
+    const empCachet = uploadedAssets[empKeys.cachet] || p.cachetUrl || '';
+    if (empLogo && empLogo !== result.logo.url) {
+      result.logoSecondary = {
+        key: empKeys.logo,
+        url: empLogo,
+        cfg: assetsConfig[empKeys.logo] || DEFAULT_PDF_ASSETS_CONFIG.logo
+      };
+    }
+    if (empSig && empSig !== result.signature.url) {
+      result.signatureSecondary = {
+        key: empKeys.signature,
+        url: empSig,
+        cfg: assetsConfig[empKeys.signature] || DEFAULT_PDF_ASSETS_CONFIG.signature
+      };
+    }
+    if (empCachet && empCachet !== result.cachet.url) {
+      result.cachetSecondary = {
+        key: empKeys.cachet,
+        url: empCachet,
+        cfg: assetsConfig[empKeys.cachet] || DEFAULT_PDF_ASSETS_CONFIG.cachet
+      };
+    }
+  }
+
+  return result;
+}
+
+async function prepareSafeAssetForPdf(url: string | undefined, cfg: PdfAssetItemSettings | undefined): Promise<string | undefined> {
+  if (!url || !url.trim()) return undefined;
+  try {
+    const pngBase = url.startsWith('data:image/') ? url : await loadStaticImageAsPngDataUrl(url);
+    if (!pngBase) return undefined;
+    if (cfg && typeof document !== 'undefined') {
+      const rendered = await renderAssetWithSettingsForPdf(pngBase, cfg);
+      return rendered.dataUrl || pngBase;
+    }
+    return pngBase;
+  } catch {
+    return url.startsWith('data:image/') ? url : undefined;
+  }
+}
+
+export async function preloadDocEsModelVisuals(
+  modelId: number,
+  p: PostulantInfo,
+  uploadedAssets: UploadedAssetUrlsMap = {},
+  assetsConfig: PdfImportedAssetsConfig = DEFAULT_PDF_ASSETS_CONFIG,
+  scopeOverride?: ActorScopeId | 'auto'
+): Promise<DocEsPreloadedImages> {
+  const resolved = resolveActorAssetsForDocEsModel(modelId, p, uploadedAssets, assetsConfig, scopeOverride);
+
+  const [
+    logoEmp,
+    logoAgence,
+    signature,
+    signatureSecondary,
+    cachet,
+    cachetSecondary,
+    filigrane,
+    arrierePlan,
+    barcode,
+    qrcode,
+    photo
+  ] = await Promise.all([
+    prepareSafeAssetForPdf(resolved.logo.url, resolved.logo.cfg),
+    prepareSafeAssetForPdf(resolved.logoSecondary?.url || uploadedAssets.logoPrestataire || p.logoAgenceUrl, resolved.logoSecondary?.cfg || assetsConfig.logoPrestataire),
+    prepareSafeAssetForPdf(resolved.signature.url, resolved.signature.cfg),
+    prepareSafeAssetForPdf(resolved.signatureSecondary?.url, resolved.signatureSecondary?.cfg),
+    prepareSafeAssetForPdf(resolved.cachet.url, resolved.cachet.cfg),
+    prepareSafeAssetForPdf(resolved.cachetSecondary?.url, resolved.cachetSecondary?.cfg),
+    prepareSafeAssetForPdf(resolved.filigrane.url, resolved.filigrane.cfg),
+    prepareSafeAssetForPdf(resolved.arrierePlan.url, resolved.arrierePlan.cfg),
+    prepareSafeAssetForPdf(resolved.barcode.url, resolved.barcode.cfg),
+    prepareSafeAssetForPdf(resolved.qrcode.url, resolved.qrcode.cfg),
+    prepareSafeAssetForPdf(resolved.photoUrl, undefined)
+  ]);
+
+  return {
+    logoEmp,
+    logoAgence,
+    signature,
+    signatureSecondary,
+    cachet,
+    cachetSecondary,
+    filigrane,
+    arrierePlan,
+    barcode,
+    qrcode,
+    photo,
+    cfgs: {
+      logo: resolved.logo.cfg,
+      logoSecondary: resolved.logoSecondary?.cfg,
+      signature: resolved.signature.cfg,
+      signatureSecondary: resolved.signatureSecondary?.cfg,
+      cachet: resolved.cachet.cfg,
+      cachetSecondary: resolved.cachetSecondary?.cfg,
+      filigrane: resolved.filigrane.cfg,
+      arrierePlan: resolved.arrierePlan.cfg,
+      barcode: resolved.barcode.cfg,
+      qrcode: resolved.qrcode.cfg
+    }
+  };
+}
+
+function pxCfgToMm(
+  cfg: PdfAssetItemSettings | undefined,
+  defaultWmm: number,
+  defaultHmm: number,
+  maxWmm: number,
+  maxHmm: number
+): { w: number; h: number; dx: number; dy: number } {
+  if (!cfg) return { w: defaultWmm, h: defaultHmm, dx: 0, dy: 0 };
+  const rawW = cfg.widthUnit === 'px' ? cfg.widthValue * 0.22 : defaultWmm * (cfg.widthValue / 100);
+  const rawH = cfg.heightUnit === 'px' ? cfg.heightValue * 0.22 : defaultHmm * (cfg.heightValue / 100);
+  return {
+    w: Math.max(8, Math.min(maxWmm, rawW || defaultWmm)),
+    h: Math.max(6, Math.min(maxHmm, rawH || defaultHmm)),
+    dx: Math.max(-28, Math.min(28, (cfg.offsetX || 0) * 0.2)),
+    dy: Math.max(-28, Math.min(28, (cfg.offsetY || 0) * 0.2))
+  };
+}
+
 /**
- * Générateur PDF jsPDF structuré et soigné pour chaque modèle
+ * Rend un modèle "Fiches et DOC ES" dans un document jsPDF existant (page courante ou nouvelle page).
+ * Applique fidèlement la mise en page choisie pour ce document et les visuels des 6 parties.
  */
-export function generateSingleDocEsPdf(
+export function renderDocEsModelIntoPdf(
+  doc: jsPDF,
   modelId: number,
   p: PostulantInfo,
   d: FichesDocEsData,
   settings: SiteSettings,
-  layoutTemplate?: ReferenceLayoutTemplate
-): { doc: jsPDF; filename: string } {
+  layoutTemplate?: ReferenceLayoutTemplate,
+  options?: {
+    addNewPageFirst?: boolean;
+    skipFooter?: boolean;
+    images?: DocEsPreloadedImages;
+  }
+): { startPage: number; endPage: number; title: string } {
   const effective = resolveEffectiveLayout(layoutTemplate);
   const bp: SpatialBlueprint | undefined = effective?.spatialBlueprint;
-  const orientation = effective?.orientation || 'portrait';
-  const pageFormat = effective?.pageFormat || 'a4';
-  const doc = new jsPDF({
-    orientation,
-    unit: 'mm',
-    format: pageFormat,
-    compress: true
-  });
-
-  const PAGE_WIDTH = doc.internal.pageSize.getWidth();
-  const PAGE_HEIGHT = doc.internal.pageSize.getHeight();
-  const MARGIN_LEFT = effective?.marginsMm?.left ?? 18;
-  const MARGIN_RIGHT = effective?.marginsMm?.right ?? 18;
-  const MARGIN_TOP = effective?.marginsMm?.top ?? 15;
-  const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT;
   const pdfFont = effective?.fontFamily || 'helvetica';
   const lineStep =
     effective?.blockSpacing === 'compact'
@@ -927,12 +1853,43 @@ export function generateSingleDocEsPdf(
   const bodyRgb = effective?.bodyTextColor ? hexToRgbTuple(effective.bodyTextColor) : ([30, 41, 59] as [number, number, number]);
   const borderRgb = effective?.borderColor ? hexToRgbTuple(effective.borderColor) : primaryRgb;
 
+  if (options?.addNewPageFirst) {
+    doc.addPage();
+  }
+  const startPage = doc.getNumberOfPages();
+
+  const PAGE_WIDTH = doc.internal.pageSize.getWidth();
+  const PAGE_HEIGHT = doc.internal.pageSize.getHeight();
+  const MARGIN_LEFT = effective?.marginsMm?.left ?? 18;
+  const MARGIN_RIGHT = effective?.marginsMm?.right ?? 18;
+  const MARGIN_TOP = effective?.marginsMm?.top ?? 15;
+  const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT;
+
   const rendered = renderDocEsPlainText(modelId, p, d, settings);
+  const imgs = options?.images;
 
   const drawPageBackgroundAndFrame = () => {
     if (effective?.pageBgColor && effective.pageBgColor.toUpperCase() !== '#FFFFFF') {
       doc.setFillColor(...hexToRgbTuple(effective.pageBgColor));
       doc.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, 'F');
+    }
+    if (imgs?.arrierePlan) {
+      try {
+        doc.addImage(imgs.arrierePlan, 'PNG', 0, 0, PAGE_WIDTH, PAGE_HEIGHT);
+      } catch {}
+    }
+    if (imgs?.filigrane) {
+      try {
+        const wmBox = pxCfgToMm(imgs.cfgs?.filigrane, 78, 92, 130, 150);
+        doc.addImage(
+          imgs.filigrane,
+          'PNG',
+          (PAGE_WIDTH - wmBox.w) / 2 + wmBox.dx,
+          (PAGE_HEIGHT - wmBox.h) / 2 + wmBox.dy,
+          wmBox.w,
+          wmBox.h
+        );
+      } catch {}
     }
     if (bp?.hasLeftAccentStripe) {
       doc.setFillColor(...primaryRgb);
@@ -962,8 +1919,43 @@ export function generateSingleDocEsPdf(
 
   let y = Math.max(15, MARGIN_TOP);
 
+  const drawHeaderLogos = (inFilledBanner: boolean, bannerY: number, bannerH: number) => {
+    const logoBox = pxCfgToMm(imgs?.cfgs?.logo, 32, 12, 44, 16);
+    if (imgs?.logoEmp) {
+      try {
+        const lx =
+          effective?.logoPlacement === 'top_right'
+            ? PAGE_WIDTH - MARGIN_RIGHT - logoBox.w + logoBox.dx
+            : effective?.logoPlacement === 'top_center'
+            ? (PAGE_WIDTH - logoBox.w) / 2 + logoBox.dx
+            : MARGIN_LEFT + logoBox.dx;
+        const ly = inFilledBanner ? bannerY + Math.max(1.5, (bannerH - logoBox.h) / 2) : bannerY;
+        if (inFilledBanner) {
+          doc.setFillColor(255, 255, 255);
+          doc.roundedRect(lx - 1, ly - 1, logoBox.w + 2, logoBox.h + 2, 1, 1, 'F');
+        }
+        doc.addImage(imgs.logoEmp, 'PNG', lx, ly, logoBox.w, logoBox.h);
+      } catch {}
+    }
+    if (imgs?.logoAgence && imgs.logoAgence !== imgs.logoEmp) {
+      try {
+        const secBox = pxCfgToMm(imgs?.cfgs?.logoSecondary, 28, 11, 38, 14);
+        const sx =
+          effective?.logoPlacement === 'top_right'
+            ? MARGIN_LEFT
+            : PAGE_WIDTH - MARGIN_RIGHT - secBox.w;
+        const sy = inFilledBanner ? bannerY + Math.max(1.5, (bannerH - secBox.h) / 2) : bannerY;
+        if (inFilledBanner) {
+          doc.setFillColor(255, 255, 255);
+          doc.roundedRect(sx - 1, sy - 1, secBox.w + 2, secBox.h + 2, 1, 1, 'F');
+        }
+        doc.addImage(imgs.logoAgence, 'PNG', sx, sy, secBox.w, secBox.h);
+      } catch {}
+    }
+  };
+
   if (bp) {
-    // 1. En-tête piloté strictement par le SpatialBlueprint du fichier importé
+    // 1. En-tête piloté strictement par le SpatialBlueprint du modèle choisi
     if (bp.headerLayout === 'top_accent_bar') {
       doc.setFillColor(...primaryRgb);
       doc.rect(0, 0, PAGE_WIDTH, 5, 'F');
@@ -976,35 +1968,47 @@ export function generateSingleDocEsPdf(
       doc.setFillColor(...headerRgb);
       doc.rect(bx, y - 2, bw, bannerH, 'F');
 
+      drawHeaderLogos(true, y - 2, bannerH);
+
       const headerTextRgb = effective?.headerTextColor
         ? hexToRgbTuple(effective.headerTextColor)
         : ([255, 255, 255] as [number, number, number]);
+      const textStartX =
+        imgs?.logoEmp && effective?.logoPlacement !== 'top_right' && effective?.logoPlacement !== 'top_center'
+          ? MARGIN_LEFT + 36
+          : MARGIN_LEFT;
       doc.setFont(pdfFont, 'bold');
-      doc.setFontSize(12);
+      doc.setFontSize(11);
       doc.setTextColor(...headerTextRgb);
-      doc.text(p.nomEntreprise.toUpperCase(), MARGIN_LEFT, y + 6.5);
+      doc.text(p.nomEntreprise.toUpperCase(), textStartX, y + 6.5);
       doc.setFont(pdfFont, 'normal');
-      doc.setFontSize(8.2);
-      doc.setTextColor(...accentRgb);
-      doc.text(`MODULE FICHES ET DOC ES · MODÈLE ${modelId}`, MARGIN_LEFT, y + 12.5);
-
       doc.setFontSize(8);
-      doc.setTextColor(...headerTextRgb);
-      doc.text(`Réf. Dossier : ${d.referenceDossier}`, PAGE_WIDTH - MARGIN_RIGHT, y + 6.5, { align: 'right' });
-      doc.text(`Date : ${p.dateEffet}`, PAGE_WIDTH - MARGIN_RIGHT, y + 12.5, { align: 'right' });
+      doc.setTextColor(...accentRgb);
+      doc.text(`MODULE FICHES ET DOC ES · MODÈLE ${modelId}`, textStartX, y + 12.5);
+
+      if (!imgs?.logoAgence || imgs.logoAgence === imgs.logoEmp || effective?.logoPlacement === 'top_right') {
+        doc.setFontSize(8);
+        doc.setTextColor(...headerTextRgb);
+        doc.text(`Réf. Dossier : ${d.referenceDossier}`, PAGE_WIDTH - MARGIN_RIGHT - 2, y + 6.5, { align: 'right' });
+        doc.text(`Date : ${p.dateEffet}`, PAGE_WIDTH - MARGIN_RIGHT - 2, y + 12.5, { align: 'right' });
+      }
       y += bannerH + 4;
     } else if (bp.headerLayout === 'centered_stack') {
+      if (imgs?.logoEmp) {
+        drawHeaderLogos(false, y, 13);
+        y += 14.5;
+      }
       doc.setFont(pdfFont, 'bold');
       doc.setFontSize(13);
       doc.setTextColor(...primaryRgb);
-      doc.text(p.nomEntreprise.toUpperCase(), PAGE_WIDTH / 2, y + 4, { align: 'center' });
+      doc.text(p.nomEntreprise.toUpperCase(), PAGE_WIDTH / 2, y + 3.5, { align: 'center' });
       doc.setFont(pdfFont, 'normal');
       doc.setFontSize(8.2);
       doc.setTextColor(71, 85, 105);
-      doc.text(`MODULE FICHES ET DOC ES · MODÈLE ${modelId} · RÉF : ${d.referenceDossier}`, PAGE_WIDTH / 2, y + 9, {
+      doc.text(`MODULE FICHES ET DOC ES · MODÈLE ${modelId} · RÉF : ${d.referenceDossier}`, PAGE_WIDTH / 2, y + 8.5, {
         align: 'center'
       });
-      y += 13;
+      y += 12;
       if (bp.headerHasDivider) {
         doc.setDrawColor(...primaryRgb);
         doc.setLineWidth(0.5);
@@ -1012,16 +2016,22 @@ export function generateSingleDocEsPdf(
         y += 4;
       }
     } else if (bp.headerLayout === 'split_lr') {
+      if (imgs?.logoEmp) {
+        drawHeaderLogos(false, y - 1, 13);
+      }
+      const leftTextX = imgs?.logoEmp && effective?.logoPlacement !== 'top_right' ? MARGIN_LEFT + 35 : MARGIN_LEFT;
       doc.setFont(pdfFont, 'bold');
-      doc.setFontSize(12.5);
+      doc.setFontSize(11.5);
       doc.setTextColor(...primaryRgb);
-      doc.text(p.nomEntreprise.toUpperCase(), MARGIN_LEFT, y + 4);
+      doc.text(p.nomEntreprise.toUpperCase(), leftTextX, y + 4.5);
       doc.setFont(pdfFont, 'normal');
       doc.setFontSize(8);
       doc.setTextColor(71, 85, 105);
-      doc.text(`Système ATS · Modèle ${modelId}`, PAGE_WIDTH - MARGIN_RIGHT, y + 3, { align: 'right' });
-      doc.text(`Dossier : ${d.referenceDossier}`, PAGE_WIDTH - MARGIN_RIGHT, y + 7.2, { align: 'right' });
-      y += 11;
+      if (!imgs?.logoAgence || imgs.logoAgence === imgs.logoEmp) {
+        doc.text(`Système ATS · Modèle ${modelId}`, PAGE_WIDTH - MARGIN_RIGHT, y + 3.5, { align: 'right' });
+        doc.text(`Dossier : ${d.referenceDossier}`, PAGE_WIDTH - MARGIN_RIGHT, y + 8, { align: 'right' });
+      }
+      y += imgs?.logoEmp ? 15 : 11;
       if (bp.headerHasDivider) {
         doc.setDrawColor(...accentRgb);
         doc.setLineWidth(0.5);
@@ -1030,10 +2040,14 @@ export function generateSingleDocEsPdf(
       }
     } else {
       // left_clean / top_accent_bar
+      if (imgs?.logoEmp) {
+        drawHeaderLogos(false, y, 13);
+      }
+      const leftTextX = imgs?.logoEmp && effective?.logoPlacement !== 'top_right' ? MARGIN_LEFT + 36 : MARGIN_LEFT;
       doc.setFont(pdfFont, 'bold');
-      doc.setFontSize(13);
+      doc.setFontSize(12.5);
       doc.setTextColor(...primaryRgb);
-      doc.text(p.nomEntreprise.toUpperCase(), MARGIN_LEFT, y + 4);
+      doc.text(p.nomEntreprise.toUpperCase(), leftTextX, y + 5.5);
       if (bp.hasTopRightMarker) {
         doc.setDrawColor(180, 190, 200);
         doc.setLineWidth(0.2);
@@ -1041,7 +2055,7 @@ export function generateSingleDocEsPdf(
         doc.setFillColor(20, 25, 35);
         doc.rect(PAGE_WIDTH - MARGIN_RIGHT - 2.1, y + 0.9, 1.2, 1.2, 'F');
       }
-      y += 10;
+      y += imgs?.logoEmp ? 15 : 10;
       if (bp.headerHasDivider) {
         doc.setDrawColor(...primaryRgb);
         doc.setLineWidth(0.35);
@@ -1050,7 +2064,18 @@ export function generateSingleDocEsPdf(
       }
     }
 
+    // Photo candidat sur fiches profil / inscription (Modèles 1, 6, 11, 12)
+    if (imgs?.photo && [1, 6, 11, 12].includes(modelId)) {
+      try {
+        doc.addImage(imgs.photo, 'PNG', PAGE_WIDTH - MARGIN_RIGHT - 21, y, 19, 23);
+        doc.setDrawColor(...primaryRgb);
+        doc.setLineWidth(0.25);
+        doc.rect(PAGE_WIDTH - MARGIN_RIGHT - 21, y, 19, 23);
+      } catch {}
+    }
+
     // 2. Métadonnées Expéditeur / Destinataire selon metaLayout
+    const metaRightPad = imgs?.photo && [1, 6, 11, 12].includes(modelId) ? 23 : 0;
     if (bp.metaLayout === 'two_col_asymmetric' || bp.metaLayout === 'two_col_equal') {
       const rightOffset = bp.metaLayout === 'two_col_asymmetric' ? 3.5 : 0;
       doc.setFont(pdfFont, 'normal');
@@ -1061,32 +2086,33 @@ export function generateSingleDocEsPdf(
 
       doc.setFont(pdfFont, 'bold');
       doc.setTextColor(15, 23, 42);
-      doc.text(`CANDIDAT : ${p.nomComplet.toUpperCase()}`, PAGE_WIDTH - MARGIN_RIGHT, y + rightOffset, { align: 'right' });
+      doc.text(`CANDIDAT : ${p.nomComplet.toUpperCase()}`, PAGE_WIDTH - MARGIN_RIGHT - metaRightPad, y + rightOffset, { align: 'right' });
       doc.setFont(pdfFont, 'normal');
       doc.setTextColor(71, 85, 105);
-      doc.text(`Code ID : ${p.codeIdCandidature}`, PAGE_WIDTH - MARGIN_RIGHT, y + rightOffset + 4, { align: 'right' });
-      y += rightOffset + 9;
+      doc.text(`Code ID : ${p.codeIdCandidature}`, PAGE_WIDTH - MARGIN_RIGHT - metaRightPad, y + rightOffset + 4, { align: 'right' });
+      y += Math.max(rightOffset + 9, metaRightPad > 0 ? 24 : 0);
     } else if (bp.metaLayout === 'boxed_grid') {
+      const boxW = CONTENT_WIDTH - metaRightPad;
       doc.setDrawColor(203, 213, 225);
       doc.setFillColor(248, 250, 252);
-      doc.rect(MARGIN_LEFT, y, CONTENT_WIDTH, 13, 'FD');
-      doc.line(MARGIN_LEFT + CONTENT_WIDTH / 2, y, MARGIN_LEFT + CONTENT_WIDTH / 2, y + 13);
+      doc.rect(MARGIN_LEFT, y, boxW, 13, 'FD');
+      doc.line(MARGIN_LEFT + boxW / 2, y, MARGIN_LEFT + boxW / 2, y + 13);
       doc.setFont(pdfFont, 'bold');
       doc.setFontSize(8);
       doc.setTextColor(15, 23, 42);
       doc.text(p.nomEntreprise, MARGIN_LEFT + 3, y + 4.8);
-      doc.text(`CANDIDAT : ${p.nomComplet}`, MARGIN_LEFT + CONTENT_WIDTH / 2 + 3, y + 4.8);
+      doc.text(`CANDIDAT : ${p.nomComplet}`, MARGIN_LEFT + boxW / 2 + 3, y + 4.8);
       doc.setFont(pdfFont, 'normal');
       doc.setTextColor(71, 85, 105);
       doc.text(p.adresseEntreprise || 'Canada', MARGIN_LEFT + 3, y + 9.5);
-      doc.text(`Dossier : ${d.referenceDossier}`, MARGIN_LEFT + CONTENT_WIDTH / 2 + 3, y + 9.5);
-      y += 17;
+      doc.text(`Dossier : ${d.referenceDossier}`, MARGIN_LEFT + boxW / 2 + 3, y + 9.5);
+      y += Math.max(17, metaRightPad > 0 ? 25 : 0);
     } else if (bp.metaLayout === 'single_col_left') {
       doc.setFont(pdfFont, 'normal');
       doc.setFontSize(8.2);
       doc.setTextColor(71, 85, 105);
       doc.text(`${p.adresseEntreprise || 'Canada'} · Candidat : ${p.nomComplet} (${p.codeIdCandidature})`, MARGIN_LEFT, y);
-      y += 7;
+      y += Math.max(7, metaRightPad > 0 ? 24 : 0);
     }
 
     // 3. Pastille de références uniquement si détectée sur le modèle
@@ -1154,18 +2180,20 @@ export function generateSingleDocEsPdf(
     // Fallback classique sans modèle importé
     doc.setFillColor(...headerRgb);
     doc.rect(15, 15, PAGE_WIDTH - 30, 22, 'F');
+    drawHeaderLogos(true, 15, 22);
+    const textStartX = imgs?.logoEmp ? MARGIN_LEFT + 36 : MARGIN_LEFT;
     doc.setFont(pdfFont, 'bold');
     doc.setFontSize(12);
     doc.setTextColor(255, 255, 255);
-    doc.text(p.nomEntreprise.toUpperCase(), MARGIN_LEFT, 24);
+    doc.text(p.nomEntreprise.toUpperCase(), textStartX, 24);
     doc.setFont(pdfFont, 'normal');
     doc.setFontSize(8.5);
     doc.setTextColor(...accentRgb);
-    doc.text(`MODULE FICHES ET DOC ES · MODÈLE ${modelId}`, MARGIN_LEFT, 31);
+    doc.text(`MODULE FICHES ET DOC ES · MODÈLE ${modelId}`, textStartX, 31);
     doc.setFontSize(8);
     doc.setTextColor(220, 230, 242);
-    doc.text(`Réf. Dossier : ${d.referenceDossier}`, PAGE_WIDTH - MARGIN_RIGHT, 24, { align: 'right' });
-    doc.text(`Date : ${p.dateEffet}`, PAGE_WIDTH - MARGIN_RIGHT, 31, { align: 'right' });
+    doc.text(`Réf. Dossier : ${d.referenceDossier}`, PAGE_WIDTH - MARGIN_RIGHT - 2, 24, { align: 'right' });
+    doc.text(`Date : ${p.dateEffet}`, PAGE_WIDTH - MARGIN_RIGHT - 2, 31, { align: 'right' });
     y = Math.max(46, MARGIN_TOP + 28);
 
     doc.setFont(pdfFont, 'bold');
@@ -1198,7 +2226,7 @@ export function generateSingleDocEsPdf(
 
   const lines = doc.splitTextToSize(sanitizedContent, CONTENT_WIDTH - (bp?.bodyLayout === 'cards' ? 4 : 0));
   for (let i = 0; i < lines.length; i++) {
-    if (y > PAGE_HEIGHT - 22) {
+    if (y > PAGE_HEIGHT - 24) {
       doc.addPage();
       drawPageBackgroundAndFrame();
       y = Math.max(20, MARGIN_TOP);
@@ -1234,43 +2262,498 @@ export function generateSingleDocEsPdf(
     y += lineStep;
   }
 
-  // Pied de page piloté par footerLayout
-  const totalPages = doc.getNumberOfPages();
-  const fLayout = bp?.footerLayout || 'centered_legal';
-  if (fLayout !== 'none') {
-    for (let pg = 1; pg <= totalPages; pg++) {
-      doc.setPage(pg);
-      if (bp?.hasFooterDivider) {
-        doc.setDrawColor(203, 213, 225);
-        doc.setLineWidth(0.25);
-        doc.line(MARGIN_LEFT, PAGE_HEIGHT - 16, PAGE_WIDTH - MARGIN_RIGHT, PAGE_HEIGHT - 16);
-      }
-      doc.setFont(pdfFont, 'normal');
-      doc.setFontSize(7);
-      doc.setTextColor(100, 116, 139);
+  // Signatures, tampons & codes d'authentification issus des 6 Parties
+  if (imgs && (imgs.cachet || imgs.signature || imgs.signatureSecondary || imgs.cachetSecondary || imgs.barcode || imgs.qrcode)) {
+    if (y > PAGE_HEIGHT - 46) {
+      doc.addPage();
+      drawPageBackgroundAndFrame();
+      y = Math.max(20, MARGIN_TOP);
+    }
+    const sigBlockY = Math.max(y + 4, PAGE_HEIGHT - 44);
+    doc.setDrawColor(203, 213, 225);
+    doc.setLineWidth(0.25);
+    doc.line(MARGIN_LEFT, sigBlockY - 2, PAGE_WIDTH - MARGIN_RIGHT, sigBlockY - 2);
+    doc.setFont(pdfFont, 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(...primaryRgb);
+    doc.text(
+      p.casType === 'agence'
+        ? `${p.nomAgence} · ${p.nomEntreprise}`
+        : `${p.nomEntreprise} · ${p.representantEmployeurNom}`,
+      MARGIN_LEFT,
+      sigBlockY + 4
+    );
 
-      if (fLayout === 'centered_legal') {
-        doc.text(
-          `${p.nomEntreprise} · Système ATS Certifié · Modèle ${modelId} · Document Officiel`,
-          PAGE_WIDTH / 2,
-          PAGE_HEIGHT - 12,
-          { align: 'center' }
-        );
-      } else {
-        if (fLayout !== 'minimal_page') {
-          doc.text(
-            `${p.nomEntreprise} · Modèle ${modelId} · Réf. ${d.referenceDossier}`,
-            MARGIN_LEFT,
-            PAGE_HEIGHT - 12
-          );
+    if (imgs.barcode) {
+      try {
+        const bcBox = pxCfgToMm(imgs.cfgs?.barcode, 30, 10, 40, 14);
+        doc.addImage(imgs.barcode, 'PNG', MARGIN_LEFT + bcBox.dx, sigBlockY + 7 + bcBox.dy, bcBox.w, bcBox.h);
+      } catch {}
+    }
+    if (imgs.qrcode) {
+      try {
+        const qrBox = pxCfgToMm(imgs.cfgs?.qrcode, 14, 14, 22, 22);
+        doc.addImage(imgs.qrcode, 'PNG', MARGIN_LEFT + 34 + qrBox.dx, sigBlockY + 5 + qrBox.dy, qrBox.w, qrBox.h);
+      } catch {}
+    }
+
+    if (imgs.cachetSecondary) {
+      try {
+        const csBox = pxCfgToMm(imgs.cfgs?.cachetSecondary, 16, 16, 26, 26);
+        doc.addImage(imgs.cachetSecondary, 'PNG', PAGE_WIDTH / 2 - 4 + csBox.dx, sigBlockY + csBox.dy, csBox.w, csBox.h);
+      } catch {}
+    }
+    if (imgs.signatureSecondary) {
+      try {
+        const ssBox = pxCfgToMm(imgs.cfgs?.signatureSecondary, 22, 11, 34, 16);
+        doc.addImage(imgs.signatureSecondary, 'PNG', PAGE_WIDTH / 2 + 14 + ssBox.dx, sigBlockY + 2 + ssBox.dy, ssBox.w, ssBox.h);
+      } catch {}
+    }
+
+    if (imgs.cachet) {
+      try {
+        const cBox = pxCfgToMm(imgs.cfgs?.cachet, 18, 18, 28, 28);
+        doc.addImage(imgs.cachet, 'PNG', PAGE_WIDTH - MARGIN_RIGHT - 48 + cBox.dx, sigBlockY + cBox.dy, cBox.w, cBox.h);
+      } catch {}
+    }
+    if (imgs.signature) {
+      try {
+        const sBox = pxCfgToMm(imgs.cfgs?.signature, 25, 12, 36, 18);
+        doc.addImage(imgs.signature, 'PNG', PAGE_WIDTH - MARGIN_RIGHT - 26 + sBox.dx, sigBlockY + 2 + sBox.dy, sBox.w, sBox.h);
+      } catch {}
+    }
+  }
+
+  const endPage = doc.getNumberOfPages();
+
+  // Pied de page piloté par footerLayout (sauf si géré au niveau du Kit compilé)
+  if (!options?.skipFooter) {
+    const fLayout = bp?.footerLayout || 'centered_legal';
+    if (fLayout !== 'none') {
+      for (let pg = startPage; pg <= endPage; pg++) {
+        doc.setPage(pg);
+        if (bp?.hasFooterDivider) {
+          doc.setDrawColor(203, 213, 225);
+          doc.setLineWidth(0.25);
+          doc.line(MARGIN_LEFT, PAGE_HEIGHT - 16, PAGE_WIDTH - MARGIN_RIGHT, PAGE_HEIGHT - 16);
         }
-        doc.setFont(pdfFont, 'bold');
-        doc.text(`${pg}/${totalPages}`, PAGE_WIDTH - MARGIN_RIGHT, PAGE_HEIGHT - 12, { align: 'right' });
+        doc.setFont(pdfFont, 'normal');
+        doc.setFontSize(7);
+        doc.setTextColor(100, 116, 139);
+
+        if (fLayout === 'centered_legal') {
+          doc.text(
+            `${p.nomEntreprise} · Système ATS Certifié · Modèle ${modelId} · Document Officiel`,
+            PAGE_WIDTH / 2,
+            PAGE_HEIGHT - 12,
+            { align: 'center' }
+          );
+        } else {
+          if (fLayout !== 'minimal_page') {
+            doc.text(
+              `${p.nomEntreprise} · Modèle ${modelId} · Réf. ${d.referenceDossier}`,
+              MARGIN_LEFT,
+              PAGE_HEIGHT - 12
+            );
+          }
+          doc.setFont(pdfFont, 'bold');
+          doc.text(`${pg - startPage + 1}/${endPage - startPage + 1}`, PAGE_WIDTH - MARGIN_RIGHT, PAGE_HEIGHT - 12, {
+            align: 'right'
+          });
+        }
       }
     }
   }
 
-  const safeTitle = rendered.title.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30);
+  return { startPage, endPage, title: rendered.title };
+}
+
+/**
+ * Générateur PDF jsPDF structuré et soigné pour chaque modèle unitaire
+ */
+export function generateSingleDocEsPdf(
+  modelId: number,
+  p: PostulantInfo,
+  d: FichesDocEsData,
+  settings: SiteSettings,
+  layoutTemplate?: ReferenceLayoutTemplate,
+  preloadedImages?: DocEsPreloadedImages
+): { doc: jsPDF; filename: string } {
+  const effective = resolveEffectiveLayout(layoutTemplate);
+  const orientation = effective?.orientation || 'portrait';
+  const pageFormat = effective?.pageFormat || 'a4';
+  const doc = new jsPDF({
+    orientation,
+    unit: 'mm',
+    format: pageFormat,
+    compress: true
+  });
+
+  const { title } = renderDocEsModelIntoPdf(doc, modelId, p, d, settings, layoutTemplate, {
+    addNewPageFirst: false,
+    skipFooter: false,
+    images: preloadedImages
+  });
+
+  const safeTitle = title.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30);
   const filename = `DOC_ES_M${modelId}_${safeTitle}_${p.nom.toUpperCase()}.pdf`;
   return { doc, filename };
+}
+
+/**
+ * Générateur asynchrone de PDF unitaire intégrant la mise en page du document et les visuels des 6 Parties
+ */
+export async function generateSingleDocEsPdfAsync(
+  modelId: number,
+  p: PostulantInfo,
+  d: FichesDocEsData,
+  settings: SiteSettings,
+  layoutTemplates?: LayoutTemplatesMap,
+  kitDocLayouts?: KitDocLayoutMap,
+  uploadedAssets?: UploadedAssetUrlsMap,
+  assetsConfig?: PdfImportedAssetsConfig,
+  kitDocVisualScopes?: KitDocVisualScopeMap
+): Promise<{ doc: jsPDF; filename: string }> {
+  const layoutTpl = resolveLayoutTemplateForDocEsModel(modelId, layoutTemplates, kitDocLayouts, layoutTemplates?.doc_es);
+  const preloadedImages = await preloadDocEsModelVisuals(
+    modelId,
+    p,
+    uploadedAssets,
+    assetsConfig,
+    kitDocVisualScopes?.[modelId]
+  );
+  return generateSingleDocEsPdf(modelId, p, d, settings, layoutTpl, preloadedImages);
+}
+
+/**
+ * Génère le Kit Candidat complet constitué de TOUS les documents PDF énumérés dans "Fiches et DOC ES"
+ * correspondant au type de candidature sélectionné (Direct : Modèles 1 à 8 | Agence : Modèles 9 à 15),
+ * avec mise en page par document et intégration des visuels "3. Visuels, Logos & Tampons (6 Parties)".
+ */
+export function generateKitDocEsCompiledPdf(
+  p: PostulantInfo,
+  d: FichesDocEsData,
+  settings: SiteSettings,
+  layoutTemplate?: ReferenceLayoutTemplate,
+  images?: DocEsPreloadedImages,
+  customTextOverride?: string,
+  perModelLayouts?: Record<number, ReferenceLayoutTemplate>,
+  perModelImages?: Record<number, DocEsPreloadedImages>
+): { doc: jsPDF; filename: string; modelsIncluded: DocEsModelMeta[] } {
+  const effective = resolveEffectiveLayout(layoutTemplate);
+  const orientation = effective?.orientation || 'portrait';
+  const pageFormat = effective?.pageFormat || 'a4';
+  const pdfFont = effective?.fontFamily || 'helvetica';
+  const primaryRgb = effective?.primaryColor ? hexToRgbTuple(effective.primaryColor) : ([11, 37, 69] as [number, number, number]);
+  const accentRgb = effective?.accentColor ? hexToRgbTuple(effective.accentColor) : ([212, 160, 23] as [number, number, number]);
+
+  const doc = new jsPDF({
+    orientation,
+    unit: 'mm',
+    format: pageFormat,
+    compress: true
+  });
+
+  const PAGE_WIDTH = doc.internal.pageSize.getWidth();
+  const PAGE_HEIGHT = doc.internal.pageSize.getHeight();
+  const MARGIN_LEFT = 18;
+  const MARGIN_RIGHT = 18;
+  const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT;
+
+  const isAgence = p.casType === 'agence';
+  const modelsIncluded = getDocEsModelsForCasType(p.casType);
+
+  // =========================================================================
+  // PAGE 1 : COUVERTURE & SOMMAIRE DU KIT CANDIDAT (FICHES ET DOC ES)
+  // =========================================================================
+  if (images?.arrierePlan) {
+    try {
+      doc.addImage(images.arrierePlan, 'PNG', 0, 0, PAGE_WIDTH, PAGE_HEIGHT);
+    } catch {}
+  }
+  if (images?.filigrane) {
+    try {
+      doc.addImage(images.filigrane, 'PNG', (PAGE_WIDTH - 80) / 2, (PAGE_HEIGHT - 95) / 2, 80, 95);
+    } catch {}
+  }
+
+  doc.setDrawColor(...primaryRgb);
+  doc.setLineWidth(1.1);
+  doc.rect(11, 11, PAGE_WIDTH - 22, PAGE_HEIGHT - 22);
+  doc.setDrawColor(...accentRgb);
+  doc.setLineWidth(0.35);
+  doc.rect(13.5, 13.5, PAGE_WIDTH - 27, PAGE_HEIGHT - 27);
+
+  let y = 21;
+
+  if (images?.logoEmp) {
+    try {
+      const lBox = pxCfgToMm(images.cfgs?.logo, 38, 15, 48, 18);
+      doc.addImage(images.logoEmp, 'PNG', MARGIN_LEFT + lBox.dx, y + lBox.dy, lBox.w, lBox.h);
+    } catch {}
+  }
+  if (isAgence && images?.logoAgence) {
+    try {
+      const sBox = pxCfgToMm(images.cfgs?.logoSecondary, 38, 15, 48, 18);
+      doc.addImage(images.logoAgence, 'PNG', PAGE_WIDTH - MARGIN_RIGHT - sBox.w + sBox.dx, y + sBox.dy, sBox.w, sBox.h);
+    } catch {}
+  }
+
+  y += 22;
+
+  doc.setFont(pdfFont, 'bold');
+  doc.setFontSize(15);
+  doc.setTextColor(...primaryRgb);
+  doc.text(
+    isAgence
+      ? 'KIT CANDIDAT OFFICIEL — CANDIDATURE VIA AGENCE DE PLACEMENT'
+      : 'KIT CANDIDAT OFFICIEL — CANDIDATURE EN DIRECT',
+    PAGE_WIDTH / 2,
+    y,
+    { align: 'center', maxWidth: CONTENT_WIDTH }
+  );
+
+  y += 8;
+  doc.setFont(pdfFont, 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(...accentRgb);
+  doc.text(
+    `DOSSIER COMPILÉ « FICHES ET DOC ES » (${modelsIncluded.length} DOCUMENTS PDF) · RÉF. ${p.codeIdCandidature}`,
+    PAGE_WIDTH / 2,
+    y,
+    { align: 'center' }
+  );
+
+  y += 9;
+
+  // Cartouche Identité & Poste
+  if (images?.photo) {
+    try {
+      doc.addImage(images.photo, 'PNG', PAGE_WIDTH - MARGIN_RIGHT - 28, y, 26, 32);
+      doc.setDrawColor(...primaryRgb);
+      doc.setLineWidth(0.3);
+      doc.rect(PAGE_WIDTH - MARGIN_RIGHT - 28, y, 26, 32);
+    } catch {}
+  }
+
+  const infoBoxWidth = images?.photo ? CONTENT_WIDTH - 34 : CONTENT_WIDTH;
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.roundedRect(MARGIN_LEFT, y, infoBoxWidth, 34, 2, 2, 'FD');
+
+  doc.setFont(pdfFont, 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(0, 102, 179);
+  doc.text('IDENTITÉ DU POSTULANT & AFFECTATION', MARGIN_LEFT + 4, y + 6);
+
+  doc.setFont(pdfFont, 'normal');
+  doc.setFontSize(8.2);
+  doc.setTextColor(30, 41, 59);
+  doc.text(`• Postulant : ${p.nomComplet} (${p.civilite}) · Nationalité : ${p.nationalite}`, MARGIN_LEFT + 4, y + 12);
+  doc.text(`• Poste visé : ${p.intitulePoste} (CNP ${p.codeCnp}) · ${p.typeContrat}`, MARGIN_LEFT + 4, y + 17);
+  doc.text(`• Employeur : ${p.nomEntreprise} · Date d'effet : ${p.dateEffet}`, MARGIN_LEFT + 4, y + 22);
+  doc.text(
+    isAgence
+      ? `• Cabinet mandataire : ${p.nomAgence} (CNESST ${p.permisCnesst} · CCIC ${p.numeroCcic})`
+      : `• Parcours sélectionné : Candidature directe (Sans intermédiaire) · Entretien : ${p.dateEntretien} à ${p.heureEntretien}`,
+    MARGIN_LEFT + 4,
+    y + 27,
+    { maxWidth: infoBoxWidth - 8 }
+  );
+
+  y += 41;
+
+  // Sommaire des documents inclus (placeholders mis à jour après rendu de chaque modèle)
+  doc.setFont(pdfFont, 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(...primaryRgb);
+  doc.text(
+    isAgence
+      ? 'SOMMAIRE DES DOCUMENTS PDF INCLUS (PARTIE 2 : AGENCE DE PLACEMENT — MODÈLES 9 À 15)'
+      : 'SOMMAIRE DES DOCUMENTS PDF INCLUS (PARTIE 1 : CANDIDATURE DIRECTE — MODÈLES 1 À 8)',
+    MARGIN_LEFT,
+    y
+  );
+  y += 5;
+
+  const tocEntryPositions: { page: number; y: number; model: DocEsModelMeta }[] = [];
+  modelsIncluded.forEach((m, idx) => {
+    doc.setFillColor(idx % 2 === 0 ? 248 : 255, idx % 2 === 0 ? 250 : 255, idx % 2 === 0 ? 252 : 255);
+    doc.setDrawColor(226, 232, 240);
+    doc.roundedRect(MARGIN_LEFT, y, CONTENT_WIDTH, 11.5, 1.5, 1.5, 'FD');
+
+    doc.setFont(pdfFont, 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(0, 102, 179);
+    doc.text(`${m.number}`, MARGIN_LEFT + 3, y + 4.8);
+
+    doc.setTextColor(15, 23, 42);
+    doc.text(m.title, MARGIN_LEFT + 26, y + 4.8, { maxWidth: CONTENT_WIDTH - 52 });
+
+    doc.setFont(pdfFont, 'normal');
+    doc.setFontSize(7.2);
+    doc.setTextColor(100, 116, 139);
+    const docTpl = perModelLayouts?.[m.id];
+    const layoutTag = docTpl?.detectedSummary ? ` · Mise en page : ${docTpl.detectedSummary}` : '';
+    doc.text(`${m.categoryLabel}${m.isInteractive ? ' · Formulaire interactif' : ''}${layoutTag}`, MARGIN_LEFT + 26, y + 9.2, {
+      maxWidth: CONTENT_WIDTH - 52
+    });
+
+    tocEntryPositions.push({ page: 1, y: y + 6, model: m });
+    y += 13;
+  });
+
+  if (customTextOverride && customTextOverride.trim()) {
+    y += 2;
+    doc.setFillColor(254, 249, 195);
+    doc.setDrawColor(234, 179, 8);
+    doc.roundedRect(MARGIN_LEFT, y, CONTENT_WIDTH, 18, 1.5, 1.5, 'FD');
+    doc.setFont(pdfFont, 'bold');
+    doc.setFontSize(7.8);
+    doc.setTextColor(133, 77, 14);
+    doc.text('NOTE / ANNOTATION COMPLÉMENTAIRE DU DOSSIER :', MARGIN_LEFT + 3, y + 5);
+    doc.setFont(pdfFont, 'normal');
+    doc.text(customTextOverride.trim().slice(0, 260), MARGIN_LEFT + 3, y + 10, { maxWidth: CONTENT_WIDTH - 6 });
+  }
+
+  // Signatures, cachet & codes auth en bas de couverture
+  const sigY = PAGE_HEIGHT - 38;
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.3);
+  doc.line(MARGIN_LEFT, sigY, PAGE_WIDTH - MARGIN_RIGHT, sigY);
+  doc.setFont(pdfFont, 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(...primaryRgb);
+  doc.text('Pour l’Employeur (Canada) :', MARGIN_LEFT, sigY + 5);
+  doc.setFont(pdfFont, 'normal');
+  doc.text(`${p.representantEmployeurNom} — ${p.representantEmployeurTitre}`, MARGIN_LEFT, sigY + 9.5);
+
+  if (images?.barcode) {
+    try {
+      doc.addImage(images.barcode, 'PNG', MARGIN_LEFT, sigY + 12, 28, 8);
+    } catch {}
+  }
+  if (images?.qrcode) {
+    try {
+      doc.addImage(images.qrcode, 'PNG', MARGIN_LEFT + 31, sigY + 10, 12, 12);
+    } catch {}
+  }
+
+  if (images?.cachet) {
+    try {
+      const cBox = pxCfgToMm(images.cfgs?.cachet, 18, 18, 26, 26);
+      doc.addImage(images.cachet, 'PNG', PAGE_WIDTH / 2 - 5 + cBox.dx, sigY + 1 + cBox.dy, cBox.w, cBox.h);
+    } catch {}
+  }
+  if (images?.signature) {
+    try {
+      const sBox = pxCfgToMm(images.cfgs?.signature, 25, 12, 34, 16);
+      doc.addImage(images.signature, 'PNG', PAGE_WIDTH / 2 + 16 + sBox.dx, sigY + 3 + sBox.dy, sBox.w, sBox.h);
+    } catch {}
+  }
+
+  doc.setFont(pdfFont, 'bold');
+  doc.text(isAgence ? 'Pour l’Agence Mandataire :' : 'Pour le Candidat :', PAGE_WIDTH - MARGIN_RIGHT, sigY + 5, {
+    align: 'right'
+  });
+  doc.setFont(pdfFont, 'normal');
+  doc.text(isAgence ? p.representantAgenceNom : p.nomComplet, PAGE_WIDTH - MARGIN_RIGHT, sigY + 9.5, {
+    align: 'right'
+  });
+
+  // =========================================================================
+  // PAGES SUIVANTES : RENDU COMPLET DE CHAQUE DOCUMENT "FICHES ET DOC ES"
+  // =========================================================================
+  const renderedRanges: { model: DocEsModelMeta; startPage: number; endPage: number }[] = [];
+  for (const model of modelsIncluded) {
+    const modelLayout = perModelLayouts?.[model.id] || layoutTemplate;
+    const modelImgs = perModelImages?.[model.id] || images;
+    const res = renderDocEsModelIntoPdf(doc, model.id, p, d, settings, modelLayout, {
+      addNewPageFirst: true,
+      skipFooter: true,
+      images: modelImgs
+    });
+    renderedRanges.push({ model, startPage: res.startPage, endPage: res.endPage });
+  }
+
+  // Mise à jour des numéros de pages sur le Sommaire (Page 1)
+  doc.setPage(1);
+  tocEntryPositions.forEach((pos, idx) => {
+    const range = renderedRanges[idx];
+    if (!range) return;
+    doc.setFont(pdfFont, 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(...primaryRgb);
+    const label =
+      range.startPage === range.endPage ? `p. ${range.startPage}` : `pp. ${range.startPage}-${range.endPage}`;
+    doc.text(label, PAGE_WIDTH - MARGIN_RIGHT - 3, pos.y, { align: 'right' });
+  });
+
+  // Pied de page global unifié sur toutes les pages du Kit
+  const totalPages = doc.getNumberOfPages();
+  for (let pg = 1; pg <= totalPages; pg++) {
+    doc.setPage(pg);
+    doc.setFont(pdfFont, 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(100, 116, 139);
+    const matchingModel = renderedRanges.find((r) => pg >= r.startPage && pg <= r.endPage);
+    const footerLeft = matchingModel
+      ? `Kit Candidat (${isAgence ? 'Via Agence' : 'Direct'}) · ${matchingModel.model.number} : ${matchingModel.model.title}`
+      : `Kit Candidat (${isAgence ? 'Via Agence' : 'Direct'}) · Sommaire & Fiches DOC ES`;
+    doc.text(footerLeft.slice(0, 95), MARGIN_LEFT, PAGE_HEIGHT - 10);
+    doc.setFont(pdfFont, 'bold');
+    doc.text(`Page ${pg} / ${totalPages}`, PAGE_WIDTH - MARGIN_RIGHT, PAGE_HEIGHT - 10, { align: 'right' });
+  }
+
+  const modeTag = isAgence ? 'Agence' : 'Direct';
+  const filename = `Kit_Candidat_${modeTag}_${p.nom.toUpperCase()}_${p.codeIdCandidature}.pdf`;
+  return { doc, filename, modelsIncluded };
+}
+
+/**
+ * Génère individuellement tous les PDF énumérés dans "Fiches et DOC ES" selon le casType (sync fallback).
+ */
+export function generateKitDocEsIndividualPdfs(
+  p: PostulantInfo,
+  d: FichesDocEsData,
+  settings: SiteSettings,
+  layoutTemplate?: ReferenceLayoutTemplate
+): { model: DocEsModelMeta; doc: jsPDF; filename: string }[] {
+  const models = getDocEsModelsForCasType(p.casType);
+  return models.map((model) => {
+    const { doc, filename } = generateSingleDocEsPdf(model.id, p, d, settings, layoutTemplate);
+    return { model, doc, filename };
+  });
+}
+
+/**
+ * Génère individuellement tous les PDF "Fiches et DOC ES" avec leur mise en page dédiée et les visuels des 6 parties.
+ */
+export async function generateKitDocEsIndividualPdfsAsync(
+  p: PostulantInfo,
+  d: FichesDocEsData,
+  settings: SiteSettings,
+  layoutTemplates?: LayoutTemplatesMap,
+  kitDocLayouts?: KitDocLayoutMap,
+  uploadedAssets?: UploadedAssetUrlsMap,
+  assetsConfig?: PdfImportedAssetsConfig,
+  kitDocVisualScopes?: KitDocVisualScopeMap
+): Promise<{ model: DocEsModelMeta; doc: jsPDF; filename: string }[]> {
+  const models = getDocEsModelsForCasType(p.casType);
+  const results: { model: DocEsModelMeta; doc: jsPDF; filename: string }[] = [];
+  for (const model of models) {
+    const { doc, filename } = await generateSingleDocEsPdfAsync(
+      model.id,
+      p,
+      d,
+      settings,
+      layoutTemplates,
+      kitDocLayouts,
+      uploadedAssets,
+      assetsConfig,
+      kitDocVisualScopes
+    );
+    results.push({ model, doc, filename });
+  }
+  return results;
 }

@@ -1,12 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useMemo } from 'react';
 import { Employee, PublicPage, SiteSettings } from './types';
 import { Header, Footer } from './components/LayoutChrome';
-import { PublicPages } from './components/PublicPages';
-import { EmployeePortal } from './components/EmployeePortal';
-import { AdminBackoffice } from './components/AdminBackoffice';
-import { PublicDocumentViewer } from './components/PublicDocumentViewer';
-import { NosOffresPage } from './components/NosOffresPage';
-import { EntretienEmbauchePage } from './components/EntretienEmbauchePage';
 import {
   getEmployees,
   getSiteSettings,
@@ -21,7 +15,43 @@ import {
   SiteContext,
   AdminAuthSession
 } from './services/multisiteService';
-import { SecretaireAdminBackoffice } from './components/admin/SecretaireAdminBackoffice';
+import { updateDocumentSeo } from './services/seoService';
+
+const PublicPages = lazy(() =>
+  import('./components/PublicPages').then((m) => ({ default: m.PublicPages }))
+);
+const EmployeePortal = lazy(() =>
+  import('./components/EmployeePortal').then((m) => ({ default: m.EmployeePortal }))
+);
+const AdminBackoffice = lazy(() =>
+  import('./components/AdminBackoffice').then((m) => ({ default: m.AdminBackoffice }))
+);
+const SecretaireAdminBackoffice = lazy(() =>
+  import('./components/admin/SecretaireAdminBackoffice').then((m) => ({
+    default: m.SecretaireAdminBackoffice
+  }))
+);
+const PublicDocumentViewer = lazy(() =>
+  import('./components/PublicDocumentViewer').then((m) => ({ default: m.PublicDocumentViewer }))
+);
+const NosOffresPage = lazy(() =>
+  import('./components/NosOffresPage').then((m) => ({ default: m.NosOffresPage }))
+);
+const EntretienEmbauchePage = lazy(() =>
+  import('./components/EntretienEmbauchePage').then((m) => ({ default: m.EntretienEmbauchePage }))
+);
+
+const RouteLoadingFallback: React.FC = () => (
+  <div className="ds-container py-16 space-y-6" role="status" aria-label="Chargement de la vue">
+    <div className="h-8 w-56 rounded-xl bg-surface-subtle animate-pulse" />
+    <div className="h-44 w-full rounded-2xl bg-surface-subtle animate-pulse" />
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="h-36 rounded-2xl bg-surface-subtle animate-pulse" />
+      <div className="h-36 rounded-2xl bg-surface-subtle animate-pulse" />
+      <div className="h-36 rounded-2xl bg-surface-subtle animate-pulse" />
+    </div>
+  </div>
+);
 
 function extractPublicDocIdFromUrl(): string | null {
   try {
@@ -185,6 +215,11 @@ export default function App() {
     sessionStorage.getItem('atlantic_admin_token')
   );
 
+  // Synchronisation dynamique SEO (titre, méta-descriptions, OpenGraph, JSON-LD, robots)
+  useEffect(() => {
+    updateDocumentSeo(currentPage, filteredSettings, siteContext, publicDocId);
+  }, [currentPage, filteredSettings, siteContext, publicDocId]);
+
   // Seed localStorage from /employes.json on first load (100% static)
   useEffect(() => {
     syncFromStaticEmployesJson().then(() => {
@@ -316,23 +351,25 @@ export default function App() {
 
   if (publicDocId) {
     return (
-      <PublicDocumentViewer
-        documentId={publicDocId}
-        onBackToHome={() => {
-          setPublicDocId(null);
-          try {
-            window.history.pushState({}, '', '/');
-          } catch {
-            // Ignore pushState errors
-          }
-          navigateTo('accueil');
-        }}
-      />
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <PublicDocumentViewer
+          documentId={publicDocId}
+          onBackToHome={() => {
+            setPublicDocId(null);
+            try {
+              window.history.pushState({}, '', '/');
+            } catch {
+              // Ignore pushState errors
+            }
+            navigateTo('accueil');
+          }}
+        />
+      </Suspense>
     );
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#F8F9FA] text-gray-900">
+    <div className="min-h-screen flex flex-col bg-surface-canvas text-ink-primary">
       <Header
         settings={filteredSettings}
         currentPage={currentPage}
@@ -344,83 +381,87 @@ export default function App() {
       />
 
       <main className="flex-1">
-        {currentPage === 'admin' ? (
-          // Espace Administration avec contrôle strict des rôles & multisite
-          adminToken && adminSession?.role === 'secretaire' ? (
-            <SecretaireAdminBackoffice
+        <Suspense fallback={<RouteLoadingFallback />}>
+          {currentPage === 'admin' ? (
+            // Espace Administration avec contrôle strict des rôles & multisite
+            adminToken && adminSession?.role === 'secretaire' ? (
+              <SecretaireAdminBackoffice
+                settings={filteredSettings}
+                session={adminSession}
+                onLogout={handleAdminLogout}
+                onBackToSite={() => navigateTo('accueil')}
+              />
+            ) : adminToken && adminSession?.role === 'super_admin_rh' && siteContext === 'secretariat' ? (
+              // Super Admin RH accédant au Secrétariat : vue dédiée avec option de retour RH
+              <SecretaireAdminBackoffice
+                settings={filteredSettings}
+                session={adminSession}
+                onLogout={handleAdminLogout}
+                onBackToSite={() => navigateTo('accueil')}
+                onSwitchToRhBackoffice={() => handleSwitchSite('main')}
+              />
+            ) : (
+              <AdminBackoffice
+                settings={filteredSettings}
+                adminToken={adminToken}
+                onAdminAuthenticated={handleAdminAuthenticated}
+                onAdminLogout={handleAdminLogout}
+                onSettingsUpdated={(updated) => setSettings(updated)}
+                onBackToSite={() => navigateTo('accueil')}
+                onOpenDirectEmployeeLink={handleOpenDirectEmployeeLink}
+                siteContext={siteContext}
+                onSwitchSite={handleSwitchSite}
+                adminSession={adminSession}
+              />
+            )
+          ) : currentPage === 'espace-employe' ? (
+            <EmployeePortal
               settings={filteredSettings}
-              session={adminSession}
-              onLogout={handleAdminLogout}
-              onBackToSite={() => navigateTo('accueil')}
+              employeeToken={employeeToken}
+              employee={employee}
+              directAccessToken={directAccessToken}
+              onEmployeeAuthenticated={handleEmployeeAuthenticated}
+              onEmployeeLogout={handleEmployeeLogout}
+              onAdminAuthenticated={handleAdminAuthenticated}
+              onCloseModal={() => navigateTo('accueil')}
             />
-          ) : adminToken && adminSession?.role === 'super_admin_rh' && siteContext === 'secretariat' ? (
-            // Super Admin RH accédant au Secrétariat : vue dédiée avec option de retour RH
-            <SecretaireAdminBackoffice
+          ) : currentPage === 'nos-offres' ? (
+            <NosOffresPage
               settings={filteredSettings}
-              session={adminSession}
-              onLogout={handleAdminLogout}
-              onBackToSite={() => navigateTo('accueil')}
-              onSwitchToRhBackoffice={() => handleSwitchSite('main')}
+              onNavigate={navigateTo}
+            />
+          ) : currentPage === 'entretien' ? (
+            <EntretienEmbauchePage
+              settings={filteredSettings}
+              onNavigate={navigateTo}
             />
           ) : (
-            <AdminBackoffice
+            <PublicPages
+              page={currentPage}
               settings={filteredSettings}
-              adminToken={adminToken}
-              onAdminAuthenticated={handleAdminAuthenticated}
-              onAdminLogout={handleAdminLogout}
-              onSettingsUpdated={(updated) => setSettings(updated)}
-              onBackToSite={() => navigateTo('accueil')}
-              onOpenDirectEmployeeLink={handleOpenDirectEmployeeLink}
-              siteContext={siteContext}
-              onSwitchSite={handleSwitchSite}
-              adminSession={adminSession}
+              onNavigate={navigateTo}
+              selectedServiceForQuote={selectedServiceForQuote}
             />
-          )
-        ) : currentPage === 'espace-employe' ? (
-          <EmployeePortal
-            settings={filteredSettings}
-            employeeToken={employeeToken}
-            employee={employee}
-            directAccessToken={directAccessToken}
-            onEmployeeAuthenticated={handleEmployeeAuthenticated}
-            onEmployeeLogout={handleEmployeeLogout}
-            onAdminAuthenticated={handleAdminAuthenticated}
-            onCloseModal={() => navigateTo('accueil')}
-          />
-        ) : currentPage === 'nos-offres' ? (
-          <NosOffresPage
-            settings={filteredSettings}
-            onNavigate={navigateTo}
-          />
-        ) : currentPage === 'entretien' ? (
-          <EntretienEmbauchePage
-            settings={filteredSettings}
-            onNavigate={navigateTo}
-          />
-        ) : (
-          <PublicPages
-            page={currentPage}
-            settings={filteredSettings}
-            onNavigate={navigateTo}
-            selectedServiceForQuote={selectedServiceForQuote}
-          />
-        )}
+          )}
+        </Suspense>
       </main>
 
       {/* Modal "Espace Employé" intact */}
       {isEmployeeModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs overflow-y-auto flex items-center justify-center p-3 sm:p-6">
           <div className="w-full max-w-6xl my-auto">
-            <EmployeePortal
-              settings={filteredSettings}
-              employeeToken={employeeToken}
-              employee={employee}
-              directAccessToken={null}
-              onEmployeeAuthenticated={handleEmployeeAuthenticated}
-              onEmployeeLogout={handleEmployeeLogout}
-              onAdminAuthenticated={handleAdminAuthenticated}
-              onCloseModal={() => setIsEmployeeModalOpen(false)}
-            />
+            <Suspense fallback={<RouteLoadingFallback />}>
+              <EmployeePortal
+                settings={filteredSettings}
+                employeeToken={employeeToken}
+                employee={employee}
+                directAccessToken={null}
+                onEmployeeAuthenticated={handleEmployeeAuthenticated}
+                onEmployeeLogout={handleEmployeeLogout}
+                onAdminAuthenticated={handleAdminAuthenticated}
+                onCloseModal={() => setIsEmployeeModalOpen(false)}
+              />
+            </Suspense>
           </div>
         </div>
       )}

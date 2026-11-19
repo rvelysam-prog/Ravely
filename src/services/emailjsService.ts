@@ -1,9 +1,9 @@
 /**
- * Service d'envoi d'emails côté frontend avec EmailJS (emailjs-com)
+ * Service d'envoi d'emails côté frontend avec EmailJS (@emailjs/browser)
  * 100% GRATUIT et SANS BACKEND (sans Firebase Trigger Email / sans SendGrid / sans forfait payant Blaze).
  * Expéditeur unique : atlantictransport.int.contact@ik.me (SMTP Infomaniak mail.infomaniak.com:587)
  */
-import emailjs from 'emailjs-com';
+import emailjs from '@emailjs/browser';
 import {
   getEmailJsConfig,
   isPlaceholderEmailJsConfig,

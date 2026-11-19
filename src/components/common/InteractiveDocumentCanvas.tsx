@@ -74,6 +74,7 @@ export interface InteractiveCanvasProps {
   onExportSuccess?: (msg: string) => void;
   hasCustomText?: boolean;
   hideGenericChrome?: boolean;
+  preferCustomPdfDownloadWhenUnedited?: boolean;
   children: React.ReactNode;
 }
 
@@ -100,6 +101,7 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
   onExportSuccess,
   hasCustomText = false,
   hideGenericChrome = false,
+  preferCustomPdfDownloadWhenUnedited = false,
   children
 }) => {
   const effectiveLayout = resolveEffectiveLayout(layoutTemplate);
@@ -808,7 +810,18 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={handleExportLiveA4Pdf}
+            onClick={() => {
+              if (
+                preferCustomPdfDownloadWhenUnedited &&
+                onDownloadPdf &&
+                !hasInlineEdits &&
+                appliedForcusHtml === null
+              ) {
+                onDownloadPdf();
+                return;
+              }
+              handleExportLiveA4Pdf();
+            }}
             disabled={isExportingPdf}
             className="min-h-[38px] px-3.5 py-1.5 rounded-lg bg-[#0066B3] hover:bg-[#004f8c] text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-60"
           >

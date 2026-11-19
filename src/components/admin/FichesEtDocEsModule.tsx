@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   FileText,
   Download,
@@ -24,12 +24,27 @@ import { PostulantInfo } from '../../services/postulantDossierService';
 import { SiteSettings } from '../../types';
 import {
   FichesDocEsData,
+  DOC_ES_MODELS_CATALOG,
+  KIT_LAYOUT_PRESETS,
+  KitDocLayoutMap,
+  KitDocVisualScopeMap,
   renderDocEsPlainText,
-  generateSingleDocEsPdf,
+  generateSingleDocEsPdfAsync,
+  resolveLayoutTemplateForDocEsModel,
   saveFichesDocEsData
 } from '../../services/fichesEtDocEsService';
+import {
+  ActorScopeId,
+  PdfImportedAssetsConfig,
+  UploadedAssetUrlsMap
+} from '../../services/departmentsAndEmailService';
 import { downloadWordDocument } from '../../services/cricContractService';
-import { ReferenceLayoutTemplate, SpatialBlueprint, resolveEffectiveLayout } from '../../services/layoutImitationService';
+import {
+  LayoutTemplatesMap,
+  ReferenceLayoutTemplate,
+  SpatialBlueprint,
+  resolveEffectiveLayout
+} from '../../services/layoutImitationService';
 
 interface FichesEtDocEsModuleProps {
   postulant: PostulantInfo;
@@ -37,6 +52,13 @@ interface FichesEtDocEsModuleProps {
   onChangeDocEsData: (updated: FichesDocEsData) => void;
   settings: SiteSettings;
   layoutTemplate?: ReferenceLayoutTemplate;
+  layoutTemplates?: LayoutTemplatesMap;
+  kitDocLayouts?: KitDocLayoutMap;
+  onChangeKitDocLayout?: (modelId: number, presetId: string) => void;
+  kitDocVisualScopes?: KitDocVisualScopeMap;
+  onChangeKitDocVisualScope?: (modelId: number, scope: ActorScopeId | 'auto') => void;
+  uploadedAssets?: UploadedAssetUrlsMap;
+  assetsConfig?: PdfImportedAssetsConfig;
   onOpenInWebmail?: (html: string) => void;
   onToast: (msg: string) => void;
 }
@@ -47,6 +69,13 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
   onChangeDocEsData,
   settings,
   layoutTemplate,
+  layoutTemplates,
+  kitDocLayouts,
+  onChangeKitDocLayout,
+  kitDocVisualScopes,
+  onChangeKitDocVisualScope,
+  uploadedAssets,
+  assetsConfig,
   onOpenInWebmail,
   onToast
 }) => {
@@ -60,6 +89,17 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
     selectedCanal === 'direct' ? 1 : 9
   );
 
+  // Synchroniser automatiquement le canal si le casType du postulant change
+  useEffect(() => {
+    const nextCanal = postulant.casType === 'agence' ? 'agence' : 'direct';
+    setSelectedCanal(nextCanal);
+    setSelectedModelId((cur) => {
+      if (nextCanal === 'direct' && (cur < 1 || cur > 8)) return 1;
+      if (nextCanal === 'agence' && (cur < 9 || cur > 15)) return 9;
+      return cur;
+    });
+  }, [postulant.casType]);
+
   // Mode de visualisation : 'preview' (Lecture / PDF) ou 'form' (Formulaire interactif si applicable)
   const [viewMode, setViewMode] = useState<'preview' | 'form'>('preview');
 
@@ -69,162 +109,8 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
   // Rôle actif pour la visualisation des permissions
   const [userRole, setUserRole] = useState<'admin' | 'recruteur' | 'candidat'>('admin');
 
-  // Définition exhaustive des 15 modèles
-  const modelsCatalog = [
-    // PARTIE 1 : Candidature en direct
-    {
-      id: 1,
-      canal: 'direct',
-      category: 'interne',
-      categoryLabel: 'Données enregistrées par l\'entreprise',
-      number: 'MODÈLE 1',
-      title: 'Fiche de synthèse du candidat (Profil ATS)',
-      isInteractive: false,
-      description: 'Identification, compétences clés, critères validation RH et historique ATS'
-    },
-    {
-      id: 2,
-      canal: 'direct',
-      category: 'interne',
-      categoryLabel: 'Données enregistrées par l\'entreprise',
-      number: 'MODÈLE 2',
-      title: 'Grille d\'évaluation initiale (Entretien RH / Manager)',
-      isInteractive: false,
-      description: 'Notes de 1 à 4, points forts, axes à creuser et décision finale'
-    },
-    {
-      id: 3,
-      canal: 'direct',
-      category: 'interne',
-      categoryLabel: 'Données enregistrées par l\'entreprise',
-      number: 'MODÈLE 3',
-      title: 'Historique de planification des entretiens',
-      isInteractive: false,
-      description: 'Suivi des étapes 1, 2, 3 avec horaires, intervenants et logistique'
-    },
-    {
-      id: 4,
-      canal: 'direct',
-      category: 'externe',
-      categoryLabel: 'Formulaires et fiches à remettre au candidat',
-      number: 'MODÈLE 4',
-      title: 'Livret d\'accueil candidat (Culture d\'entreprise)',
-      isInteractive: false,
-      description: 'Histoire, mission, 3 valeurs fondamentales et cadre de travail'
-    },
-    {
-      id: 5,
-      canal: 'direct',
-      category: 'externe',
-      categoryLabel: 'Formulaires et fiches à remettre au candidat',
-      number: 'MODÈLE 5',
-      title: 'Fiche de poste détaillée',
-      isInteractive: false,
-      description: 'Missions, environnement technique, rémunération et avantages'
-    },
-    {
-      id: 6,
-      canal: 'direct',
-      category: 'externe',
-      categoryLabel: 'Formulaires et fiches à remettre au candidat',
-      number: 'MODÈLE 6',
-      title: 'Formulaire de demande d\'emploi interne (Fiche de candidature)',
-      isInteractive: true,
-      description: 'Formulaire interactif avec composante, diplômes, motivations et signature'
-    },
-    {
-      id: 7,
-      canal: 'direct',
-      category: 'externe',
-      categoryLabel: 'Formulaires et fiches à remettre au candidat',
-      number: 'MODÈLE 7',
-      title: 'Autorisation de vérification des références professionnelles',
-      isInteractive: true,
-      description: 'Formulaire interactif d\'accord et contacts de référence 1 & 2'
-    },
-    {
-      id: 8,
-      canal: 'direct',
-      category: 'externe',
-      categoryLabel: 'Formulaires et fiches à remettre au candidat',
-      number: 'MODÈLE 8',
-      title: 'Accès aux tests de sélection & modalités',
-      isInteractive: false,
-      description: 'Questionnaire de personnalité soft skills et test technique hard skills'
-    },
-
-    // PARTIE 2 : Candidature via Agence de placement
-    {
-      id: 9,
-      canal: 'agence',
-      category: 'interne',
-      categoryLabel: 'Documents entre l\'agence et l\'employeur',
-      number: 'MODÈLE 9',
-      title: 'Brief de recrutement entreprise',
-      isInteractive: false,
-      description: 'Critères indispensables no-go, contexte d\'attractivité et budget global'
-    },
-    {
-      id: 10,
-      canal: 'agence',
-      category: 'interne',
-      categoryLabel: 'Documents entre l\'agence et l\'employeur',
-      number: 'MODÈLE 10',
-      title: 'Contrat de prestation de services (Extrait RH)',
-      isInteractive: false,
-      description: 'Conditions financières, honoraires et clause de garantie de remplacement'
-    },
-    {
-      id: 11,
-      canal: 'agence',
-      category: 'interne',
-      categoryLabel: 'Documents entre l\'agence et l\'employeur',
-      number: 'MODÈLE 11',
-      title: 'Dossier de présentation candidat (CV anonymisé)',
-      isInteractive: false,
-      description: 'Note de synthèse du consultant et extrait du parcours anonymisé'
-    },
-    {
-      id: 12,
-      canal: 'agence',
-      category: 'externe',
-      categoryLabel: 'Documents entre l\'agence et le candidat',
-      number: 'MODÈLE 12',
-      title: 'Fiche d\'inscription en agence du candidat',
-      isInteractive: true,
-      description: 'Formulaire interactif : état civil, recherche et cadre administratif'
-    },
-    {
-      id: 13,
-      canal: 'agence',
-      category: 'externe',
-      categoryLabel: 'Documents entre l\'agence et le candidat',
-      number: 'MODÈLE 13',
-      title: 'Accord de protection et transmission des données (RGPD)',
-      isInteractive: true,
-      description: 'Formulaire interactif de consentement informatique et vivier'
-    },
-    {
-      id: 14,
-      canal: 'agence',
-      category: 'externe',
-      categoryLabel: 'Documents entre l\'agence et le candidat',
-      number: 'MODÈLE 14',
-      title: 'Fiche de préparation à l\'entretien (Conseils)',
-      isInteractive: false,
-      description: 'Profil des managers interlocuteurs, attentes et conseils de pitch'
-    },
-    {
-      id: 15,
-      canal: 'agence',
-      category: 'tripartite',
-      categoryLabel: 'Document de liaison tripartite',
-      number: 'MODÈLE 15',
-      title: 'Fiche de liaison d\'entretien tripartite (Bon de présentation)',
-      isInteractive: false,
-      description: 'Reconnaissance d\'antériorité signée entre agence, employeur et candidat'
-    }
-  ];
+  // Définition exhaustive centralisée des 15 modèles
+  const modelsCatalog = DOC_ES_MODELS_CATALOG;
 
   // Modèles filtrés par canal et terme de recherche
   const filteredModels = modelsCatalog.filter(
@@ -236,7 +122,13 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
   );
 
   const activeModel = modelsCatalog.find((m) => m.id === selectedModelId) || modelsCatalog[0];
-  const effectiveLayout = resolveEffectiveLayout(layoutTemplate);
+  const resolvedModelLayout = resolveLayoutTemplateForDocEsModel(
+    selectedModelId,
+    layoutTemplates,
+    kitDocLayouts,
+    layoutTemplate
+  );
+  const effectiveLayout = resolveEffectiveLayout(resolvedModelLayout);
   const bp: SpatialBlueprint | undefined = effectiveLayout?.spatialBlueprint;
   const renderedContent = renderDocEsPlainText(selectedModelId, postulant, docEsData, settings);
   const cleanPreviewContent = renderedContent.content
@@ -244,11 +136,21 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
-  // Téléchargement PDF
-  const handleDownloadPdf = () => {
-    const { doc, filename } = generateSingleDocEsPdf(selectedModelId, postulant, docEsData, settings, layoutTemplate);
+  // Téléchargement PDF (avec mise en page du document & visuels des 6 Parties)
+  const handleDownloadPdf = async () => {
+    const { doc, filename } = await generateSingleDocEsPdfAsync(
+      selectedModelId,
+      postulant,
+      docEsData,
+      settings,
+      { ...(layoutTemplates || {}), ...(layoutTemplate ? { doc_es: layoutTemplate } : {}) },
+      kitDocLayouts,
+      uploadedAssets,
+      assetsConfig,
+      kitDocVisualScopes
+    );
     doc.save(filename);
-    onToast(`Document PDF ${activeModel.number} téléchargé avec succès !`);
+    onToast(`Document PDF ${activeModel.number} téléchargé avec mise en page et visuels appliqués !`);
   };
 
   // Téléchargement Word (.docx)
@@ -518,6 +420,55 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
                 <Copy className="w-4 h-4" />
               </button>
             </div>
+
+            {(onChangeKitDocLayout || onChangeKitDocVisualScope) && (
+              <div className="w-full pt-3 mt-1 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+                {onChangeKitDocLayout && (
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[10px] font-bold uppercase text-slate-500">
+                      Mise en page de ce document
+                    </span>
+                    <select
+                      value={kitDocLayouts?.[selectedModelId] || 'auto_doc'}
+                      onChange={(e) => onChangeKitDocLayout(selectedModelId, e.target.value)}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-slate-50 font-semibold text-slate-800 cursor-pointer"
+                    >
+                      {KIT_LAYOUT_PRESETS.map((pr) => (
+                        <option key={pr.id} value={pr.id}>
+                          {pr.label}
+                        </option>
+                      ))}
+                      {layoutTemplates?.t9 && <option value="import_t9">Modèle importé Onglet 9 (Hébergement)</option>}
+                      {layoutTemplates?.t10 && <option value="import_t10">Modèle importé Onglet 10 (Notaire)</option>}
+                      {layoutTemplates?.t11 && <option value="import_t11">Modèle importé Onglet 11 (HIR)</option>}
+                      {layoutTemplates?.t12 && <option value="import_t12">Modèle importé Onglet 12 (Déclaration)</option>}
+                    </select>
+                  </label>
+                )}
+                {onChangeKitDocVisualScope && (
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[10px] font-bold uppercase text-slate-500">
+                      Visuels appliqués (3. Visuels 6 Parties)
+                    </span>
+                    <select
+                      value={kitDocVisualScopes?.[selectedModelId] || 'auto'}
+                      onChange={(e) =>
+                        onChangeKitDocVisualScope(selectedModelId, e.target.value as ActorScopeId | 'auto')
+                      }
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-slate-50 font-semibold text-slate-800 cursor-pointer"
+                    >
+                      <option value="auto">Automatique (Employeur / Cabinet CRIC)</option>
+                      <option value="employeur">1. Entreprise Employeur</option>
+                      <option value="prestataire">2. Cabinet CRIC (Agence)</option>
+                      <option value="hebEmployeur">3. Hébergement (Onglet 9)</option>
+                      <option value="notaire">4. Notaire BC (Onglet 10)</option>
+                      <option value="inspecteurHir">5. Inspecteur HIR (Onglet 11)</option>
+                      <option value="commissaireDeclaration">6. Déclaration (Onglet 12)</option>
+                    </select>
+                  </label>
+                )}
+              </div>
+            )}
           </div>
 
           {/* ========================================================================= */}
@@ -528,7 +479,19 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
               className="rounded-sm shadow-sm space-y-4 transition-all relative overflow-hidden"
               style={{
                 backgroundColor: effectiveLayout?.pageBgColor || '#ffffff',
-                border:
+                borderTop:
+                  effectiveLayout?.borderStyle === 'double'
+                    ? `4px double ${effectiveLayout.borderColor || '#0B2545'}`
+                    : effectiveLayout?.borderStyle === 'simple'
+                    ? `2px solid ${effectiveLayout.borderColor || '#0B2545'}`
+                    : '1px solid #e2e8f0',
+                borderRight:
+                  effectiveLayout?.borderStyle === 'double'
+                    ? `4px double ${effectiveLayout.borderColor || '#0B2545'}`
+                    : effectiveLayout?.borderStyle === 'simple'
+                    ? `2px solid ${effectiveLayout.borderColor || '#0B2545'}`
+                    : '1px solid #e2e8f0',
+                borderBottom:
                   effectiveLayout?.borderStyle === 'double'
                     ? `4px double ${effectiveLayout.borderColor || '#0B2545'}`
                     : effectiveLayout?.borderStyle === 'simple'
@@ -536,7 +499,11 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
                     : '1px solid #e2e8f0',
                 borderLeft: bp?.hasLeftAccentStripe
                   ? `6px solid ${effectiveLayout?.primaryColor || '#0B2545'}`
-                  : undefined,
+                  : effectiveLayout?.borderStyle === 'double'
+                  ? `4px double ${effectiveLayout.borderColor || '#0B2545'}`
+                  : effectiveLayout?.borderStyle === 'simple'
+                  ? `2px solid ${effectiveLayout.borderColor || '#0B2545'}`
+                  : '1px solid #e2e8f0',
                 padding:
                   effectiveLayout?.blockSpacing === 'compact'
                     ? '24px'
@@ -713,7 +680,13 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
                   backgroundColor: bp?.titleHasBox
                     ? effectiveLayout?.highlightTintColor || '#f1f5f9'
                     : 'transparent',
-                  border: bp?.titleHasBox
+                  borderTop: bp?.titleHasBox
+                    ? `1.5px solid ${effectiveLayout?.primaryColor || '#0B2545'}`
+                    : undefined,
+                  borderRight: bp?.titleHasBox
+                    ? `1.5px solid ${effectiveLayout?.primaryColor || '#0B2545'}`
+                    : undefined,
+                  borderLeft: bp?.titleHasBox
                     ? `1.5px solid ${effectiveLayout?.primaryColor || '#0B2545'}`
                     : undefined,
                   borderBottom: bp?.titleHasUnderline

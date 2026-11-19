@@ -59,9 +59,9 @@ export function sanitizeFolderSegment(raw: string, fallback = 'Salarie_Candidat'
 }
 
 export function buildDefaultEmployeeFolderName(employeeName: string, referenceCode?: string): string {
-  const safeName = sanitizeFolderSegment(employeeName, 'Dossier_Salarie');
+  const safeName = sanitizeFolderSegment(employeeName, 'Salarie_Candidat');
   const safeRef = referenceCode ? sanitizeFolderSegment(referenceCode, '') : '';
-  return safeRef ? `Dossier_${safeName}_${safeRef}` : `Dossier_${safeName}`;
+  return safeRef ? `${safeName}_${safeRef}` : safeName;
 }
 
 const CATEGORY_FOLDER_LABELS: Record<GeneratedFileCategory, string> = {
@@ -166,9 +166,11 @@ export async function exportSelectedDocumentsIntoFolder(
     };
   }
 
-  // Option dossier local direct via File System Access API (Chrome/Edge hors iframe bloqué)
+  // Option dossier local direct via File System Access API (Chrome/Edge desktop hors iframe)
+  const isTopLevelWindow = typeof window !== 'undefined' && window.self === window.top;
   if (
     options.preferNativeDirectoryPicker &&
+    isTopLevelWindow &&
     typeof window !== 'undefined' &&
     'showDirectoryPicker' in window
   ) {
@@ -208,8 +210,8 @@ export async function exportSelectedDocumentsIntoFolder(
         savedPaths
       };
     } catch (err) {
-      // Si annulé explicitement par l'utilisateur ou bloqué par iframe -> fallback ZIP propre
-      const message = err instanceof Error ? err.message : 'Accès dossier direct bloqué';
+      // Si annulé explicitement par l'utilisateur ou bloqué -> fallback ZIP propre
+      const message = err instanceof Error ? err.message : 'Accès dossier direct non autorisé';
       const zipRes = await buildStructuredDossierZip(files, options);
       triggerBlobDownload(zipRes.zipBlob, zipRes.zipFileName);
       return {
@@ -217,12 +219,12 @@ export async function exportSelectedDocumentsIntoFolder(
         rootFolderName: zipRes.rootFolderName,
         fileCount: files.length,
         savedPaths: zipRes.savedPaths,
-        warning: `Enregistrement dossier natif indisponible (${message}) : téléchargé en archive dossier « ${zipRes.zipFileName} ».`
+        warning: `Dossier disque direct annulé (${message}) : téléchargé en archive dossier « ${zipRes.zipFileName} ».`
       };
     }
   }
 
-  // Mode universel : archive ZIP contenant directement le dossier nommé et ses sous-dossiers
+  // Mode universel (PC, Mac, Android, iOS) : archive ZIP contenant directement le dossier nommé d'après le salarié
   const zipRes = await buildStructuredDossierZip(files, options);
   triggerBlobDownload(zipRes.zipBlob, zipRes.zipFileName);
   return {
@@ -233,14 +235,37 @@ export async function exportSelectedDocumentsIntoFolder(
   };
 }
 
-function triggerBlobDownload(blob: Blob, filename: string): void {
+/**
+ * Télécharge séquentiellement les PDF individuels préfixés par le nom du salarié (utile si l'utilisateur choisit sans ZIP)
+ */
+export async function triggerStaggeredIndividualDownloads(
+  files: PackagedDocumentFile[],
+  employeeName: string
+): Promise<number> {
+  const safePrefix = sanitizeFolderSegment(employeeName, 'Salarie');
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    const cleanName = f.filename.replace(/^(\d+_)+/, '');
+    const order = String(i + 1).padStart(2, '0');
+    triggerBlobDownload(f.blob, `${safePrefix}_${order}_${cleanName}`);
+    if (i < files.length - 1) {
+      await new Promise((r) => setTimeout(r, 220));
+    }
+  }
+  return files.length;
+}
+
+export function triggerBlobDownload(blob: Blob, filename: string): void {
   if (typeof document === 'undefined') return;
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
+  a.rel = 'noopener';
+  a.style.display = 'none';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
+  // Délai long pour assurer la fin du téléchargement sur Safari iOS et Chrome Android
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
 }

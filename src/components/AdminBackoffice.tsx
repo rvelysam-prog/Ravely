@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { Suspense, lazy, useState, useEffect } from 'react';
 import {
   Users,
   UserPlus,
@@ -12,6 +12,7 @@ import {
   LogOut,
   CheckCircle2,
   ShieldAlert,
+  ShieldCheck,
   Upload,
   FileText,
   X,
@@ -91,21 +92,15 @@ import {
   setSavedCustomSignature
 } from '../services/departmentsAndEmailService';
 import { PanneauReglagesFichiersImportes } from './common/PanneauReglagesFichiersImportes';
-import { PromesseEmbaucheSection } from './PromesseEmbaucheSection';
-import { EmailLogsSection } from './EmailLogsSection';
 import { sendPromesseEmbaucheViaEmailJs } from '../services/emailjsService';
 import { EmailJsConfigModal } from './EmailJsConfigModal';
 import { Globe, CreditCard, Code, PhoneCall, Sparkles as SparklesIcon, Clock } from 'lucide-react';
-import { InfomaniakWebmailTab } from './admin/InfomaniakWebmailTab';
 import { EmailHtmlCodeGeneratorModal } from './admin/EmailHtmlCodeGeneratorModal';
 import { EmployeeBadgeGeneratorModal } from './admin/EmployeeBadgeGeneratorModal';
 import { CompanyContactSettingsModal } from './admin/CompanyContactSettingsModal';
 import { DocumentStudioModal } from './admin/DocumentStudioModal';
 import { JobOfferGeneratorModal } from './admin/JobOfferGeneratorModal';
-import { GenerationContratMasterModule } from './admin/GenerationContratMasterModule';
-import { PostulantNouveauMasterModule } from './admin/PostulantNouveauMasterModule';
 import { EmployeePromesseModal } from './admin/EmployeePromesseModal';
-import { BrouillonsTab } from './admin/BrouillonsTab';
 import { NouveauSalarieGenerateurModal } from './admin/NouveauSalarieGenerateurModal';
 import { PosteInputWithAnalyze } from './common/PosteInputWithAnalyze';
 import { searchOrRegisterPoste } from '../services/posteCatalogService';
@@ -116,6 +111,31 @@ import {
   AdminAuthSession,
   SiteContext
 } from '../services/multisiteService';
+
+const PromesseEmbaucheSection = lazy(() =>
+  import('./PromesseEmbaucheSection').then((m) => ({ default: m.PromesseEmbaucheSection }))
+);
+const PostulantNouveauMasterModule = lazy(() =>
+  import('./admin/PostulantNouveauMasterModule').then((m) => ({
+    default: m.PostulantNouveauMasterModule
+  }))
+);
+const BrouillonsTab = lazy(() =>
+  import('./admin/BrouillonsTab').then((m) => ({ default: m.BrouillonsTab }))
+);
+const EmailLogsSection = lazy(() =>
+  import('./EmailLogsSection').then((m) => ({ default: m.EmailLogsSection }))
+);
+const InfomaniakWebmailTab = lazy(() =>
+  import('./admin/InfomaniakWebmailTab').then((m) => ({ default: m.InfomaniakWebmailTab }))
+);
+
+const AdminModuleFallback: React.FC = () => (
+  <div className="ds-card p-8 space-y-4" role="status" aria-label="Chargement du module RH">
+    <div className="h-6 w-64 rounded-lg bg-surface-subtle animate-pulse" />
+    <div className="h-32 w-full rounded-xl bg-surface-subtle animate-pulse" />
+  </div>
+);
 
 type AdminTab =
   | 'employees'
@@ -1128,7 +1148,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
   if (!adminToken) {
     return (
       <div className="min-h-[80vh] flex items-center justify-center px-4 py-12">
-        <div className="max-w-md w-full bg-white rounded-2xl border border-slate-200 p-6 sm:p-10 shadow-sm">
+        <div className="max-w-md w-full ds-card p-6 sm:p-10 shadow-lg">
           <div className="flex items-center gap-3 mb-6">
             <BrandLogo
               customLogoUrl={settings.logo_url}
@@ -1136,24 +1156,37 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
               size="card"
             />
             <div>
-              <span className="text-xs font-mono text-slate-500">Administration RH (admin.html)</span>
-              <h1 className="font-display font-bold text-xl text-[#0B2545]">
+              <span className="text-xs font-mono text-ink-secondary">
+                Administration RH (admin.html)
+              </span>
+              <h1 className="font-display font-bold text-xl text-brand-navy">
                 Backoffice Direction
               </h1>
             </div>
           </div>
 
-          <p className="text-xs sm:text-sm text-slate-600 mb-5 leading-relaxed">
-            Entrez le mot de passe administrateur pour gérer les salariés, convertir les photos en Base64 (<code className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">employes.json</code>) et générer automatiquement les contrats PDF CDI/CDD avec <code className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">jsPDF</code>.
+          <p className="text-xs sm:text-sm text-ink-secondary mb-5 leading-relaxed">
+            Entrez le mot de passe administrateur pour gérer les salariés, convertir les photos en Base64 (
+            <code className="font-mono text-xs bg-surface-subtle px-1.5 py-0.5 rounded">
+              employes.json
+            </code>
+            ) et générer automatiquement les contrats PDF CDI/CDD avec{' '}
+            <code className="font-mono text-xs bg-surface-subtle px-1.5 py-0.5 rounded">
+              jsPDF
+            </code>
+            .
           </p>
 
           {loginError && (
-            <div className={`mb-4 p-3.5 rounded-xl border text-xs sm:text-sm flex items-start gap-2.5 ${
-              isForbiddenError
-                ? 'bg-red-50 border-red-300 text-red-900 shadow-xs'
-                : 'bg-red-50 border-red-200 text-red-800'
-            }`}>
-              <ShieldAlert className="w-5 h-5 shrink-0 mt-0.5 text-red-600" />
+            <div
+              role="alert"
+              className={`mb-4 p-3.5 rounded-xl border text-xs sm:text-sm flex items-start gap-2.5 ${
+                isForbiddenError
+                  ? 'bg-red-50 border-red-300 text-red-900 shadow-xs'
+                  : 'bg-red-50 border-red-200 text-red-800'
+              }`}
+            >
+              <ShieldAlert className="w-5 h-5 shrink-0 mt-0.5 text-status-danger" aria-hidden="true" />
               <div className="space-y-0.5">
                 {isForbiddenError && (
                   <span className="font-bold text-red-700 block uppercase tracking-wide text-[11px]">
@@ -1167,34 +1200,42 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
           <form onSubmit={handleAdminLogin} className="space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+              <label
+                htmlFor="admin-login-password"
+                className="block text-xs font-semibold text-ink-primary mb-1.5"
+              >
                 Mot de passe Administrateur
               </label>
               <div className="relative">
                 <input
+                  id="admin-login-password"
                   type={showLoginPass ? 'text' : 'password'}
                   required
                   value={loginPassword}
                   onChange={(e) => setLoginPassword(e.target.value)}
                   placeholder="••••••••••••"
-                  className="w-full min-h-[46px] pl-4 pr-12 py-2.5 rounded-xl border border-slate-300 text-sm focus:border-[#0B2545] focus:outline-none"
+                  className="ds-input pr-12"
                 />
                 <button
                   type="button"
                   onClick={() => setShowLoginPass((prev) => !prev)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 min-h-[38px] min-w-[38px] flex items-center justify-center text-slate-500 hover:text-slate-800"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 min-h-[42px] min-w-[42px] flex items-center justify-center text-ink-secondary hover:text-ink-primary cursor-pointer"
                   aria-label="Afficher ou masquer le mot de passe"
                 >
-                  {showLoginPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  {showLoginPass ? (
+                    <EyeOff className="w-4 h-4" aria-hidden="true" />
+                  ) : (
+                    <Eye className="w-4 h-4" aria-hidden="true" />
+                  )}
                 </button>
               </div>
             </div>
 
             <button
               type="submit"
-              className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-[#0B2545] text-white font-bold text-sm hover:bg-[#134074] transition-colors flex items-center justify-center gap-2"
+              className="ds-btn-base ds-btn-navy w-full min-h-[48px]"
             >
-              <Lock className="w-4 h-4 text-amber-400" />
+              <Lock className="w-4 h-4 text-brand-amber" aria-hidden="true" />
               <span>Déverrouiller l’Administration</span>
             </button>
           </form>
@@ -1202,7 +1243,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           <button
             type="button"
             onClick={onBackToSite}
-            className="mt-4 w-full min-h-[44px] text-xs font-medium text-slate-500 hover:text-slate-800"
+            className="mt-4 w-full min-h-[44px] text-xs font-medium text-ink-secondary hover:text-ink-primary cursor-pointer"
           >
             Retourner à l’accueil du site public
           </button>
@@ -1233,33 +1274,35 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
     .reduce((acc, e) => acc + Number(e.salaire || 0), 0);
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-8">
+    <div className="ds-container py-8 sm:py-10 space-y-6 sm:space-y-8">
       {/* Bandeau Supervision Super Admin RH */}
-      <div className="bg-gradient-to-r from-[#0B2545] via-[#134074] to-[#0B2545] text-white px-4 py-2.5 rounded-xl border border-amber-400/40 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-          <span className="text-amber-300 font-bold">SUPER ADMINISTRATEUR (RH) :</span>
-          <span className="text-slate-200">
-            Droit de regard et de modification total sur le site principal et le Secrétariat.
+      <div className="bg-gradient-to-r from-brand-navy via-brand-navy-mid to-brand-navy text-white px-4 py-3 rounded-xl border border-brand-gold/40 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+        <div className="flex items-center gap-2.5">
+          <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" aria-hidden="true" />
+          <span>
+            <strong className="text-amber-300">SUPER ADMINISTRATEUR (RH) :</strong>{' '}
+            <span className="text-slate-200">
+              Droit de regard et de modification total sur le site principal et le Secrétariat.
+            </span>
           </span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={() => onSwitchSite?.('secretariat')}
-            className="px-3 py-1 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs text-xs"
+            className="min-h-[38px] px-3.5 py-1.5 rounded-lg bg-brand-amber hover:bg-brand-amber-hover text-brand-navy-deep font-bold transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs text-xs"
             title="Consulter et superviser l'espace Secrétariat"
           >
-            <Building2 className="w-3.5 h-3.5" />
+            <Building2 className="w-3.5 h-3.5" aria-hidden="true" />
             <span>Superviser Espace Secrétariat</span>
           </button>
         </div>
       </div>
 
-      {/* Admin Top Header with Prominent "Exporter employes.json" Button */}
-      <div className="bg-[#0B2545] text-white rounded-2xl p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-4 border border-amber-400/30">
+      {/* Admin Top Header */}
+      <div className="bg-brand-navy text-white rounded-2xl p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-5 border border-brand-gold/30">
         <div className="space-y-1">
-          <div className="text-xs font-mono text-amber-400">
+          <div className="text-xs font-mono tabular-nums text-brand-amber">
             Administration Statique Netlify (admin.html) · NE: 799094917
           </div>
           <h1 className="font-display font-bold text-2xl sm:text-3xl text-white">
@@ -1271,46 +1314,46 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           <button
             type="button"
             onClick={() => switchAdminTab('job_offers')}
-            className="min-h-[44px] px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-xs sm:text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap shadow-sm cursor-pointer border border-amber-300"
-            title="Générer et télécharger les fiches d'offres d'emploi au format PDF A4 conforme Vitadis"
+            className="ds-btn-base ds-btn-primary text-xs sm:text-sm shadow-sm"
+            title="Générer et télécharger les fiches d'offres d'emploi au format PDF A4 conforme"
           >
-            <Briefcase className="w-4 h-4 text-slate-950" />
+            <Briefcase className="w-4 h-4" aria-hidden="true" />
             <span>Offres d&apos;Emploi (Fiches PDF)</span>
           </button>
 
           <button
             type="button"
             onClick={() => setIsCompanyContactModalOpen(true)}
-            className="min-h-[44px] px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors whitespace-nowrap shadow-sm cursor-pointer"
+            className="ds-btn-base bg-brand-blue hover:bg-[#0284c7] text-white text-xs sm:text-sm shadow-sm"
             title="Configurer les numéros de téléphone et emails de l'entreprise"
           >
-            <PhoneCall className="w-4 h-4 text-sky-200" />
+            <PhoneCall className="w-4 h-4 text-sky-200" aria-hidden="true" />
             <span>Coordonnées Entreprise</span>
           </button>
 
           <button
             type="button"
             onClick={() => setIsEmailJsModalOpen(true)}
-            className="min-h-[44px] px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors whitespace-nowrap shadow-sm cursor-pointer"
+            className="ds-btn-base bg-white/10 hover:bg-white/20 text-white text-xs sm:text-sm border border-white/15"
             title="Configurer les 3 clés EmailJS et tester l'envoi"
           >
-            <Mail className="w-4 h-4" />
-            <span>EmailJS Frontend (Config)</span>
+            <Mail className="w-4 h-4 text-brand-amber" aria-hidden="true" />
+            <span>EmailJS Frontend</span>
           </button>
 
           <button
             type="button"
             onClick={handleExportEmployesJson}
-            className="min-h-[44px] px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors whitespace-nowrap shadow-sm"
+            className="ds-btn-base bg-emerald-600 hover:bg-emerald-500 text-white text-xs sm:text-sm shadow-sm"
           >
-            <Download className="w-4 h-4" />
+            <Download className="w-4 h-4" aria-hidden="true" />
             <span>Exporter employes.json</span>
           </button>
 
           <button
             type="button"
             onClick={onBackToSite}
-            className="min-h-[44px] px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap"
+            className="ds-btn-base bg-white/10 hover:bg-white/20 text-white text-xs sm:text-sm"
           >
             Voir le site public
           </button>
@@ -1318,9 +1361,9 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
           <button
             type="button"
             onClick={onAdminLogout}
-            className="min-h-[44px] px-4 py-2 rounded-xl bg-amber-400 text-[#0B2545] hover:bg-amber-300 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors whitespace-nowrap"
+            className="ds-btn-base ds-btn-primary text-xs sm:text-sm"
           >
-            <LogOut className="w-4 h-4" />
+            <LogOut className="w-4 h-4" aria-hidden="true" />
             <span>Verrouiller</span>
           </button>
         </div>
@@ -1328,231 +1371,356 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
 
       {/* Key Metrics Bar */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white rounded-2xl border border-slate-200 p-5">
-          <span className="text-xs text-slate-500 block">Effectif Total</span>
-          <span className="font-mono tabular-nums text-2xl sm:text-3xl font-bold text-[#0B2545]">
+        <div className="ds-card p-5">
+          <span className="text-xs text-ink-secondary block">Effectif Total</span>
+          <span className="font-mono tabular-nums text-2xl sm:text-3xl font-bold text-brand-navy">
             {employees.length}
           </span>
-          <span className="text-xs text-slate-500 block mt-1">
+          <span className="text-xs text-ink-secondary tabular-nums block mt-1">
             {employees.filter((e) => e.is_active).length} actifs ·{' '}
             {employees.filter((e) => !e.is_active).length} désactivés
           </span>
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200 p-5">
-          <span className="text-xs text-slate-500 block">Prochain Matricule Auto</span>
-          <span className="font-mono tabular-nums text-xl sm:text-2xl font-bold text-amber-600 mt-0.5 block">
+        <div className="ds-card p-5">
+          <span className="text-xs text-ink-secondary block">Prochain Matricule Auto</span>
+          <span className="font-mono tabular-nums text-xl sm:text-2xl font-bold text-brand-amber-hover mt-0.5 block">
             {nextMatricule}
           </span>
-          <span className="text-xs text-slate-500 block mt-1">QR Code ?id={nextMatricule}</span>
+          <span className="text-xs text-ink-secondary font-mono block mt-1">
+            QR Code ?id={nextMatricule}
+          </span>
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200 p-5">
-          <span className="text-xs text-slate-500 block">Masse Salariale Active</span>
+        <div className="ds-card p-5">
+          <span className="text-xs text-ink-secondary block">Masse Salariale Active</span>
           <span className="font-mono tabular-nums text-xl sm:text-2xl font-bold text-emerald-700 mt-0.5 block">
             {new Intl.NumberFormat('fr-CA').format(totalPayroll)} CAD
           </span>
-          <span className="text-xs text-slate-500 block mt-1">Mensuel brut cumulé</span>
+          <span className="text-xs text-ink-secondary block mt-1">Mensuel brut cumulé</span>
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200 p-5">
-          <span className="text-xs text-slate-500 block">Contrats PDF &amp; Photos</span>
-          <span className="font-mono tabular-nums text-xl sm:text-2xl font-bold text-[#0B2545] mt-0.5 block">
+        <div className="ds-card p-5">
+          <span className="text-xs text-ink-secondary block">Contrats PDF &amp; Photos</span>
+          <span className="font-mono tabular-nums text-xl sm:text-2xl font-bold text-brand-navy mt-0.5 block">
             100% Client
           </span>
-          <span className="text-xs text-slate-500 block mt-1">jsPDF + Base64 local</span>
+          <span className="text-xs text-ink-secondary block mt-1">jsPDF + Base64 local</span>
         </div>
       </div>
 
-      {/* Navigation Tabs */}
-      <div className="flex flex-wrap items-center gap-2 bg-slate-200/70 p-1.5 rounded-2xl">
-        <button
-          type="button"
-          onClick={() => switchAdminTab('employees')}
-          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
-            activeTab === 'employees'
-              ? 'bg-[#0B2545] text-white shadow-sm'
-              : 'text-slate-700 hover:text-slate-950'
-          }`}
-        >
-          <Users className="w-4 h-4" />
-          <span>Salariés &amp; Contrats Auto CDI/CDD ({employees.length})</span>
-        </button>
+      {/* Navigation Tabs organisés par pôles fonctionnels */}
+      <nav
+        aria-label="Modules d'administration RH"
+        role="tablist"
+        className="ds-card p-3 sm:p-4 space-y-3"
+      >
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+          {/* Pôle 1 : Opérations RH & Dossiers */}
+          <div className="space-y-1.5">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-ink-muted px-1">
+              Opérations RH &amp; Dossiers
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'employees'}
+                onClick={() => switchAdminTab('employees')}
+                className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer ${
+                  activeTab === 'employees'
+                    ? 'bg-brand-navy text-white shadow-xs'
+                    : 'bg-surface-subtle text-ink-primary hover:bg-surface-border'
+                }`}
+              >
+                <Users className="w-4 h-4 shrink-0" aria-hidden="true" />
+                <span>Salariés &amp; Contrats ({employees.length})</span>
+              </button>
 
-        <button
-          type="button"
-          onClick={() => switchAdminTab('promesse')}
-          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
-            activeTab === 'promesse'
-              ? 'bg-[#0B2545] text-white shadow-sm'
-              : 'text-slate-700 hover:text-slate-950'
-          }`}
-        >
-          <FileText className="w-4 h-4 text-amber-500" />
-          <span>Générer promesse d&apos;embauche</span>
-        </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'promesse'}
+                onClick={() => switchAdminTab('promesse')}
+                className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer ${
+                  activeTab === 'promesse'
+                    ? 'bg-brand-navy text-white shadow-xs'
+                    : 'bg-surface-subtle text-ink-primary hover:bg-surface-border'
+                }`}
+              >
+                <FileText className="w-4 h-4 text-brand-amber shrink-0" aria-hidden="true" />
+                <span>Promesse d&apos;embauche</span>
+              </button>
 
-        <button
-          type="button"
-          onClick={() => switchAdminTab('job_offers')}
-          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
-            activeTab === 'job_offers'
-              ? 'bg-[#0B2545] text-white shadow-sm ring-1 ring-amber-400/50'
-              : 'text-slate-700 hover:text-slate-950'
-          }`}
-        >
-          <Sparkles className="w-4 h-4 text-amber-400" />
-          <span>POSTULANT NOUVEAU</span>
-          <span className="text-[10px] font-bold bg-amber-400 text-slate-950 px-1.5 py-0.5 rounded-full">
-            Maître
-          </span>
-        </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'job_offers'}
+                onClick={() => switchAdminTab('job_offers')}
+                className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer ${
+                  activeTab === 'job_offers'
+                    ? 'bg-brand-navy text-white shadow-xs ring-1 ring-brand-amber/60'
+                    : 'bg-surface-subtle text-ink-primary hover:bg-surface-border'
+                }`}
+              >
+                <Sparkles className="w-4 h-4 text-brand-amber shrink-0" aria-hidden="true" />
+                <span>POSTULANT NOUVEAU</span>
+                <span className="text-[10px] font-mono uppercase text-brand-gold font-bold">
+                  · Maître
+                </span>
+              </button>
 
-        <button
-          type="button"
-          onClick={() => switchAdminTab('drafts')}
-          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
-            activeTab === 'drafts'
-              ? 'bg-[#0B2545] text-white shadow-sm ring-1 ring-amber-400/50'
-              : 'text-slate-700 hover:text-slate-950'
-          }`}
-        >
-          <Clock className="w-4 h-4 text-amber-500" />
-          <span>Brouillons &amp; Travaux en Attente</span>
-        </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'drafts'}
+                onClick={() => switchAdminTab('drafts')}
+                className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer ${
+                  activeTab === 'drafts'
+                    ? 'bg-brand-navy text-white shadow-xs'
+                    : 'bg-surface-subtle text-ink-primary hover:bg-surface-border'
+                }`}
+              >
+                <Clock className="w-4 h-4 text-brand-amber shrink-0" aria-hidden="true" />
+                <span>Brouillons</span>
+              </button>
+            </div>
+          </div>
 
-        <button
-          type="button"
-          onClick={() => switchAdminTab('mail_logs')}
-          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
-            activeTab === 'mail_logs'
-              ? 'bg-[#0B2545] text-white shadow-sm'
-              : 'text-slate-700 hover:text-slate-950'
-          }`}
-        >
-          <Mail className="w-4 h-4 text-emerald-500" />
-          <span>Logs emails (Collection mail)</span>
-        </button>
+          {/* Pôle 2 : Communication & Messagerie */}
+          <div className="space-y-1.5">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-ink-muted px-1">
+              Communication &amp; Messagerie
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'mail_logs'}
+                onClick={() => switchAdminTab('mail_logs')}
+                className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer ${
+                  activeTab === 'mail_logs'
+                    ? 'bg-brand-navy text-white shadow-xs'
+                    : 'bg-surface-subtle text-ink-primary hover:bg-surface-border'
+                }`}
+              >
+                <Mail className="w-4 h-4 text-status-success shrink-0" aria-hidden="true" />
+                <span>Logs emails</span>
+              </button>
 
-        <button
-          type="button"
-          onClick={() => switchAdminTab('webmail')}
-          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
-            activeTab === 'webmail'
-              ? 'bg-[#0B2545] text-white shadow-sm'
-              : 'text-slate-700 hover:text-slate-950'
-          }`}
-        >
-          <Globe className="w-4 h-4 text-sky-400" />
-          <span>Navigateur &amp; Messagerie Infomaniak (VPN)</span>
-        </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'webmail'}
+                onClick={() => switchAdminTab('webmail')}
+                className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer ${
+                  activeTab === 'webmail'
+                    ? 'bg-brand-navy text-white shadow-xs'
+                    : 'bg-surface-subtle text-ink-primary hover:bg-surface-border'
+                }`}
+              >
+                <Globe className="w-4 h-4 text-brand-blue shrink-0" aria-hidden="true" />
+                <span>Infomaniak Webmail</span>
+              </button>
 
-        <button
-          type="button"
-          onClick={() => switchAdminTab('badges')}
-          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
-            activeTab === 'badges'
-              ? 'bg-[#0B2545] text-white shadow-sm'
-              : 'text-slate-700 hover:text-slate-950'
-          }`}
-        >
-          <CreditCard className="w-4 h-4 text-amber-400" />
-          <span>Cartes Professionnelles</span>
-        </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'email_code'}
+                onClick={() => switchAdminTab('email_code')}
+                className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer ${
+                  activeTab === 'email_code'
+                    ? 'bg-brand-navy text-white shadow-xs'
+                    : 'bg-surface-subtle text-ink-primary hover:bg-surface-border'
+                }`}
+              >
+                <Code className="w-4 h-4 text-emerald-600 shrink-0" aria-hidden="true" />
+                <span>Code Mail (HTML)</span>
+              </button>
 
-        <button
-          type="button"
-          onClick={() => switchAdminTab('email_code')}
-          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
-            activeTab === 'email_code'
-              ? 'bg-[#0B2545] text-white shadow-sm'
-              : 'text-slate-700 hover:text-slate-950'
-          }`}
-        >
-          <Code className="w-4 h-4 text-emerald-400" />
-          <span>Générateur Code Mail (HTML)</span>
-        </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'messages'}
+                onClick={() => switchAdminTab('messages')}
+                className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer ${
+                  activeTab === 'messages'
+                    ? 'bg-brand-navy text-white shadow-xs'
+                    : 'bg-surface-subtle text-ink-primary hover:bg-surface-border'
+                }`}
+              >
+                <Mail className="w-4 h-4 shrink-0" aria-hidden="true" />
+                <span>Demandes Contact ({messages.length})</span>
+              </button>
+            </div>
+          </div>
 
-        <button
-          type="button"
-          onClick={() => switchAdminTab('json')}
-          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
-            activeTab === 'json'
-              ? 'bg-[#0B2545] text-white shadow-sm'
-              : 'text-slate-700 hover:text-slate-950'
-          }`}
-        >
-          <FileJson className="w-4 h-4" />
-          <span>Fichier employes.json (Champ &quot;photo&quot; Base64)</span>
-        </button>
+          {/* Pôle 3 : Outils & Configuration */}
+          <div className="space-y-1.5">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-ink-muted px-1">
+              Outils &amp; Configuration
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'badges'}
+                onClick={() => switchAdminTab('badges')}
+                className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer ${
+                  activeTab === 'badges'
+                    ? 'bg-brand-navy text-white shadow-xs'
+                    : 'bg-surface-subtle text-ink-primary hover:bg-surface-border'
+                }`}
+              >
+                <CreditCard className="w-4 h-4 text-brand-amber shrink-0" aria-hidden="true" />
+                <span>Cartes Professionnelles</span>
+              </button>
 
-        <button
-          type="button"
-          onClick={() => switchAdminTab('cms')}
-          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
-            activeTab === 'cms'
-              ? 'bg-[#0B2545] text-white shadow-sm'
-              : 'text-slate-700 hover:text-slate-950'
-          }`}
-        >
-          <Settings className="w-4 h-4" />
-          <span>Modifier le Site &amp; Logo</span>
-        </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'json'}
+                onClick={() => switchAdminTab('json')}
+                className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer ${
+                  activeTab === 'json'
+                    ? 'bg-brand-navy text-white shadow-xs'
+                    : 'bg-surface-subtle text-ink-primary hover:bg-surface-border'
+                }`}
+              >
+                <FileJson className="w-4 h-4 shrink-0" aria-hidden="true" />
+                <span>employes.json (Base64)</span>
+              </button>
 
-        <button
-          type="button"
-          onClick={() => switchAdminTab('messages')}
-          className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
-            activeTab === 'messages'
-              ? 'bg-[#0B2545] text-white shadow-sm'
-              : 'text-slate-700 hover:text-slate-950'
-          }`}
-        >
-          <Mail className="w-4 h-4" />
-          <span>Demandes Contact ({messages.length})</span>
-        </button>
-      </div>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'cms'}
+                onClick={() => switchAdminTab('cms')}
+                className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer ${
+                  activeTab === 'cms'
+                    ? 'bg-brand-navy text-white shadow-xs'
+                    : 'bg-surface-subtle text-ink-primary hover:bg-surface-border'
+                }`}
+              >
+                <Settings className="w-4 h-4 shrink-0" aria-hidden="true" />
+                <span>Modifier le Site &amp; Logo</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </nav>
 
       {activeTab === 'promesse' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+          <div className="flex items-center justify-between pb-2 border-b border-surface-border">
             <button
               type="button"
               onClick={() => switchAdminTab('employees')}
-              className="min-h-[40px] px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors cursor-pointer"
+              className="ds-btn-base ds-btn-secondary text-xs sm:text-sm"
             >
-              <ArrowLeft className="w-4 h-4 text-amber-500" />
-              <span>← Retour au tableau de bord</span>
+              <ArrowLeft className="w-4 h-4 text-brand-amber" aria-hidden="true" />
+              <span>Retour au tableau de bord</span>
             </button>
           </div>
-          <PromesseEmbaucheSection
-            employees={employees}
-            onEmployeesUpdated={(updatedList) => {
-              setEmployees(updatedList);
-              setNextMatricule(getNextMatricule(updatedList));
-            }}
-          />
+          <Suspense fallback={<AdminModuleFallback />}>
+            <PromesseEmbaucheSection
+              employees={employees}
+              onEmployeesUpdated={(updatedList) => {
+                setEmployees(updatedList);
+                setNextMatricule(getNextMatricule(updatedList));
+              }}
+            />
+          </Suspense>
         </div>
       )}
 
       {activeTab === 'job_offers' && (
-        <PostulantNouveauMasterModule
-          settings={settings}
-          employees={employees}
-          onOpenInWebmail={(content) => {
-            setWebmailInitialContent({
-              htmlBody: content,
-              subject: 'Dossier Postulant & Documents Officiels — Atlantic Transport'
-            });
-            switchAdminTab('webmail');
-          }}
-          onEmployeeCreated={(newEmp) => {
-            const updated = [newEmp, ...employees];
-            setEmployees(updated);
-            setNextMatricule(getNextMatricule(updated));
-          }}
-          onBack={() => switchAdminTab('employees')}
-        />
+        <Suspense fallback={<AdminModuleFallback />}>
+          <PostulantNouveauMasterModule
+            settings={settings}
+            employees={employees}
+            onOpenInWebmail={(content) => {
+              setWebmailInitialContent({
+                htmlBody: content,
+                subject: 'Dossier Postulant & Documents Officiels — Atlantic Transport'
+              });
+              switchAdminTab('webmail');
+            }}
+            onEmployeeCreated={async (newEmp, options) => {
+              try {
+                const existingMatch = employees.find(
+                  (e) =>
+                    e.matricule.toUpperCase() === (newEmp.matricule || '').toUpperCase() ||
+                    (newEmp.firestore_id && e.firestore_id === newEmp.firestore_id)
+                );
+
+                const resolvedMatricule = existingMatch
+                  ? existingMatch.matricule
+                  : await generateUniqueMatriculeInFirestore(newEmp.matricule || nextMatricule, employees);
+
+                const rawPhoto =
+                  newEmp.photo && newEmp.photo.trim().length > 0
+                    ? newEmp.photo
+                    : existingMatch?.photo ||
+                      generateDefaultAvatarSvgDataUri(newEmp.prenom, newEmp.nom, resolvedMatricule);
+                const safePhoto = await compressPhotoToSafeBase64(rawPhoto);
+
+                const recordToPersist: Employee = {
+                  ...newEmp,
+                  id:
+                    existingMatch?.id ||
+                    (employees.length > 0
+                      ? Math.max(...employees.map((i) => Number(i.id) || 0)) + 1
+                      : 1),
+                  firestore_id: existingMatch?.firestore_id || newEmp.firestore_id,
+                  matricule: resolvedMatricule,
+                  password: existingMatch?.password || newEmp.password || 'Employe@2026!',
+                  photo: safePhoto,
+                  photo_url: safePhoto,
+                  has_custom_pdf: true,
+                  access_token_created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString()
+                };
+                recordToPersist.access_token = createPortableEmployeeToken(recordToPersist);
+
+                const { employee: savedEmp } = await writeEmployeeToFirestore(
+                  recordToPersist,
+                  Boolean(existingMatch)
+                );
+
+                const freshEmployees = await fetchEmployeesFromFirestore().catch(() => null);
+                const finalList =
+                  freshEmployees && freshEmployees.length > 0
+                    ? freshEmployees
+                    : [
+                        savedEmp,
+                        ...employees.filter(
+                          (e) => e.matricule.toUpperCase() !== savedEmp.matricule.toUpperCase()
+                        )
+                      ];
+
+                saveEmployees(finalList);
+                setEmployees(finalList);
+                setNextMatricule(getNextMatricule(finalList));
+                setFeedback({
+                  type: 'success',
+                  text: `Candidat ${savedEmp.nom_complet} (${savedEmp.matricule}) enregistré dans « Salariés & Contrats (${finalList.length}) ».`
+                });
+
+                if (options?.navigateToEmployeesTab) {
+                  switchAdminTab('employees');
+                }
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : 'Erreur enregistrement salarié';
+                setFeedback({
+                  type: 'error',
+                  text: `Impossible d'enregistrer ${newEmp.nom_complet} dans Salariés & Contrats : ${msg}`
+                });
+              }
+            }}
+            onBack={() => switchAdminTab('employees')}
+          />
+        </Suspense>
       )}
 
       {activeTab === 'drafts' && (
@@ -1567,16 +1735,18 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
               <span>← Retour au tableau de bord</span>
             </button>
           </div>
-          <BrouillonsTab
-            onResumeDraft={(draft) => {
-              setGenerateurModalEmployee({
-                nom_complet: draft.nomCandidat || '',
-                poste: draft.poste || '',
-                departement: draft.departement || ''
-              });
-              setIsGenerateurModalOpen(true);
-            }}
-          />
+          <Suspense fallback={<AdminModuleFallback />}>
+            <BrouillonsTab
+              onResumeDraft={(draft) => {
+                setGenerateurModalEmployee({
+                  nom_complet: draft.nomCandidat || '',
+                  poste: draft.poste || '',
+                  departement: draft.departement || ''
+                });
+                setIsGenerateurModalOpen(true);
+              }}
+            />
+          </Suspense>
         </div>
       )}
 
@@ -1592,7 +1762,9 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
               <span>← Retour au tableau de bord</span>
             </button>
           </div>
-          <EmailLogsSection />
+          <Suspense fallback={<AdminModuleFallback />}>
+            <EmailLogsSection />
+          </Suspense>
         </div>
       )}
 
@@ -1608,7 +1780,9 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({
               <span>← Retour au tableau de bord</span>
             </button>
           </div>
-          <InfomaniakWebmailTab initialEmailContent={webmailInitialContent} />
+          <Suspense fallback={<AdminModuleFallback />}>
+            <InfomaniakWebmailTab initialEmailContent={webmailInitialContent} />
+          </Suspense>
         </div>
       )}
 

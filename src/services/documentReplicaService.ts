@@ -1,6 +1,8 @@
 /**
- * Moteur professionnel de reproduction fidèle multi-étapes, édition interactive style Canva,
- * hébergement HTTPS d'actifs visuels, compilation Email HTML responsive avec audit qualité,
+ * Moteur professionnel de reproduction fidèle hybride multi-étapes,
+ * édition interactive style Canva, comparateur visuel de fidélité,
+ * hébergement HTTPS d'actifs visuels avec vérification réelle,
+ * compilation Email HTML multi-clients avec audit de compatibilité 10 points,
  * et exportation fidèle PDF + Word (.docx réellement éditable) + HTML.
  */
 
@@ -26,6 +28,7 @@ import {
 import { getStorage, ref as storageRef, uploadString, getDownloadURL } from 'firebase/storage';
 import { app } from '../firebase';
 import { LayoutTargetDocKey } from './layoutImitationService';
+import { parseDocxDocument, parseLegacyDocDocument } from './replicaWordParser';
 
 if (typeof window !== 'undefined' && pdfjsLib.GlobalWorkerOptions) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${
@@ -56,9 +59,12 @@ export interface ReplicaAsset {
   hostingStatus: 'local' | 'uploading' | 'hosted' | 'error';
   hostingProvider?: HostingProvider;
   hostingError?: string;
+  httpsVerified?: boolean;
+  httpsVerifyDetail?: string;
   widthPx: number;
   heightPx: number;
   contentHash: string;
+  sourceEngine?: 'crop' | 'pdf_image' | 'word_media' | 'upload';
 }
 
 export interface ReplicaElementBase {
@@ -132,11 +138,21 @@ export type ReplicaElement =
   | ReplicaTableElement
   | ReplicaShapeElement;
 
+export interface ReplicaExtractionReport {
+  textBlocksCount: number;
+  tableCount: number;
+  shapeCount: number;
+  visualCount: number;
+  ocrUsed: boolean;
+  marginsDetectedMm: { top: number; right: number; bottom: number; left: number };
+  engineNotes: string[];
+}
+
 export interface ReplicaProject {
   id: string;
   docKey: LayoutTargetDocKey;
   sourceFileName: string;
-  sourceFileType: 'pdf' | 'image';
+  sourceFileType: 'pdf' | 'image' | 'docx' | 'doc';
   analyzedAt: string;
   pageFormat: 'a4' | 'letter';
   orientation: 'portrait' | 'landscape';
@@ -148,6 +164,8 @@ export interface ReplicaProject {
   pageCount: number;
   assets: ReplicaAsset[];
   elements: ReplicaElement[];
+  sourcePageSnapshots?: string[];
+  extractionReport?: ReplicaExtractionReport;
   emailSubject: string;
   emailMaxWidthPx: number;
   updatedAt: string;
@@ -188,9 +206,9 @@ export const HOSTING_PROVIDER_DOCS: Record<
   firebase_storage: {
     label: 'Firebase Storage du Projet',
     quotaInfo:
-      'Quota Spark/Blaze du projet Firebase (5 Go stockage / 1 Go/jour sur Spark gratuit) selon règles Storage actives.',
+      'Quota Spark/Blaze du projet Firebase (5 Go stockage / 1 Go/jour sur Spark gratuit) selon règles Storage et CORS actifs.',
     needsCredentials: false,
-    setupHint: 'Utilise le bucket configuré sur le projet Firebase si Cloud Storage et ses règles sont activés.'
+    setupHint: 'Utilise le bucket configuré sur le projet Firebase si Cloud Storage et ses règles publiques sont activés.'
   }
 };
 
@@ -209,6 +227,25 @@ export interface EmailQualityAuditResult {
   missingTextsCount: number;
   totalTextsChecked: number;
   totalImagesChecked: number;
+  htmlSizeKb: number;
+}
+
+export interface VisualFidelityIssue {
+  severity: 'info' | 'warn' | 'error';
+  code: 'distorted_image' | 'out_of_bounds' | 'missing_snapshot' | 'uncovered_zone' | 'unhosted_visual';
+  message: string;
+  elementId?: string;
+}
+
+export interface VisualFidelityReport {
+  hasSourceSnapshot: boolean;
+  dimensionsOk: boolean;
+  distortedImagesCount: number;
+  outOfBoundsCount: number;
+  coveragePct: number | null;
+  uncoveredZonesCount: number;
+  fidelityScorePct: number;
+  issues: VisualFidelityIssue[];
 }
 
 // ============================================================================
@@ -341,7 +378,7 @@ export function computeFastHash(input: string): string {
 }
 
 // ============================================================================
-// OUTILS COULEURS & PIXELS POUR ANALYSE FIDÈLE
+// OUTILS COULEURS, GÉOMÉTRIE & RATIO D'ASPECT STRICT
 // ============================================================================
 
 function rgbToHex(r: number, g: number, b: number): string {
@@ -366,6 +403,26 @@ function hexToRgb(hex: string): [number, number, number] {
   ];
 }
 
+function colorDist(r1: number, g1: number, b1: number, r2: number, g2: number, b2: number): number {
+  return Math.sqrt((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2);
+}
+
+/**
+ * Calcule la hauteur en % sur la page garantissant un ratio 100% fidèle à l'image naturelle.
+ */
+export function computeAspectLockedHeightPct(
+  wPct: number,
+  assetWidthPx: number,
+  assetHeightPx: number,
+  pageWidthMm: number,
+  pageHeightMm: number
+): number {
+  if (!assetWidthPx || !assetHeightPx || !pageWidthMm || !pageHeightMm) return Math.max(2, wPct * 0.5);
+  const wMm = (wPct / 100) * pageWidthMm;
+  const hMm = wMm * (assetHeightPx / assetWidthPx);
+  return Math.max(1.2, Math.min(85, Math.round(((hMm / pageHeightMm) * 100) * 10) / 10));
+}
+
 function sampleRegionColors(
   imgData: ImageData,
   cw: number,
@@ -373,17 +430,19 @@ function sampleRegionColors(
   xPct: number,
   yPct: number,
   wPct: number,
-  hPct: number
+  hPct: number,
+  pageBgHex = '#FFFFFF'
 ): { inkHex: string; bgHex: string; inkRatio: number } {
   const x0 = Math.max(0, Math.floor((xPct / 100) * cw));
   const y0 = Math.max(0, Math.floor((yPct / 100) * ch));
   const x1 = Math.min(cw - 1, Math.ceil(((xPct + wPct) / 100) * cw));
   const y1 = Math.min(ch - 1, Math.ceil(((yPct + hPct) / 100) * ch));
+  const [pBgR, pBgG, pBgB] = hexToRgb(pageBgHex);
 
   const data = imgData.data;
-  let bgR = 255,
-    bgG = 255,
-    bgB = 255,
+  let bgR = 0,
+    bgG = 0,
+    bgB = 0,
     bgCount = 0;
   let inkR = 0,
     inkG = 0,
@@ -399,28 +458,39 @@ function sampleRegionColors(
       const g = data[idx + 1];
       const b = data[idx + 2];
       const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-      if (lum > 228) {
-        bgR += r;
-        bgG += g;
-        bgB += b;
-        bgCount++;
-      } else {
+      const maxC = Math.max(r, g, b);
+      const minC = Math.min(r, g, b);
+      const sat = maxC > 0 ? (maxC - minC) / maxC : 0;
+
+      if (lum < 190 || (lum < 215 && sat > 0.35)) {
         inkR += r;
         inkG += g;
         inkB += b;
         inkCount++;
+      } else {
+        bgR += r;
+        bgG += g;
+        bgB += b;
+        bgCount++;
       }
     }
   }
 
   const inkHex = inkCount > 0 ? rgbToHex(inkR / inkCount, inkG / inkCount, inkB / inkCount) : '#0F172A';
-  const bgHex =
-    bgCount > 0
-      ? rgbToHex(bgR / bgCount, bgG / bgCount, bgB / bgCount)
-      : 'transparent';
+  let bgHex = 'transparent';
+  if (bgCount > 4) {
+    const avgR = bgR / bgCount;
+    const avgG = bgG / bgCount;
+    const avgB = bgB / bgCount;
+    // N'attribuer un fond coloré que s'il diffère nettement du fond papier blanc/uniforme (ex: pastille bleue/verte)
+    if (colorDist(avgR, avgG, avgB, pBgR, pBgG, pBgB) > 22 && bgCount / Math.max(1, total) > 0.4) {
+      bgHex = rgbToHex(avgR, avgG, avgB);
+    }
+  }
+
   return {
     inkHex,
-    bgHex: bgHex === '#FFFFFF' || bgHex === '#FEFEFE' || bgHex === '#FDFDFD' ? 'transparent' : bgHex,
+    bgHex,
     inkRatio: total > 0 ? inkCount / total : 0
   };
 }
@@ -433,10 +503,9 @@ function detectPageBackgroundAndPalette(
   const data = imgData.data;
   const colorBuckets = new Map<string, { count: number; r: number; g: number; b: number; sat: number }>();
 
-  // Échantillonner bord pour la couleur de page
-  let bgR = 255,
-    bgG = 255,
-    bgB = 255,
+  let bgR = 0,
+    bgG = 0,
+    bgB = 0,
     bgSamples = 0;
   for (let x = 4; x < cw - 4; x += 8) {
     for (const y of [4, ch - 5]) {
@@ -492,7 +561,7 @@ function detectPageBackgroundAndPalette(
 }
 
 // ============================================================================
-// DÉTECTION DE TABLEAUX & EXTRACTION DE COMPOSANTS VISUELS RÉELS (SANS IA)
+// DÉTECTION DE TABLEAUX, LIGNES SÉPARATRICES, BANDES COLORÉES & VISUELS RÉELS
 // ============================================================================
 
 interface DetectedGridBox {
@@ -504,6 +573,17 @@ interface DetectedGridBox {
   colLeftsPct: number[];
 }
 
+interface DetectedShapeBox {
+  shapeType: 'rect' | 'line_h' | 'line_v';
+  xPct: number;
+  yPct: number;
+  wPct: number;
+  hPct: number;
+  fillColor: string;
+  strokeColor: string;
+  strokeWidthPx: number;
+}
+
 function detectRuledTables(imgData: ImageData, cw: number, ch: number): DetectedGridBox[] {
   const data = imgData.data;
   const isInk = (x: number, y: number): boolean => {
@@ -511,14 +591,13 @@ function detectRuledTables(imgData: ImageData, cw: number, ch: number): Detected
     return 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2] < 195;
   };
 
-  // Trouver lignes horizontales longues (>= 30% de la largeur)
   const hLines: { y: number; xStart: number; xEnd: number }[] = [];
-  for (let y = Math.round(ch * 0.08); y < Math.round(ch * 0.92); y += 2) {
+  for (let y = Math.round(ch * 0.06); y < Math.round(ch * 0.94); y += 2) {
     let run = 0;
     let bestRun = 0;
     let bestStart = 0;
     let curStart = 0;
-    for (let x = Math.round(cw * 0.04); x < Math.round(cw * 0.96); x += 2) {
+    for (let x = Math.round(cw * 0.03); x < Math.round(cw * 0.97); x += 2) {
       if (isInk(x, y) || (y + 1 < ch && isInk(x, y + 1))) {
         if (run === 0) curStart = x;
         run += 2;
@@ -530,7 +609,7 @@ function detectRuledTables(imgData: ImageData, cw: number, ch: number): Detected
         run = 0;
       }
     }
-    if (bestRun >= cw * 0.3) {
+    if (bestRun >= cw * 0.28) {
       if (hLines.length === 0 || y - hLines[hLines.length - 1].y > 10) {
         hLines.push({ y, xStart: bestStart, xEnd: bestStart + bestRun });
       }
@@ -539,7 +618,6 @@ function detectRuledTables(imgData: ImageData, cw: number, ch: number): Detected
 
   if (hLines.length < 3) return [];
 
-  // Regrouper les lignes horizontales verticalement proches en blocs de tableau
   const groups: typeof hLines[] = [];
   let curGroup: typeof hLines = [hLines[0]];
   for (let i = 1; i < hLines.length; i++) {
@@ -559,9 +637,8 @@ function detectRuledTables(imgData: ImageData, cw: number, ch: number): Detected
     const minX = Math.min(...grp.map((l) => l.xStart));
     const maxX = Math.max(...grp.map((l) => l.xEnd));
     const spanH = botY - topY;
-    if (spanH < ch * 0.05) continue;
+    if (spanH < ch * 0.045) continue;
 
-    // Chercher lignes verticales entre topY et botY
     const vLinesX: number[] = [minX];
     for (let x = minX + 16; x < maxX - 16; x += 3) {
       let vInk = 0;
@@ -570,7 +647,7 @@ function detectRuledTables(imgData: ImageData, cw: number, ch: number): Detected
         vTotal++;
         if (isInk(x, y) || (x + 1 < cw && isInk(x + 1, y))) vInk++;
       }
-      if (vTotal > 0 && vInk / vTotal >= 0.65) {
+      if (vTotal > 0 && vInk / vTotal >= 0.62) {
         if (x - vLinesX[vLinesX.length - 1] > cw * 0.05) {
           vLinesX.push(x);
         }
@@ -592,6 +669,109 @@ function detectRuledTables(imgData: ImageData, cw: number, ch: number): Detected
   return tables;
 }
 
+/**
+ * Détecte les lignes horizontales décoratives isolées (hors tableaux) et bandeaux pleine largeur
+ * afin de les convertir en formes vectorielles nettes plutôt qu'en rognages bitmap.
+ */
+function detectStandaloneShapesAndRules(
+  imgData: ImageData,
+  cw: number,
+  ch: number,
+  tableBoxes: DetectedGridBox[],
+  textBoxes: BBoxPct[]
+): DetectedShapeBox[] {
+  const data = imgData.data;
+  const shapes: DetectedShapeBox[] = [];
+
+  const inTable = (xPct: number, yPct: number) =>
+    tableBoxes.some(
+      (t) =>
+        xPct >= t.xPct - 1 &&
+        xPct <= t.xPct + t.wPct + 1 &&
+        yPct >= t.yPct - 1 &&
+        yPct <= t.yPct + t.hPct + 1
+    );
+
+  const overlapsText = (xPct: number, yPct: number) =>
+    textBoxes.some(
+      (b) =>
+        xPct >= b.xPct - 0.4 &&
+        xPct <= b.xPct + b.wPct + 0.4 &&
+        yPct >= b.yPct - 0.3 &&
+        yPct <= b.yPct + b.hPct + 0.3
+    );
+
+  for (let y = Math.round(ch * 0.04); y < Math.round(ch * 0.96); y += 3) {
+    const yPct = (y / ch) * 100;
+    let run = 0;
+    let bestRun = 0;
+    let bestStart = 0;
+    let curStart = 0;
+    let rSum = 0,
+      gSum = 0,
+      bSum = 0,
+      cSum = 0;
+
+    for (let x = Math.round(cw * 0.03); x < Math.round(cw * 0.97); x += 3) {
+      const idx = (y * cw + x) * 4;
+      const r = data[idx],
+        g = data[idx + 1],
+        b = data[idx + 2];
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      const isLinePixel = lum < 205;
+      if (isLinePixel) {
+        if (run === 0) curStart = x;
+        run += 3;
+        rSum += r;
+        gSum += g;
+        bSum += b;
+        cSum++;
+        if (run > bestRun) {
+          bestRun = run;
+          bestStart = curStart;
+        }
+      } else {
+        run = 0;
+      }
+    }
+
+    if (bestRun >= cw * 0.38) {
+      const xPct = (bestStart / cw) * 100;
+      const wPct = (bestRun / cw) * 100;
+      const midX = xPct + wPct / 2;
+      if (inTable(midX, yPct) || overlapsText(midX, yPct)) continue;
+
+      // Vérifier qu'il s'agit bien d'une ligne fine (épaisseur verticale <= 1.2% de hauteur)
+      let thicknessPx = 0;
+      for (let dy = -3; dy <= 10; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= ch) continue;
+        const idx = (yy * cw + Math.round(bestStart + bestRun * 0.5)) * 4;
+        const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+        if (lum < 205) thicknessPx++;
+      }
+
+      if (thicknessPx >= 1 && thicknessPx <= 9) {
+        const lastShape = shapes[shapes.length - 1];
+        if (lastShape && Math.abs(lastShape.yPct - yPct) < 1.2) continue;
+        const hex = cSum > 0 ? rgbToHex(rSum / cSum, gSum / cSum, bSum / cSum) : '#0B2545';
+        shapes.push({
+          shapeType: 'line_h',
+          xPct: Math.round(xPct * 10) / 10,
+          yPct: Math.round(yPct * 10) / 10,
+          wPct: Math.round(wPct * 10) / 10,
+          hPct: 0.4,
+          fillColor: hex,
+          strokeColor: hex,
+          strokeWidthPx: Math.max(1, Math.min(4, Math.round(thicknessPx / 2)))
+        });
+      }
+    }
+  }
+
+  return shapes.slice(0, 14);
+}
+
 interface BBoxPct {
   xPct: number;
   yPct: number;
@@ -600,14 +780,142 @@ interface BBoxPct {
 }
 
 /**
+ * Flood-fill depuis les 4 bords extérieurs uniquement : rend transparent le fond papier extérieur
+ * sans jamais trouer les lettres blanches ou détails internes d'un logo foncé ou d'un QR code !
+ */
+function stripOuterPaperFloodFill(
+  cropCanvas: HTMLCanvasElement,
+  pageBgHex: string
+): void {
+  const ctx = cropCanvas.getContext('2d');
+  if (!ctx) return;
+  const w = cropCanvas.width;
+  const h = cropCanvas.height;
+  if (w < 4 || h < 4) return;
+
+  const img = ctx.getImageData(0, 0, w, h);
+  const px = img.data;
+  const [bgR, bgG, bgB] = hexToRgb(pageBgHex);
+
+  const isBackgroundCandidate = (idx4: number): boolean => {
+    const r = px[idx4],
+      g = px[idx4 + 1],
+      b = px[idx4 + 2],
+      a = px[idx4 + 3];
+    if (a < 20) return true;
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    const dist = colorDist(r, g, b, bgR, bgG, bgB);
+    return lum > 236 || dist < 24;
+  };
+
+  // Vérifier d'abord que les coins contiennent effectivement du papier de fond (sinon c'est une photo pleine)
+  let cornerBgHits = 0;
+  for (const [cx, cy] of [
+    [0, 0],
+    [w - 1, 0],
+    [0, h - 1],
+    [w - 1, h - 1]
+  ]) {
+    if (isBackgroundCandidate((cy * w + cx) * 4)) cornerBgHits++;
+  }
+  if (cornerBgHits < 2) return;
+
+  const visited = new Uint8Array(w * h);
+  const stack: number[] = [];
+
+  for (let x = 0; x < w; x++) {
+    stack.push(x);
+    stack.push((h - 1) * w + x);
+  }
+  for (let y = 1; y < h - 1; y++) {
+    stack.push(y * w);
+    stack.push(y * w + (w - 1));
+  }
+
+  while (stack.length > 0) {
+    const pos = stack.pop()!;
+    if (visited[pos]) continue;
+    visited[pos] = 1;
+    const idx4 = pos * 4;
+    if (!isBackgroundCandidate(idx4)) continue;
+    px[idx4 + 3] = 0;
+
+    const x = pos % w;
+    const y = (pos - x) / w;
+    if (x > 0 && !visited[pos - 1]) stack.push(pos - 1);
+    if (x + 1 < w && !visited[pos + 1]) stack.push(pos + 1);
+    if (y > 0 && !visited[pos - w]) stack.push(pos - w);
+    if (y + 1 < h && !visited[pos + w]) stack.push(pos + w);
+  }
+
+  ctx.putImageData(img, 0, 0);
+}
+
+function classifyCroppedGraphicRole(
+  crop: HTMLCanvasElement,
+  xPct: number,
+  yPct: number,
+  wPct: number,
+  hPct: number,
+  pageIndex: number
+): { role: ReplicaVisualRole; name: string } {
+  const aspect = crop.width / Math.max(1, crop.height);
+  const ctx = crop.getContext('2d');
+  let redOrBlueInkRatio = 0;
+  let darkNeutralRatio = 0;
+  let nonTransparentCount = 0;
+
+  if (ctx) {
+    const px = ctx.getImageData(0, 0, crop.width, crop.height).data;
+    for (let i = 0; i < px.length; i += 16) {
+      if (px[i + 3] < 40) continue;
+      nonTransparentCount++;
+      const r = px[i],
+        g = px[i + 1],
+        b = px[i + 2];
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      if (max - min > 38 && (r > g + 25 || b > g + 20)) redOrBlueInkRatio++;
+      if (r < 95 && g < 95 && b < 95) darkNeutralRatio++;
+    }
+  }
+
+  const coloredFrac = nonTransparentCount > 0 ? redOrBlueInkRatio / nonTransparentCount : 0;
+  const darkFrac = nonTransparentCount > 0 ? darkNeutralRatio / nonTransparentCount : 0;
+
+  if (yPct < 24 && hPct < 22) {
+    return { role: 'logo', name: `Logo / En-tête (P${pageIndex + 1})` };
+  }
+  if (yPct > 76 && aspect > 2.5 && hPct < 9) {
+    return { role: 'barcode', name: `Code-Barres (P${pageIndex + 1})` };
+  }
+  if (yPct > 74 && aspect >= 0.78 && aspect <= 1.25 && darkFrac > 0.35 && coloredFrac < 0.08 && wPct < 18) {
+    return { role: 'qrcode', name: `QR Code / Code 2D (P${pageIndex + 1})` };
+  }
+  if ((coloredFrac > 0.18 || (yPct > 55 && aspect >= 0.68 && aspect <= 1.45 && wPct < 26)) && hPct < 20) {
+    return { role: 'cachet', name: `Cachet / Tampon (P${pageIndex + 1})` };
+  }
+  if (yPct > 54 && hPct < 16 && darkFrac < 0.35 && aspect > 1.25) {
+    return { role: 'signature', name: `Signature / Paraphe (P${pageIndex + 1})` };
+  }
+  if (wPct > 34 && hPct > 28) {
+    return { role: 'filigrane', name: `Filigrane / Motif fond (P${pageIndex + 1})` };
+  }
+  return { role: 'illustration', name: `Visuel extrait (P${pageIndex + 1})` };
+}
+
+/**
  * Extraction réelle d'éléments graphiques non-textuels (logos, signatures, tampons, QR/barcodes)
- * directement découpés depuis les pixels originaux du document sans aucune image générée.
+ * directement découpés depuis les pixels originaux du document sans aucune image inventée.
  */
 function extractGraphicRegionsFromCanvas(
   canvas: HTMLCanvasElement,
   imgData: ImageData,
   excludeBoxesPct: BBoxPct[],
-  pageIndex: number
+  pageIndex: number,
+  pageBgHex: string,
+  pageWidthMm: number,
+  pageHeightMm: number
 ): Array<{
   role: ReplicaVisualRole;
   name: string;
@@ -621,7 +929,7 @@ function extractGraphicRegionsFromCanvas(
 }> {
   const cw = canvas.width;
   const ch = canvas.height;
-  const gridW = 140;
+  const gridW = 150;
   const gridH = Math.round((ch / cw) * gridW);
   const cellW = cw / gridW;
   const cellH = ch / gridH;
@@ -632,7 +940,7 @@ function extractGraphicRegionsFromCanvas(
     const px = ((gx + 0.5) / gridW) * 100;
     const py = ((gy + 0.5) / gridH) * 100;
     return excludeBoxesPct.some(
-      (b) => px >= b.xPct - 0.8 && px <= b.xPct + b.wPct + 0.8 && py >= b.yPct - 0.6 && py <= b.yPct + b.hPct + 0.6
+      (b) => px >= b.xPct - 0.7 && px <= b.xPct + b.wPct + 0.7 && py >= b.yPct - 0.5 && py <= b.yPct + b.hPct + 0.5
     );
   };
 
@@ -650,16 +958,15 @@ function extractGraphicRegionsFromCanvas(
           totalPixels++;
           const idx = (y * cw + x) * 4;
           const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-          if (lum < 215) inkPixels++;
+          if (lum < 222) inkPixels++;
         }
       }
-      if (totalPixels > 0 && inkPixels / totalPixels >= 0.09) {
+      if (totalPixels > 0 && inkPixels / totalPixels >= 0.08) {
         mask[gy * gridW + gx] = 1;
       }
     }
   }
 
-  // BFS Connected Components (avec voisinage à distance 2 pour regrouper logos/cachets)
   const visited = new Uint8Array(gridW * gridH);
   const comps: Array<{ minX: number; minY: number; maxX: number; maxY: number; cells: number }> = [];
 
@@ -698,16 +1005,14 @@ function extractGraphicRegionsFromCanvas(
       }
       const wCells = maxX - minX + 1;
       const hCells = maxY - minY + 1;
-      // Filtrer petites poussières ou cadres pleine page
       if (cells >= 4 && wCells >= 3 && hCells >= 2 && !(wCells > gridW * 0.85 && hCells > gridH * 0.85)) {
         comps.push({ minX, minY, maxX, maxY, cells });
       }
     }
   }
 
-  // Trier par taille visuelle et limiter aux 10 composants graphiques significatifs par page
   comps.sort((a, b) => b.cells - a.cells);
-  const picked = comps.slice(0, 10);
+  const picked = comps.slice(0, 12);
 
   const results: Array<{
     role: ReplicaVisualRole;
@@ -721,9 +1026,8 @@ function extractGraphicRegionsFromCanvas(
     heightPx: number;
   }> = [];
 
-  for (let i = 0; i < picked.length; i++) {
-    const c = picked[i];
-    const padPx = 6;
+  for (const c of picked) {
+    const padPx = 5;
     const sx = Math.max(0, Math.floor(c.minX * cellW) - padPx);
     const sy = Math.max(0, Math.floor(c.minY * cellH) - padPx);
     const ex = Math.min(cw, Math.ceil((c.maxX + 1) * cellW) + padPx);
@@ -734,14 +1038,12 @@ function extractGraphicRegionsFromCanvas(
     const xPct = Math.round(((sx / cw) * 100) * 10) / 10;
     const yPct = Math.round(((sy / ch) * 100) * 10) / 10;
     const wPct = Math.round(((sw / cw) * 100) * 10) / 10;
-    const hPct = Math.round(((sh / ch) * 100) * 10) / 10;
+    const hPctRaw = Math.round(((sh / ch) * 100) * 10) / 10;
 
-    // Ignorer fines lignes isolées (filets horizontaux/verticaux)
-    if (hPct < 1.2 || wPct < 2) continue;
+    if (hPctRaw < 1.2 || wPct < 2) continue;
 
-    // Rogner les pixels exacts du document source
     const crop = document.createElement('canvas');
-    const maxCropDim = 560;
+    const maxCropDim = 1000;
     const scale = Math.min(1, maxCropDim / Math.max(sw, sh));
     crop.width = Math.max(16, Math.round(sw * scale));
     crop.height = Math.max(16, Math.round(sh * scale));
@@ -749,43 +1051,19 @@ function extractGraphicRegionsFromCanvas(
     if (!cctx) continue;
     cctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, crop.width, crop.height);
 
-    // Rendre les pixels quasi-blancs transparents pour une incrustation propre sur tout fond
-    const cropImg = cctx.getImageData(0, 0, crop.width, crop.height);
-    const px = cropImg.data;
-    for (let k = 0; k < px.length; k += 4) {
-      if (px[k] > 242 && px[k + 1] > 242 && px[k + 2] > 242) {
-        px[k + 3] = 0;
-      }
-    }
-    cctx.putImageData(cropImg, 0, 0);
+    // Transparence uniquement connectée aux bords extérieurs — préserve le blanc interne des logos/QR
+    stripOuterPaperFloodFill(crop, pageBgHex);
 
-    const aspect = sw / sh;
-    let role: ReplicaVisualRole = 'illustration';
-    let label = `Visuel extrait #${i + 1}`;
-    if (yPct < 24 && hPct < 22) {
-      role = 'logo';
-      label = `Logo / En-tête (P${pageIndex + 1})`;
-    } else if (yPct > 64 && wPct < 26 && hPct < 16 && aspect >= 0.7 && aspect <= 1.35) {
-      role = yPct > 80 && xPct < 24 ? 'qrcode' : 'cachet';
-      label = role === 'qrcode' ? `QR Code / Code 2D (P${pageIndex + 1})` : `Cachet / Tampon (P${pageIndex + 1})`;
-    } else if (yPct > 58 && yPct < 88 && hPct < 16) {
-      role = 'signature';
-      label = `Signature / Paraphe (P${pageIndex + 1})`;
-    } else if (yPct > 82 && aspect > 2.6 && hPct < 9) {
-      role = 'barcode';
-      label = `Code-Barres (P${pageIndex + 1})`;
-    } else if (wPct > 35 && hPct > 30) {
-      role = 'filigrane';
-      label = `Filigrane / Motif fond (P${pageIndex + 1})`;
-    }
+    const classified = classifyCroppedGraphicRole(crop, xPct, yPct, wPct, hPctRaw, pageIndex);
+    const lockedHPct = computeAspectLockedHeightPct(wPct, crop.width, crop.height, pageWidthMm, pageHeightMm);
 
     results.push({
-      role,
-      name: label,
+      role: classified.role,
+      name: `${classified.name} #${results.length + 1}`,
       xPct,
       yPct,
       wPct,
-      hPct,
+      hPct: lockedHPct,
       dataUrl: crop.toDataURL('image/png'),
       widthPx: crop.width,
       heightPx: crop.height
@@ -796,7 +1074,144 @@ function extractGraphicRegionsFromCanvas(
 }
 
 // ============================================================================
-// ÉTAPES 1 À 3 : ANALYSE PROFONDE ET RECONSTRUCTION FIDÈLE D'UN DOCUMENT
+// GROUPEMENT INTELLIGENT EN LIGNES & PARAGRAPHES (PRÉSERVE LES COLONNES)
+// ============================================================================
+
+interface RawTextSpan {
+  text: string;
+  xPct: number;
+  yPct: number;
+  wPct: number;
+  hPct: number;
+  fontSizePt: number;
+  bold: boolean;
+  italic: boolean;
+  fontFamily: 'sans-serif' | 'serif' | 'monospace';
+  color?: string;
+  bgColor?: string;
+}
+
+function groupLinesAndParagraphs(
+  spans: RawTextSpan[],
+  imgData: ImageData,
+  cw: number,
+  ch: number,
+  pageBgHex: string,
+  excludeTableBoxes: DetectedGridBox[]
+): { lines: RawTextSpan[]; consumedByTable: Set<number> } {
+  spans.sort((a, b) => a.yPct - b.yPct || a.xPct - b.xPct);
+
+  // 1. Fusionner fragments contigus sur une même ligne horizontale et même style (sans fusionner deux colonnes!)
+  const mergedLines: RawTextSpan[] = [];
+  for (const sp of spans) {
+    const prev = mergedLines[mergedLines.length - 1];
+    const gapPct = prev ? sp.xPct - (prev.xPct + prev.wPct) : 99;
+    const sameRow = prev && Math.abs(prev.yPct - sp.yPct) < 0.72;
+    const compatibleStyle =
+      prev &&
+      Math.abs(prev.fontSizePt - sp.fontSizePt) <= 1.8 &&
+      prev.fontFamily === sp.fontFamily;
+    if (prev && sameRow && compatibleStyle && gapPct >= -0.8 && gapPct < 2.2) {
+      const gap = gapPct > 0.28 ? ' ' : '';
+      prev.text = `${prev.text}${gap}${sp.text}`.replace(/\s+/g, ' ');
+      const right = Math.max(prev.xPct + prev.wPct, sp.xPct + sp.wPct);
+      prev.wPct = right - prev.xPct;
+      prev.hPct = Math.max(prev.hPct, sp.hPct);
+      prev.fontSizePt = Math.max(prev.fontSizePt, sp.fontSizePt);
+      prev.bold = prev.bold || sp.bold;
+      prev.italic = prev.italic || sp.italic;
+    } else {
+      mergedLines.push({ ...sp });
+    }
+  }
+
+  // Enrichir chaque ligne avec sa vraie couleur d'encre & fond éventuel
+  for (const ln of mergedLines) {
+    const sample = sampleRegionColors(imgData, cw, ch, ln.xPct, ln.yPct, ln.wPct, ln.hPct, pageBgHex);
+    ln.color = sample.inkHex;
+    ln.bgColor = sample.bgHex;
+  }
+
+  // Identifier lignes appartenant à un tableau détecté avant de fusionner les paragraphes
+  const consumedByTable = new Set<number>();
+  excludeTableBoxes.forEach((tbl) => {
+    mergedLines.forEach((ln, idx) => {
+      const cx = ln.xPct + ln.wPct / 2;
+      const cy = ln.yPct + ln.hPct / 2;
+      if (
+        cx >= tbl.xPct - 0.8 &&
+        cx <= tbl.xPct + tbl.wPct + 0.8 &&
+        cy >= tbl.yPct - 0.5 &&
+        cy <= tbl.yPct + tbl.hPct + 0.5
+      ) {
+        consumedByTable.add(idx);
+      }
+    });
+  });
+
+  // 2. Regrouper lignes verticales consécutives en blocs paragraphes cohérents
+  // (même colonne X, même taille/famille/graisse/couleur, espacement vertical serré)
+  const outLines: RawTextSpan[] = [];
+  const outConsumed = new Set<number>();
+  const pending = mergedLines.map((ln, idx) => ({ ln, inTable: consumedByTable.has(idx) }));
+
+  for (const item of pending) {
+    if (item.inTable) {
+      const newIdx = outLines.length;
+      outLines.push(item.ln);
+      outConsumed.add(newIdx);
+      continue;
+    }
+
+    const prev = outLines.length > 0 && !outConsumed.has(outLines.length - 1) ? outLines[outLines.length - 1] : null;
+    const prevYBottom = prev ? prev.yPct + prev.hPct : -99;
+    const verticalGap = prev ? item.ln.yPct - prevYBottom : 99;
+    const xAlignedLeft = prev && Math.abs(prev.xPct - item.ln.xPct) <= 1.8;
+    const sameTypo =
+      prev &&
+      Math.abs(prev.fontSizePt - item.ln.fontSizePt) <= 0.9 &&
+      prev.fontFamily === item.ln.fontFamily &&
+      prev.bold === item.ln.bold &&
+      prev.italic === item.ln.italic &&
+      (prev.color || '#0F172A') === (item.ln.color || '#0F172A') &&
+      (prev.bgColor || 'transparent') === (item.ln.bgColor || 'transparent');
+
+    if (prev && xAlignedLeft && sameTypo && verticalGap >= -0.4 && verticalGap <= 1.45) {
+      prev.text = `${prev.text}\n${item.ln.text}`;
+      const right = Math.max(prev.xPct + prev.wPct, item.ln.xPct + item.ln.wPct);
+      prev.wPct = right - prev.xPct;
+      prev.hPct = item.ln.yPct + item.ln.hPct - prev.yPct;
+    } else {
+      outLines.push({ ...item.ln });
+    }
+  }
+
+  return { lines: outLines, consumedByTable: outConsumed };
+}
+
+function estimateMarginsFromElements(
+  elements: ReplicaElement[],
+  widthMm: number,
+  heightMm: number
+): { top: number; right: number; bottom: number; left: number } {
+  const firstPage = elements.filter((e) => e.pageIndex === 0 && e.visible);
+  if (firstPage.length === 0) return { top: 14, right: 14, bottom: 14, left: 14 };
+  const minX = Math.max(3, Math.min(...firstPage.map((e) => e.xPct)));
+  const minY = Math.max(3, Math.min(...firstPage.map((e) => e.yPct)));
+  const maxX = Math.min(97, Math.max(...firstPage.map((e) => e.xPct + e.wPct)));
+  const maxY = Math.min(97, Math.max(...firstPage.map((e) => e.yPct + e.hPct)));
+
+  const clampMargin = (mm: number) => Math.max(5, Math.min(35, Math.round(mm)));
+  return {
+    left: clampMargin((minX / 100) * widthMm),
+    right: clampMargin(((100 - maxX) / 100) * widthMm),
+    top: clampMargin((minY / 100) * heightMm),
+    bottom: clampMargin(((100 - maxY) / 100) * heightMm)
+  };
+}
+
+// ============================================================================
+// ÉTAPES 1 À 3 : ANALYSE HYBRIDE (PDF, JPG, JPEG, PNG, DOC, DOCX)
 // ============================================================================
 
 export async function deepAnalyzeSourceDocument(
@@ -804,27 +1219,55 @@ export async function deepAnalyzeSourceDocument(
   docKey: LayoutTargetDocKey,
   onProgress?: (pct: number, label: string) => void
 ): Promise<ReplicaProject> {
-  const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+  const lowerName = file.name.toLowerCase();
+  const isPdf = file.type === 'application/pdf' || lowerName.endsWith('.pdf');
+  const isDocx =
+    lowerName.endsWith('.docx') ||
+    file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const isDoc = !isDocx && (lowerName.endsWith('.doc') || file.type === 'application/msword');
+
   const projectId = `replica_${docKey}_${Date.now()}`;
   const assets: ReplicaAsset[] = [];
   const elements: ReplicaElement[] = [];
+  const sourcePageSnapshots: string[] = [];
+  const engineNotes: string[] = [];
 
+  let sourceFileType: ReplicaProject['sourceFileType'] = isPdf ? 'pdf' : isDocx ? 'docx' : isDoc ? 'doc' : 'image';
   let pageFormat: 'a4' | 'letter' = 'a4';
   let orientation: 'portrait' | 'landscape' = 'portrait';
   let widthMm = 210;
   let heightMm = 297;
   let pageBgColor = '#FFFFFF';
+  let marginsMm = { top: 14, right: 14, bottom: 14, left: 14 };
   let palette = { primary: '#0B2545', accent: '#0066B3', text: '#1E293B', highlight: '#E8F2FF' };
   let pageCount = 1;
+  let ocrUsed = false;
 
-  if (isPdf) {
+  if (isDocx || isDoc) {
+    onProgress?.(20, `Extraction structurelle Word (${isDocx ? '.docx' : '.doc'})...`);
+    const parsed = isDocx ? await parseDocxDocument(file) : await parseLegacyDocDocument(file);
+    onProgress?.(85, 'Recomposition fidèle du modèle et médias embarqués...');
+    sourceFileType = parsed.sourceFileType;
+    pageFormat = parsed.pageFormat;
+    orientation = parsed.orientation;
+    widthMm = parsed.widthMm;
+    heightMm = parsed.heightMm;
+    marginsMm = parsed.marginsMm;
+    pageCount = parsed.pageCount;
+    palette = parsed.palette;
+    assets.push(...parsed.assets);
+    elements.push(...parsed.elements);
+    sourcePageSnapshots.push(...parsed.sourcePageSnapshots);
+    engineNotes.push(...parsed.engineNotes);
+  } else if (isPdf) {
     onProgress?.(10, 'Lecture du document PDF multi-pages...');
     const buffer = await file.arrayBuffer();
     const pdfDoc = await pdfjsLib.getDocument({ data: buffer }).promise;
     pageCount = Math.min(4, pdfDoc.numPages);
+    engineNotes.push(`PDF analysé via PDF.js + segmentation géométrique (${pageCount}/${pdfDoc.numPages} page(s)).`);
 
     for (let pNum = 1; pNum <= pageCount; pNum++) {
-      onProgress?.(15 + Math.round((pNum / pageCount) * 55), `Analyse fidèle page ${pNum}/${pageCount}...`);
+      onProgress?.(15 + Math.round((pNum / pageCount) * 55), `Analyse hybride page ${pNum}/${pageCount}...`);
       const page = await pdfDoc.getPage(pNum);
       const viewport1x = page.getViewport({ scale: 1.0 });
       if (pNum === 1) {
@@ -860,6 +1303,9 @@ export async function deepAnalyzeSourceDocument(
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       await page.render({ canvasContext: ctx, viewport: vp }).promise;
 
+      // Enregistrer la capture exacte de la page source pour le comparateur visuel
+      sourcePageSnapshots.push(canvas.toDataURL('image/jpeg', 0.86));
+
       const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       if (pNum === 1) {
         const pal = detectPageBackgroundAndPalette(imgData, canvas.width, canvas.height);
@@ -872,23 +1318,10 @@ export async function deepAnalyzeSourceDocument(
         };
       }
 
-      // Extraction texte natif PDF + styles
       const textContent = await page.getTextContent();
       const stylesMap = (textContent.styles || {}) as Record<string, { fontFamily?: string }>;
+      const rawSpans: RawTextSpan[] = [];
 
-      interface RawSpan {
-        text: string;
-        xPct: number;
-        yPct: number;
-        wPct: number;
-        hPct: number;
-        fontSizePt: number;
-        bold: boolean;
-        italic: boolean;
-        fontFamily: 'sans-serif' | 'serif' | 'monospace';
-      }
-
-      const spans: RawSpan[] = [];
       for (const rawItem of textContent.items as Array<{
         str?: string;
         transform?: number[];
@@ -917,7 +1350,7 @@ export async function deepAnalyzeSourceDocument(
             ? 'monospace'
             : 'sans-serif';
 
-        spans.push({
+        rawSpans.push({
           text: txt,
           xPct,
           yPct,
@@ -930,38 +1363,23 @@ export async function deepAnalyzeSourceDocument(
         });
       }
 
-      // Fusionner fragments proches sur une même ligne et colonne (sans fusionner deux colonnes éloignées!)
-      spans.sort((a, b) => a.yPct - b.yPct || a.xPct - b.xPct);
-      const mergedLines: RawSpan[] = [];
-      for (const sp of spans) {
-        const prev = mergedLines[mergedLines.length - 1];
-        if (
-          prev &&
-          Math.abs(prev.yPct - sp.yPct) < 0.75 &&
-          sp.xPct - (prev.xPct + prev.wPct) < 3.2 &&
-          sp.xPct >= prev.xPct - 1
-        ) {
-          const gap = sp.xPct - (prev.xPct + prev.wPct) > 0.3 ? ' ' : '';
-          prev.text = `${prev.text}${gap}${sp.text}`.replace(/\s+/g, ' ');
-          const right = Math.max(prev.xPct + prev.wPct, sp.xPct + sp.wPct);
-          prev.wPct = right - prev.xPct;
-          prev.hPct = Math.max(prev.hPct, sp.hPct);
-          prev.fontSizePt = Math.max(prev.fontSizePt, sp.fontSizePt);
-          prev.bold = prev.bold || sp.bold;
-        } else {
-          mergedLines.push({ ...sp });
-        }
-      }
-
-      // Si PDF scanné (0 texte natif), fallback OCR Tesseract sur ce canvas
-      if (mergedLines.length === 0) {
+      if (rawSpans.length === 0) {
+        ocrUsed = true;
+        onProgress?.(45, `PDF numérisé détecté — OCR page ${pNum}...`);
         const ocrSpans = await runCanvasOcrSpans(canvas, imgData);
-        mergedLines.push(...ocrSpans);
+        rawSpans.push(...ocrSpans);
+        engineNotes.push(`OCR Tesseract exécuté sur page ${pNum} (PDF sans flux texte natif).`);
       }
 
-      // Détection de tableaux structurés sur la page
       const detectedTables = detectRuledTables(imgData, canvas.width, canvas.height);
-      const consumedByTable = new Set<number>();
+      const { lines: groupedLines, consumedByTable } = groupLinesAndParagraphs(
+        rawSpans,
+        imgData,
+        canvas.width,
+        canvas.height,
+        pageBgColor,
+        detectedTables
+      );
 
       detectedTables.forEach((tbl, tIdx) => {
         const rCount = tbl.rowTopsPct.length - 1;
@@ -976,16 +1394,25 @@ export async function deepAnalyzeSourceDocument(
             const xB = tbl.colLeftsPct[c + 1];
             const cellTexts: string[] = [];
             let anyBold = false;
-            mergedLines.forEach((ln, lnIdx) => {
+            groupedLines.forEach((ln, lnIdx) => {
+              if (!consumedByTable.has(lnIdx)) return;
               const cx = ln.xPct + ln.wPct / 2;
               const cy = ln.yPct + ln.hPct / 2;
               if (cx >= xA - 0.8 && cx <= xB + 0.8 && cy >= yA - 0.5 && cy <= yB + 0.5) {
                 cellTexts.push(ln.text.trim());
                 anyBold = anyBold || ln.bold;
-                consumedByTable.add(lnIdx);
               }
             });
-            const sample = sampleRegionColors(imgData, canvas.width, canvas.height, xA + 0.5, yA + 0.4, Math.max(1, xB - xA - 1), Math.max(1, yB - yA - 0.8));
+            const sample = sampleRegionColors(
+              imgData,
+              canvas.width,
+              canvas.height,
+              xA + 0.5,
+              yA + 0.4,
+              Math.max(1, xB - xA - 1),
+              Math.max(1, yB - yA - 0.8),
+              pageBgColor
+            );
             const cellBg = sample.bgHex !== 'transparent' ? sample.bgHex : r === 0 ? palette.highlight : '#FFFFFF';
             rowCells.push({
               text: cellTexts.join(' '),
@@ -999,10 +1426,9 @@ export async function deepAnalyzeSourceDocument(
         }
 
         const totalTblW = Math.max(1, tbl.wPct);
-        const colWidthsPct = [];
-        for (let c = 0; c < cCount; c++) {
-          colWidthsPct.push(Math.round((((tbl.colLeftsPct[c + 1] - tbl.colLeftsPct[c]) / totalTblW) * 100) * 10) / 10);
-        }
+        const colWidthsPct = Array.from({ length: cCount }, (_, c) =>
+          Math.round((((tbl.colLeftsPct[c + 1] - tbl.colLeftsPct[c]) / totalTblW) * 100) * 10) / 10
+        );
 
         elements.push({
           id: `tbl_p${pNum}_${tIdx + 1}`,
@@ -1028,15 +1454,17 @@ export async function deepAnalyzeSourceDocument(
         });
       });
 
-      // Ajouter les textes hors tableau avec couleurs réelles échantillonnées
       const excludeBoxes: BBoxPct[] = [...detectedTables];
-      mergedLines.forEach((ln, idx) => {
+      groupedLines.forEach((ln, idx) => {
         if (consumedByTable.has(idx)) return;
         excludeBoxes.push({ xPct: ln.xPct, yPct: ln.yPct, wPct: ln.wPct, hPct: ln.hPct });
-        const sample = sampleRegionColors(imgData, canvas.width, canvas.height, ln.xPct, ln.yPct, ln.wPct, ln.hPct);
         const centerPct = ln.xPct + ln.wPct / 2;
         const align: 'left' | 'center' | 'right' =
-          ln.xPct > 55 ? 'right' : Math.abs(centerPct - 50) < 8 && ln.xPct > 15 ? 'center' : 'left';
+          ln.xPct > 54 && !ln.text.includes('\n')
+            ? 'right'
+            : Math.abs(centerPct - 50) < 7 && ln.xPct > 14 && !ln.text.includes('\n')
+            ? 'center'
+            : 'left';
         const role: ReplicaTextElement['role'] =
           ln.yPct < 14
             ? 'header'
@@ -1051,12 +1479,12 @@ export async function deepAnalyzeSourceDocument(
         elements.push({
           id: `txt_p${pNum}_${idx + 1}`,
           kind: 'text',
-          name: ln.text.trim().slice(0, 26) || `Texte ${idx + 1}`,
+          name: ln.text.split('\n')[0].trim().slice(0, 26) || `Texte ${idx + 1}`,
           pageIndex: pNum - 1,
           xPct: Math.round(ln.xPct * 10) / 10,
           yPct: Math.round(ln.yPct * 10) / 10,
           wPct: Math.max(8, Math.round(ln.wPct * 10) / 10),
-          hPct: Math.max(2.2, Math.round((ln.hPct + 0.6) * 10) / 10),
+          hPct: Math.max(2.2, Math.round((ln.hPct + 0.5) * 10) / 10),
           zIndex: 20,
           rotation: 0,
           opacity: 100,
@@ -1069,8 +1497,8 @@ export async function deepAnalyzeSourceDocument(
           fontWeight: ln.bold ? '700' : '400',
           fontStyle: ln.italic ? 'italic' : 'normal',
           textDecoration: 'none',
-          color: sample.inkHex,
-          backgroundColor: sample.bgHex,
+          color: ln.color || '#0F172A',
+          backgroundColor: ln.bgColor || 'transparent',
           textAlign: align,
           lineHeight: 1.32,
           letterSpacingEm: 0,
@@ -1078,8 +1506,41 @@ export async function deepAnalyzeSourceDocument(
         });
       });
 
-      // Extraction réelle des visuels découpés sur la page
-      const crops = extractGraphicRegionsFromCanvas(canvas, imgData, excludeBoxes, pNum - 1);
+      // Lignes séparatrices vectorielles détectées (masquées avant rognage des logos/cachets)
+      const standaloneShapes = detectStandaloneShapesAndRules(imgData, canvas.width, canvas.height, detectedTables, excludeBoxes);
+      standaloneShapes.forEach((shp, sIdx) => {
+        excludeBoxes.push({ xPct: shp.xPct, yPct: shp.yPct - 0.5, wPct: shp.wPct, hPct: 1.2 });
+        elements.push({
+          id: `shp_p${pNum}_${sIdx + 1}`,
+          kind: 'shape',
+          name: `Filet séparateur P${pNum} #${sIdx + 1}`,
+          pageIndex: pNum - 1,
+          xPct: shp.xPct,
+          yPct: shp.yPct,
+          wPct: shp.wPct,
+          hPct: shp.hPct,
+          zIndex: 10,
+          rotation: 0,
+          opacity: 100,
+          locked: false,
+          visible: true,
+          lockAspectRatio: false,
+          shapeType: shp.shapeType,
+          fillColor: shp.fillColor,
+          strokeColor: shp.strokeColor,
+          strokeWidthPx: shp.strokeWidthPx
+        });
+      });
+
+      const crops = extractGraphicRegionsFromCanvas(
+        canvas,
+        imgData,
+        excludeBoxes,
+        pNum - 1,
+        pageBgColor,
+        widthMm,
+        heightMm
+      );
       crops.forEach((crop, cIdx) => {
         const assetId = `asset_p${pNum}_${cIdx + 1}`;
         const hash = computeFastHash(crop.dataUrl);
@@ -1093,7 +1554,8 @@ export async function deepAnalyzeSourceDocument(
           hostingStatus: cachedUrl ? 'hosted' : 'local',
           widthPx: crop.widthPx,
           heightPx: crop.heightPx,
-          contentHash: hash
+          contentHash: hash,
+          sourceEngine: 'crop'
         });
         elements.push({
           id: `img_p${pNum}_${cIdx + 1}`,
@@ -1115,12 +1577,13 @@ export async function deepAnalyzeSourceDocument(
         });
       });
     }
+    marginsMm = estimateMarginsFromElements(elements, widthMm, heightMm);
   } else {
-    // IMAGE SOURCE (PNG / JPG / WEBP)
+    // IMAGE SOURCE (PNG / JPG / JPEG / WEBP)
     onProgress?.(20, 'Chargement haute résolution de l’image...');
     const imgUrl = await fileToDataUrl(file);
     const imgEl = await loadHtmlImage(imgUrl);
-    const maxDim = 1550;
+    const maxDim = 1650;
     const scale = Math.min(1, maxDim / Math.max(imgEl.naturalWidth || 800, imgEl.naturalHeight || 1100));
     const cw = Math.max(200, Math.round((imgEl.naturalWidth || 800) * scale));
     const ch = Math.max(200, Math.round((imgEl.naturalHeight || 1100) * scale));
@@ -1136,17 +1599,26 @@ export async function deepAnalyzeSourceDocument(
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, cw, ch);
     ctx.drawImage(imgEl, 0, 0, cw, ch);
+    sourcePageSnapshots.push(canvas.toDataURL('image/jpeg', 0.88));
     const imgData = ctx.getImageData(0, 0, cw, ch);
 
     const pal = detectPageBackgroundAndPalette(imgData, cw, ch);
     pageBgColor = pal.pageBgHex;
     palette = { primary: pal.primaryHex, accent: pal.accentHex, text: '#1E293B', highlight: pal.highlightHex };
 
-    onProgress?.(45, 'Reconnaissance OCR et extraction typographique...');
+    ocrUsed = true;
+    onProgress?.(45, 'Reconnaissance OCR et segmentation typographique...');
     const ocrSpans = await runCanvasOcrSpans(canvas, imgData);
-    onProgress?.(72, 'Détection de tableaux & extraction des logos/tampons...');
+    onProgress?.(72, 'Détection de tableaux, filets et extraction des visuels...');
     const detectedTables = detectRuledTables(imgData, cw, ch);
-    const consumed = new Set<number>();
+    const { lines: groupedLines, consumedByTable } = groupLinesAndParagraphs(
+      ocrSpans,
+      imgData,
+      cw,
+      ch,
+      pageBgColor,
+      detectedTables
+    );
 
     detectedTables.forEach((tbl, tIdx) => {
       const rCount = tbl.rowTopsPct.length - 1;
@@ -1160,19 +1632,22 @@ export async function deepAnalyzeSourceDocument(
           const xA = tbl.colLeftsPct[c];
           const xB = tbl.colLeftsPct[c + 1];
           const cellTexts: string[] = [];
-          ocrSpans.forEach((ln, idx) => {
+          let anyBold = false;
+          groupedLines.forEach((ln, idx) => {
+            if (!consumedByTable.has(idx)) return;
             const cx = ln.xPct + ln.wPct / 2;
             const cy = ln.yPct + ln.hPct / 2;
             if (cx >= xA - 1 && cx <= xB + 1 && cy >= yA - 0.8 && cy <= yB + 0.8) {
               cellTexts.push(ln.text.trim());
-              consumed.add(idx);
+              anyBold = anyBold || ln.bold;
             }
           });
+          const sample = sampleRegionColors(imgData, cw, ch, xA + 0.5, yA + 0.4, Math.max(1, xB - xA - 1), Math.max(1, yB - yA - 0.8), pageBgColor);
           rowCells.push({
             text: cellTexts.join(' '),
-            bgColor: r === 0 ? palette.highlight : '#FFFFFF',
-            textColor: '#0F172A',
-            bold: r === 0,
+            bgColor: sample.bgHex !== 'transparent' ? sample.bgHex : r === 0 ? palette.highlight : '#FFFFFF',
+            textColor: sample.inkHex || '#0F172A',
+            bold: r === 0 || anyBold,
             align: c > 0 && r > 0 ? 'center' : 'left'
           });
         }
@@ -1206,22 +1681,25 @@ export async function deepAnalyzeSourceDocument(
     });
 
     const excludeBoxes: BBoxPct[] = [...detectedTables];
-    ocrSpans.forEach((ln, idx) => {
-      if (consumed.has(idx)) return;
+    groupedLines.forEach((ln, idx) => {
+      if (consumedByTable.has(idx)) return;
       excludeBoxes.push({ xPct: ln.xPct, yPct: ln.yPct, wPct: ln.wPct, hPct: ln.hPct });
-      const sample = sampleRegionColors(imgData, cw, ch, ln.xPct, ln.yPct, ln.wPct, ln.hPct);
       const centerPct = ln.xPct + ln.wPct / 2;
       const align: 'left' | 'center' | 'right' =
-        ln.xPct > 55 ? 'right' : Math.abs(centerPct - 50) < 8 && ln.xPct > 15 ? 'center' : 'left';
+        ln.xPct > 54 && !ln.text.includes('\n')
+          ? 'right'
+          : Math.abs(centerPct - 50) < 7 && ln.xPct > 14 && !ln.text.includes('\n')
+          ? 'center'
+          : 'left';
       elements.push({
         id: `txt_p1_${idx + 1}`,
         kind: 'text',
-        name: ln.text.trim().slice(0, 26) || `Texte ${idx + 1}`,
+        name: ln.text.split('\n')[0].trim().slice(0, 26) || `Texte ${idx + 1}`,
         pageIndex: 0,
         xPct: Math.round(ln.xPct * 10) / 10,
         yPct: Math.round(ln.yPct * 10) / 10,
         wPct: Math.max(8, Math.round(ln.wPct * 10) / 10),
-        hPct: Math.max(2.2, Math.round((ln.hPct + 0.6) * 10) / 10),
+        hPct: Math.max(2.2, Math.round((ln.hPct + 0.5) * 10) / 10),
         zIndex: 20,
         rotation: 0,
         opacity: 100,
@@ -1234,8 +1712,8 @@ export async function deepAnalyzeSourceDocument(
         fontWeight: ln.bold ? '700' : '400',
         fontStyle: 'normal',
         textDecoration: 'none',
-        color: sample.inkHex,
-        backgroundColor: sample.bgHex,
+        color: ln.color || '#0F172A',
+        backgroundColor: ln.bgColor || 'transparent',
         textAlign: align,
         lineHeight: 1.32,
         letterSpacingEm: 0,
@@ -1243,7 +1721,32 @@ export async function deepAnalyzeSourceDocument(
       });
     });
 
-    const crops = extractGraphicRegionsFromCanvas(canvas, imgData, excludeBoxes, 0);
+    const standaloneShapes = detectStandaloneShapesAndRules(imgData, cw, ch, detectedTables, excludeBoxes);
+    standaloneShapes.forEach((shp, sIdx) => {
+      excludeBoxes.push({ xPct: shp.xPct, yPct: shp.yPct - 0.5, wPct: shp.wPct, hPct: 1.2 });
+      elements.push({
+        id: `shp_p1_${sIdx + 1}`,
+        kind: 'shape',
+        name: `Filet séparateur #${sIdx + 1}`,
+        pageIndex: 0,
+        xPct: shp.xPct,
+        yPct: shp.yPct,
+        wPct: shp.wPct,
+        hPct: shp.hPct,
+        zIndex: 10,
+        rotation: 0,
+        opacity: 100,
+        locked: false,
+        visible: true,
+        lockAspectRatio: false,
+        shapeType: shp.shapeType,
+        fillColor: shp.fillColor,
+        strokeColor: shp.strokeColor,
+        strokeWidthPx: shp.strokeWidthPx
+      });
+    });
+
+    const crops = extractGraphicRegionsFromCanvas(canvas, imgData, excludeBoxes, 0, pageBgColor, widthMm, heightMm);
     crops.forEach((crop, cIdx) => {
       const assetId = `asset_p1_${cIdx + 1}`;
       const hash = computeFastHash(crop.dataUrl);
@@ -1257,7 +1760,8 @@ export async function deepAnalyzeSourceDocument(
         hostingStatus: cachedUrl ? 'hosted' : 'local',
         widthPx: crop.widthPx,
         heightPx: crop.heightPx,
-        contentHash: hash
+        contentHash: hash,
+        sourceEngine: 'crop'
       });
       elements.push({
         id: `img_p1_${cIdx + 1}`,
@@ -1278,6 +1782,9 @@ export async function deepAnalyzeSourceDocument(
         visualRole: crop.role
       });
     });
+
+    marginsMm = estimateMarginsFromElements(elements, widthMm, heightMm);
+    engineNotes.push(`Image ${cw}×${ch}px segmentée (OCR Tesseract + détection tables/filets + rognage alpha bord-connecté).`);
   }
 
   onProgress?.(100, 'Reconstruction interactive prête.');
@@ -1286,18 +1793,28 @@ export async function deepAnalyzeSourceDocument(
     id: projectId,
     docKey,
     sourceFileName: file.name,
-    sourceFileType: isPdf ? 'pdf' : 'image',
+    sourceFileType,
     analyzedAt: nowIso,
     pageFormat,
     orientation,
     widthMm,
     heightMm,
     pageBgColor,
-    marginsMm: { top: 14, right: 14, bottom: 14, left: 14 },
+    marginsMm,
     palette,
     pageCount,
     assets,
     elements,
+    sourcePageSnapshots,
+    extractionReport: {
+      textBlocksCount: elements.filter((e) => e.kind === 'text').length,
+      tableCount: elements.filter((e) => e.kind === 'table').length,
+      shapeCount: elements.filter((e) => e.kind === 'shape').length,
+      visualCount: assets.length,
+      ocrUsed,
+      marginsDetectedMm: marginsMm,
+      engineNotes
+    },
     emailSubject: file.name.replace(/\.[^.]+$/, ''),
     emailMaxWidthPx: 600,
     updatedAt: nowIso
@@ -1310,45 +1827,28 @@ export async function deepAnalyzeSourceDocument(
 async function runCanvasOcrSpans(
   canvas: HTMLCanvasElement,
   _imgData: ImageData
-): Promise<
-  Array<{
-    text: string;
-    xPct: number;
-    yPct: number;
-    wPct: number;
-    hPct: number;
-    fontSizePt: number;
-    bold: boolean;
-    italic: boolean;
-    fontFamily: 'sans-serif' | 'serif' | 'monospace';
-  }>
-> {
+): Promise<RawTextSpan[]> {
   try {
     const res = await Promise.race([
       Tesseract.recognize(canvas, 'fra+eng'),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), 12000))
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 15000))
     ]);
     if (!res) return [];
     const dataAny = res.data as unknown as {
-      lines?: Array<{ text?: string; bbox?: { x0: number; y0: number; x1: number; y1: number } }>;
+      lines?: Array<{
+        text?: string;
+        confidence?: number;
+        bbox?: { x0: number; y0: number; x1: number; y1: number };
+      }>;
     };
     const cw = Math.max(1, canvas.width);
     const ch = Math.max(1, canvas.height);
-    const out: Array<{
-      text: string;
-      xPct: number;
-      yPct: number;
-      wPct: number;
-      hPct: number;
-      fontSizePt: number;
-      bold: boolean;
-      italic: boolean;
-      fontFamily: 'sans-serif' | 'serif' | 'monospace';
-    }> = [];
+    const out: RawTextSpan[] = [];
 
     for (const ln of dataAny.lines || []) {
       const clean = (ln.text || '').replace(/\s+/g, ' ').trim();
       if (clean.length < 2 || !ln.bbox) continue;
+      if (typeof ln.confidence === 'number' && ln.confidence < 32 && clean.length < 5) continue;
       const xPct = Math.max(2, Math.min(92, (ln.bbox.x0 / cw) * 100));
       const yPct = Math.max(2, Math.min(96, (ln.bbox.y0 / ch) * 100));
       const wPct = Math.max(6, Math.min(94 - xPct, ((ln.bbox.x1 - ln.bbox.x0) / cw) * 100));
@@ -1392,8 +1892,192 @@ function loadHtmlImage(src: string): Promise<HTMLImageElement> {
 }
 
 // ============================================================================
-// ÉTAPE 7 : HÉBERGEMENT PUBLIC HTTPS RÉEL DES VISUELS (SANS URL FICTIVE)
+// ÉTAPE 4 : DIAGNOSTIC & COMPARATEUR DE FIDÉLITÉ VISUELLE (SANS BLUFF)
 // ============================================================================
+
+export function computeVisualFidelityReport(
+  project: ReplicaProject,
+  asyncCoverage?: { coveragePct: number; uncoveredZonesCount: number } | null
+): VisualFidelityReport {
+  const issues: VisualFidelityIssue[] = [];
+  const assetById = new Map(project.assets.map((a) => [a.id, a]));
+  const hasSourceSnapshot = Boolean(project.sourcePageSnapshots && project.sourcePageSnapshots.length > 0);
+  const dimensionsOk = project.widthMm > 50 && project.heightMm > 50;
+
+  let distortedImagesCount = 0;
+  let outOfBoundsCount = 0;
+
+  for (const el of project.elements) {
+    if (!el.visible) continue;
+    if (el.xPct < -0.5 || el.yPct < -0.5 || el.xPct + el.wPct > 100.8 || el.yPct + el.hPct > 100.8) {
+      outOfBoundsCount++;
+      issues.push({
+        severity: 'warn',
+        code: 'out_of_bounds',
+        message: `Élément « ${el.name} » déborde hors des bords de page (${Math.round(el.xPct + el.wPct)}%).`,
+        elementId: el.id
+      });
+    }
+
+    if (el.kind === 'image') {
+      const asset = assetById.get(el.assetId);
+      if (asset && asset.widthPx > 0 && asset.heightPx > 0) {
+        const assetRatio = asset.widthPx / asset.heightPx;
+        const boxWmm = (el.wPct / 100) * project.widthMm;
+        const boxHmm = Math.max(0.5, (el.hPct / 100) * project.heightMm);
+        const boxRatio = boxWmm / boxHmm;
+        const relDelta = Math.abs(boxRatio - assetRatio) / Math.max(0.1, assetRatio);
+        if (relDelta > 0.06) {
+          distortedImagesCount++;
+          issues.push({
+            severity: 'error',
+            code: 'distorted_image',
+            message: `Ratio de « ${el.name} » décalé de ${Math.round(relDelta * 100)}% vs pixels source (${asset.widthPx}×${asset.heightPx}). Utilisez "Ratio 1:1 original".`,
+            elementId: el.id
+          });
+        }
+      }
+      if (asset && (!asset.publicHttpsUrl || !asset.publicHttpsUrl.startsWith('https://'))) {
+        issues.push({
+          severity: 'info',
+          code: 'unhosted_visual',
+          message: `Visuel « ${el.name} » encore en local (hébergement HTTPS requis avant envoi email).`,
+          elementId: el.id
+        });
+      }
+    }
+  }
+
+  if (!hasSourceSnapshot) {
+    issues.push({
+      severity: 'info',
+      code: 'missing_snapshot',
+      message: 'Aucune capture de page originale associée (spécimen de démonstration ou ancien projet).'
+    });
+  }
+
+  const uncoveredZonesCount = asyncCoverage?.uncoveredZonesCount ?? 0;
+  if (uncoveredZonesCount > 0) {
+    issues.push({
+      severity: 'warn',
+      code: 'uncovered_zone',
+      message: `${uncoveredZonesCount} zone(s) d’encre du document source ne sont pas encore couvertes par un bloc éditable.`
+    });
+  }
+
+  let score = 100;
+  score -= distortedImagesCount * 12;
+  score -= outOfBoundsCount * 8;
+  score -= Math.min(25, uncoveredZonesCount * 5);
+  if (!hasSourceSnapshot) score -= 5;
+  if (project.elements.length === 0) score = 0;
+
+  return {
+    hasSourceSnapshot,
+    dimensionsOk,
+    distortedImagesCount,
+    outOfBoundsCount,
+    coveragePct: asyncCoverage ? asyncCoverage.coveragePct : null,
+    uncoveredZonesCount,
+    fidelityScorePct: Math.max(0, Math.min(100, Math.round(score))),
+    issues
+  };
+}
+
+/**
+ * Compare objectivement les cellules d'encre du document source contre la couverture des éléments reconstruits.
+ */
+export async function computeAsyncVisualCoverage(
+  project: ReplicaProject,
+  pageIndex: number
+): Promise<{ coveragePct: number; uncoveredZonesCount: number } | null> {
+  const snapshot = project.sourcePageSnapshots?.[pageIndex];
+  if (!snapshot || typeof document === 'undefined') return null;
+
+  try {
+    const img = await loadHtmlImage(snapshot);
+    const gridW = 50;
+    const gridH = 70;
+    const c = document.createElement('canvas');
+    c.width = gridW;
+    c.height = gridH;
+    const ctx = c.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0, gridW, gridH);
+    const px = ctx.getImageData(0, 0, gridW, gridH).data;
+
+    const els = project.elements.filter((e) => e.visible && e.pageIndex === pageIndex);
+    let sourceInkCells = 0;
+    let coveredInkCells = 0;
+
+    for (let y = 0; y < gridH; y++) {
+      for (let x = 0; x < gridW; x++) {
+        const idx = (y * gridW + x) * 4;
+        const lum = 0.299 * px[idx] + 0.587 * px[idx + 1] + 0.114 * px[idx + 2];
+        if (lum < 228) {
+          sourceInkCells++;
+          const cxPct = ((x + 0.5) / gridW) * 100;
+          const cyPct = ((y + 0.5) / gridH) * 100;
+          const hit = els.some(
+            (e) =>
+              cxPct >= e.xPct - 1.2 &&
+              cxPct <= e.xPct + e.wPct + 1.2 &&
+              cyPct >= e.yPct - 1.2 &&
+              cyPct <= e.yPct + e.hPct + 1.2
+          );
+          if (hit) coveredInkCells++;
+        }
+      }
+    }
+
+    if (sourceInkCells === 0) return { coveragePct: 100, uncoveredZonesCount: 0 };
+    const coveragePct = Math.min(100, Math.round((coveredInkCells / sourceInkCells) * 100));
+    const missingCells = Math.max(0, sourceInkCells - coveredInkCells);
+    const uncoveredZonesCount = missingCells > 14 ? Math.ceil(missingCells / 18) : 0;
+    return { coveragePct, uncoveredZonesCount };
+  } catch {
+    return null;
+  }
+}
+
+// ============================================================================
+// ÉTAPE 7 : HÉBERGEMENT PUBLIC HTTPS RÉEL & VÉRIFICATION LIVE DES URL
+// ============================================================================
+
+export async function verifyPublicHttpsImageUrl(url: string): Promise<{ ok: boolean; detail: string }> {
+  if (!url || !url.startsWith('https://')) {
+    return { ok: false, detail: 'URL non HTTPS.' };
+  }
+  try {
+    // 1. Test de chargement image réel (fonctionne même sans en-têtes CORS complets)
+    const loaded = await new Promise<boolean>((resolve) => {
+      if (typeof Image === 'undefined') {
+        resolve(false);
+        return;
+      }
+      const timer = setTimeout(() => resolve(false), 6000);
+      const img = new Image();
+      img.onload = () => {
+        clearTimeout(timer);
+        resolve(img.naturalWidth > 0);
+      };
+      img.onerror = () => {
+        clearTimeout(timer);
+        resolve(false);
+      };
+      img.src = url;
+    });
+    if (loaded) {
+      return { ok: true, detail: 'Accessible publiquement via HTTPS.' };
+    }
+    const res = await fetch(url, { method: 'HEAD' });
+    return res.ok
+      ? { ok: true, detail: `HTTP ${res.status} vérifié.` }
+      : { ok: false, detail: `Réponse serveur HTTP ${res.status}.` };
+  } catch {
+    return { ok: false, detail: 'URL bloquée, expirée ou inaccessible publiquement.' };
+  }
+}
 
 export async function uploadSingleAssetToPublicHost(
   asset: ReplicaAsset,
@@ -1403,16 +2087,20 @@ export async function uploadSingleAssetToPublicHost(
     return { ...asset, hostingStatus: 'error', hostingError: 'Aucune donnée image locale à transférer.' };
   }
 
-  // Réutiliser si déjà en cache HTTPS pour ce hash exact
   const cached = getHostedUrlCache()[asset.contentHash];
   if (cached && cached.startsWith('https://')) {
-    return {
-      ...asset,
-      publicHttpsUrl: cached,
-      hostingStatus: 'hosted',
-      hostingProvider: cfg.activeProvider,
-      hostingError: undefined
-    };
+    const check = await verifyPublicHttpsImageUrl(cached);
+    if (check.ok) {
+      return {
+        ...asset,
+        publicHttpsUrl: cached,
+        hostingStatus: 'hosted',
+        hostingProvider: cfg.activeProvider,
+        hostingError: undefined,
+        httpsVerified: true,
+        httpsVerifyDetail: check.detail
+      };
+    }
   }
 
   try {
@@ -1443,13 +2131,16 @@ export async function uploadSingleAssetToPublicHost(
           hostingError: json.error?.message || `Erreur Cloudinary HTTP ${res.status}`
         };
       }
+      const verified = await verifyPublicHttpsImageUrl(json.secure_url);
       setHostedUrlCache(asset.contentHash, json.secure_url);
       return {
         ...asset,
         publicHttpsUrl: json.secure_url,
         hostingStatus: 'hosted',
         hostingProvider: 'cloudinary',
-        hostingError: undefined
+        hostingError: undefined,
+        httpsVerified: verified.ok,
+        httpsVerifyDetail: verified.detail
       };
     }
 
@@ -1480,13 +2171,16 @@ export async function uploadSingleAssetToPublicHost(
           hostingError: json.error?.message || `Erreur ImgBB HTTP ${res.status}`
         };
       }
+      const verified = await verifyPublicHttpsImageUrl(secureUrl);
       setHostedUrlCache(asset.contentHash, secureUrl);
       return {
         ...asset,
         publicHttpsUrl: secureUrl,
         hostingStatus: 'hosted',
         hostingProvider: 'imgbb',
-        hostingError: undefined
+        hostingError: undefined,
+        httpsVerified: verified.ok,
+        httpsVerifyDetail: verified.detail
       };
     }
 
@@ -1495,13 +2189,16 @@ export async function uploadSingleAssetToPublicHost(
     const sRef = storageRef(storage, `replica_public_assets/${asset.contentHash}_${Date.now()}.png`);
     await uploadString(sRef, asset.localDataUrl, 'data_url');
     const url = await getDownloadURL(sRef);
+    const verified = await verifyPublicHttpsImageUrl(url);
     setHostedUrlCache(asset.contentHash, url);
     return {
       ...asset,
       publicHttpsUrl: url,
       hostingStatus: 'hosted',
       hostingProvider: 'firebase_storage',
-      hostingError: undefined
+      hostingError: undefined,
+      httpsVerified: verified.ok,
+      httpsVerifyDetail: verified.detail
     };
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : 'Échec réseau lors de l’hébergement HTTPS.';
@@ -1509,27 +2206,30 @@ export async function uploadSingleAssetToPublicHost(
       ...asset,
       hostingStatus: 'error',
       hostingProvider: cfg.activeProvider,
-      hostingError: errMsg
+      hostingError: errMsg,
+      httpsVerified: false
     };
   }
 }
 
 // ============================================================================
-// ÉTAPE 6 : COMPILATEUR HTML EMAIL RESPONSIVE (TABLES + CSS INLINE + MSO)
+// ÉTAPE 6 : COMPILATEUR HTML EMAIL MULTI-CLIENTS (GMAIL, OUTLOOK, KIT, APPLE)
 // ============================================================================
 
 export function compileReplicaToEmailHtml(
   project: ReplicaProject,
-  options?: { preferPublicHttps?: boolean }
+  options?: { preferPublicHttps?: boolean; includeFooterNote?: boolean }
 ): string {
   const preferHttps = options?.preferPublicHttps !== false;
+  const includeFooterNote = options?.includeFooterNote === true;
   const maxW = Math.max(480, Math.min(680, project.emailMaxWidthPx || 600));
+  const innerContentW = maxW - 40;
   const assetById = new Map(project.assets.map((a) => [a.id, a]));
   const pagesIndices = Array.from(new Set(project.elements.filter((e) => e.visible).map((e) => e.pageIndex))).sort(
     (a, b) => a - b
   );
 
-  const renderElementCellHtml = (el: ReplicaElement): string => {
+  const renderElementCellHtml = (el: ReplicaElement, colFraction = 1): string => {
     if (el.kind === 'text') {
       const fStack =
         el.fontFamily === 'serif'
@@ -1543,16 +2243,23 @@ export function compileReplicaToEmailHtml(
           ? `background-color:${el.backgroundColor};padding:4px 8px;border-radius:3px;`
           : '';
       const escText = escapeXml(el.text).replace(/\n/g, '<br/>');
-      return `<div style="font-family:${fStack};font-size:${pxSize}px;font-weight:${el.fontWeight};font-style:${el.fontStyle};text-decoration:${el.textDecoration};color:${el.color};text-align:${el.textAlign};line-height:${el.lineHeight};letter-spacing:${el.letterSpacingEm}em;${bgStyle}margin:0;">${escText}</div>`;
+      return `<div style="font-family:${fStack};font-size:${pxSize}px;font-weight:${el.fontWeight};font-style:${el.fontStyle};text-decoration:${el.textDecoration};color:${el.color};text-align:${el.textAlign};line-height:${el.lineHeight};letter-spacing:${el.letterSpacingEm}em;${bgStyle}margin:0;mso-line-height-rule:exactly;">${escText}</div>`;
     }
 
     if (el.kind === 'image') {
       const asset = assetById.get(el.assetId);
       const src = preferHttps ? asset?.publicHttpsUrl || asset?.localDataUrl || '' : asset?.localDataUrl || '';
-      const targetW = Math.max(28, Math.round((el.wPct / 100) * (maxW - 48)));
-      const targetH = Math.max(18, Math.round((el.hPct / 100) * 760));
       if (!src) return '';
-      return `<img src="${escapeXml(src)}" alt="${escapeXml(el.name)}" width="${targetW}" height="${targetH}" style="display:block;border:0;outline:none;text-decoration:none;max-width:100%;height:auto;width:${targetW}px;opacity:${(
+      const maxAllowW = Math.max(40, Math.round(innerContentW * colFraction));
+      const rawTargetW = Math.max(28, Math.round((el.wPct / 100) * innerContentW));
+      const targetW = Math.min(maxAllowW, rawTargetW);
+      // Calcul strict du height depuis le ratio natif pour éviter toute déformation dans Outlook / Gmail / Kit
+      const targetH =
+        asset && asset.widthPx > 0 && asset.heightPx > 0
+          ? Math.max(12, Math.round(targetW * (asset.heightPx / asset.widthPx)))
+          : Math.max(18, Math.round((el.hPct / 100) * 760));
+      const imgAlign = el.xPct > 54 ? 'margin-left:auto;' : el.xPct > 34 && el.wPct < 45 ? 'margin:0 auto;' : '';
+      return `<img src="${escapeXml(src)}" alt="${escapeXml(el.name)}" width="${targetW}" height="${targetH}" border="0" style="display:block;${imgAlign}border:0;outline:none;text-decoration:none;max-width:100%;height:auto;width:${targetW}px;opacity:${(
         el.opacity / 100
       ).toFixed(2)};" />`;
     }
@@ -1563,10 +2270,10 @@ export function compileReplicaToEmailHtml(
           const cellsHtml = row
             .map((cell, cIdx) => {
               const colW = el.colWidthsPct[cIdx] ? `width:${el.colWidthsPct[cIdx]}%;` : '';
-              return `<td align="${cell.align}" valign="middle" style="${colW}background-color:${cell.bgColor};color:${cell.textColor};font-family:Arial,Helvetica,sans-serif;font-size:${Math.max(
+              return `<td align="${cell.align}" valign="middle" bgcolor="${escapeXml(cell.bgColor)}" style="${colW}background-color:${cell.bgColor};color:${cell.textColor};font-family:Arial,Helvetica,sans-serif;font-size:${Math.max(
                 10,
                 Math.round(el.fontSizePt * 1.2)
-              )}px;font-weight:${cell.bold ? '700' : '400'};padding:${el.cellPaddingPx}px;border:${
+              )}px;font-weight:${cell.bold ? '700' : '400'};line-height:1.35;padding:${el.cellPaddingPx}px;border:${
                 el.borderWidthPx
               }px solid ${el.borderColor};">${escapeXml(cell.text)}</td>`;
             })
@@ -1579,12 +2286,14 @@ export function compileReplicaToEmailHtml(
 
     if (el.kind === 'shape') {
       if (el.shapeType === 'line_h') {
-        return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="border-top:${Math.max(
+        return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;"><tr><td style="border-top:${Math.max(
           1,
           el.strokeWidthPx
-        )}px solid ${el.strokeColor};font-size:1px;line-height:1px;">&nbsp;</td></tr></table>`;
+        )}px solid ${el.strokeColor};font-size:1px;line-height:1px;height:1px;">&nbsp;</td></tr></table>`;
       }
-      return `<div style="background-color:${el.fillColor};border:${el.strokeWidthPx}px solid ${el.strokeColor};height:16px;">&nbsp;</div>`;
+      return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td bgcolor="${escapeXml(
+        el.fillColor
+      )}" style="background-color:${el.fillColor};border:${el.strokeWidthPx}px solid ${el.strokeColor};height:14px;font-size:1px;line-height:14px;">&nbsp;</td></tr></table>`;
     }
 
     return '';
@@ -1593,15 +2302,26 @@ export function compileReplicaToEmailHtml(
   const pageRowsHtml: string[] = [];
 
   for (const pageIdx of pagesIndices.length > 0 ? pagesIndices : [0]) {
+    if (pageIdx > pagesIndices[0]) {
+      pageRowsHtml.push(
+        `<tr><td style="padding:10px 20px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="border-top:1px dashed #cbd5e1;font-size:1px;line-height:1px;">&nbsp;</td></tr></table></td></tr>`
+      );
+    }
+
     const pageEls = project.elements
       .filter((e) => e.visible && e.pageIndex === pageIdx && (e.kind !== 'image' || e.visualRole !== 'filigrane'))
       .sort((a, b) => a.yPct - b.yPct || a.xPct - b.xPct);
 
-    // Regrouper en bandes horizontales pour préserver les colonnes côte à côte (en-têtes 2 col, signatures, etc.)
+    // Regrouper en bandes horizontales fidèles tout en respectant l'ordre Y et les colonnes côte à côte
     const bands: ReplicaElement[][] = [];
     for (const el of pageEls) {
       const lastBand = bands[bands.length - 1];
-      if (lastBand && Math.abs(lastBand[0].yPct - el.yPct) <= 3.6) {
+      if (
+        lastBand &&
+        Math.abs(lastBand[0].yPct - el.yPct) <= 3.6 &&
+        lastBand.every((x) => x.kind !== 'table') &&
+        el.kind !== 'table'
+      ) {
         lastBand.push(el);
       } else {
         bands.push([el]);
@@ -1612,28 +2332,40 @@ export function compileReplicaToEmailHtml(
       band.sort((a, b) => a.xPct - b.xPct);
       if (band.length === 1) {
         const el = band[0];
-        const inner = renderElementCellHtml(el);
+        const inner = renderElementCellHtml(el, 1);
         if (!inner) continue;
-        const padLeft = el.kind === 'text' && el.textAlign === 'left' && el.xPct > 12 ? Math.min(48, Math.round(el.xPct * 2.2)) : 0;
+        const leftIndent =
+          el.kind === 'text' && el.textAlign === 'left' && el.xPct > 12
+            ? Math.min(72, Math.round(el.xPct * 2.4))
+            : 0;
+        const alignTd = el.kind === 'image' && el.xPct > 54 ? 'right' : el.kind === 'text' && el.textAlign === 'center' ? 'center' : 'left';
         pageRowsHtml.push(
-          `<tr><td style="padding:6px 24px 6px ${24 + padLeft}px;">${inner}</td></tr>`
+          `<tr><td align="${alignTd}" style="padding:5px 20px 5px ${20 + leftIndent}px;">${inner}</td></tr>`
         );
       } else {
+        const totalBandSpan = band.reduce((acc, item) => acc + Math.max(15, item.wPct), 0);
         const tds = band
           .map((el) => {
-            const w = Math.max(18, Math.min(82, Math.round(el.wPct)));
+            const w = Math.max(18, Math.min(82, Math.round((Math.max(15, el.wPct) / totalBandSpan) * 100)));
             const alignAttr = el.kind === 'text' ? el.textAlign : el.xPct > 52 ? 'right' : 'left';
-            return `<td class="stack-col" width="${w}%" align="${alignAttr === 'justify' ? 'left' : alignAttr}" valign="top" style="padding:4px 8px;">${renderElementCellHtml(
-              el
+            return `<td class="stack-col" width="${w}%" align="${alignAttr === 'justify' ? 'left' : alignAttr}" valign="top" style="width:${w}%;padding:4px 8px;vertical-align:top;">${renderElementCellHtml(
+              el,
+              w / 100
             )}</td>`;
           })
           .join('');
         pageRowsHtml.push(
-          `<tr><td style="padding:6px 16px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;"><tr>${tds}</tr></table></td></tr>`
+          `<tr><td style="padding:5px 12px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr>${tds}</tr></table></td></tr>`
         );
       }
     }
   }
+
+  const footerRow = includeFooterNote
+    ? `<tr><td style="padding:12px 20px 16px 20px;border-top:1px solid #e2e8f0;font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#64748b;text-align:center;">${escapeXml(
+        project.sourceFileName
+      )}</td></tr>`
+    : '';
 
   return `<!DOCTYPE html>
 <html lang="fr" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
@@ -1641,37 +2373,46 @@ export function compileReplicaToEmailHtml(
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="x-apple-disable-message-reformatting" />
   <title>${escapeXml(project.emailSubject || project.sourceFileName)}</title>
   <!--[if mso]>
+  <noscript>
+    <xml>
+      <o:OfficeDocumentSettings>
+        <o:AllowPNG/>
+        <o:PixelsPerInch>96</o:PixelsPerInch>
+      </o:OfficeDocumentSettings>
+    </xml>
+  </noscript>
   <style type="text/css">
-    body, table, td { font-family: Arial, Helvetica, sans-serif !important; }
+    body, table, td, p, a, div { font-family: Arial, Helvetica, sans-serif !important; }
   </style>
   <![endif]-->
   <style type="text/css">
     body { margin: 0 !important; padding: 0 !important; background-color: #f1f5f9; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
-    img { border: 0; line-height: 100%; outline: none; text-decoration: none; max-width: 100%; height: auto; }
-    table { border-collapse: collapse !important; }
+    img { border: 0; line-height: 100%; outline: none; text-decoration: none; max-width: 100%; height: auto; -ms-interpolation-mode: bicubic; }
+    table { border-collapse: collapse !important; mso-table-lspace: 0pt !important; mso-table-rspace: 0pt !important; }
     @media only screen and (max-width: 620px) {
       .email-container { width: 100% !important; max-width: 100% !important; }
       .stack-col { display: block !important; width: 100% !important; max-width: 100% !important; text-align: left !important; padding-left: 0 !important; padding-right: 0 !important; }
     }
   </style>
 </head>
-<body style="margin:0;padding:18px 8px;background-color:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
+<body style="margin:0;padding:16px 8px;background-color:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
   <center style="width:100%;background-color:#f1f5f9;">
     <!--[if mso]>
     <table role="presentation" align="center" border="0" cellspacing="0" cellpadding="0" width="${maxW}">
     <tr><td valign="top" width="${maxW}">
     <![endif]-->
-    <table role="presentation" class="email-container" align="center" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:${maxW}px;margin:0 auto;background-color:${
+    <table role="presentation" class="email-container" align="center" cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="${escapeXml(
+      project.pageBgColor || '#ffffff'
+    )}" style="width:100%;max-width:${maxW}px;margin:0 auto;background-color:${
     project.pageBgColor || '#ffffff'
-  };border-radius:6px;overflow:hidden;box-shadow:0 2px 12px rgba(15,23,42,0.08);">
+  };border-collapse:collapse;border:1px solid #e2e8f0;mso-table-lspace:0pt;mso-table-rspace:0pt;">
       <tbody>
-        <tr><td style="height:6px;background-color:${project.palette.primary};font-size:1px;line-height:1px;">&nbsp;</td></tr>
+        <tr><td style="height:4px;background-color:${project.palette.primary};font-size:1px;line-height:1px;">&nbsp;</td></tr>
         ${pageRowsHtml.join('\n        ')}
-        <tr><td style="padding:14px 24px 18px 24px;border-top:1px solid #e2e8f0;font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#64748b;text-align:center;">Document HTML compatible messagerie responsive · ${escapeXml(
-          project.sourceFileName
-        )}</td></tr>
+        ${footerRow}
       </tbody>
     </table>
     <!--[if mso]>
@@ -1683,12 +2424,13 @@ export function compileReplicaToEmailHtml(
 }
 
 // ============================================================================
-// ÉTAPE 7 : CONTRÔLE QUALITÉ AUTOMATIQUE & AUTO-CORRECTION HTML EMAIL
+// ÉTAPE 7B : INSPECTEUR COMPATIBILITÉ EMAIL MULTI-CLIENTS (10 CONTRÔLES)
 // ============================================================================
 
 export function auditCompiledEmailHtml(project: ReplicaProject, html: string): EmailQualityAuditResult {
   const checks: AuditCheckItem[] = [];
   const lower = (html || '').toLowerCase();
+  const htmlSizeKb = Math.round((new Blob([html || '']).size / 1024) * 10) / 10;
 
   // 1. Complétude des textes visibles (text + tableaux)
   const expectedTexts: string[] = [];
@@ -1717,7 +2459,7 @@ export function auditCompiledEmailHtml(project: ReplicaProject, html: string): E
   const missingTexts = expectedTexts.filter((t) => !decodedHtmlText.includes(t.replace(/\s+/g, ' ').trim()));
   checks.push({
     id: 'text_completeness',
-    label: '1. Complétude intégrale des textes',
+    label: '1. Complétude intégrale des textes & cellules',
     status: expectedTexts.length === 0 ? 'warn' : missingTexts.length === 0 ? 'pass' : 'fail',
     detail:
       missingTexts.length === 0
@@ -1725,83 +2467,114 @@ export function auditCompiledEmailHtml(project: ReplicaProject, html: string): E
         : `${missingTexts.length} texte(s) manquant(s) : « ${missingTexts[0].slice(0, 40)}... »`
   });
 
-  // 2. URL publiques HTTPS sur toutes les images visibles
+  // 2. Structure Tableaux & Zéro Flexbox/Grid/Position:absolute
+  const hasPresentationTables = lower.includes('role="presentation"') && lower.includes('cellpadding="0"');
+  const hasForbiddenLayout = /display:\s*(?:flex|grid)|position:\s*absolute/i.test(html);
+  const hasTechOutline = /dashed\s+#dc2626|contenteditable/i.test(html);
+  checks.push({
+    id: 'table_architecture',
+    label: '2. Tableaux HTML purs (sans Flex/Grid/Absolute/bordures tech)',
+    status: hasPresentationTables && !hasForbiddenLayout && !hasTechOutline ? 'pass' : 'fail',
+    detail:
+      hasPresentationTables && !hasForbiddenLayout && !hasTechOutline
+        ? 'Architecture <table> pure sans position:absolute, flexbox, grid ni contour studio.'
+        : 'Propriété incompatible messagerie ou attribut studio détecté.'
+  });
+
+  // 3. Zéro JS & CSS Inline
+  const hasScript = /<script\b/i.test(html);
+  checks.push({
+    id: 'no_js_inline_css',
+    label: '3. Zéro JavaScript & CSS inline universel',
+    status: !hasScript && lower.includes('style="') ? 'pass' : 'fail',
+    detail: !hasScript ? 'Aucun script JS, règles CSS inline appliquées.' : 'Balise <script> interdite détectée.'
+  });
+
+  // 4. URL publiques HTTPS sur toutes les images
   const imgSrcMatches = Array.from(html.matchAll(/<img\b[^>]*\bsrc=["']([^"']*)["']/gi)).map((m) => m[1]);
   const unhostedImgs = imgSrcMatches.filter((s) => !/^https:\/\//i.test(s));
   checks.push({
     id: 'public_https_images',
-    label: '2. Visuels hébergés en HTTPS public',
-    status:
-      imgSrcMatches.length === 0
-        ? 'pass'
-        : unhostedImgs.length === 0
-        ? 'pass'
-        : 'fail',
+    label: '4. Hébergement HTTPS public des images',
+    status: imgSrcMatches.length === 0 ? 'pass' : unhostedImgs.length === 0 ? 'pass' : 'fail',
     detail:
       imgSrcMatches.length === 0
-        ? 'Aucune balise image requise dans ce modèle.'
+        ? 'Aucune image requise dans ce modèle.'
         : unhostedImgs.length === 0
-        ? `${imgSrcMatches.length}/${imgSrcMatches.length} images utilisent une URL HTTPS publique valide.`
-        : `${unhostedImgs.length} image(s) non hébergée(s) (URI locale data:/blob: — Gmail/Outlook bloqueront l’affichage).`
+        ? `${imgSrcMatches.length}/${imgSrcMatches.length} image(s) utilisent une URL HTTPS publique valide.`
+        : `${unhostedImgs.length} image(s) non hébergée(s) (data:/blob: ou chemin local bloqué par Gmail/Outlook/Kit).`
   });
 
-  // 3. Attributs width, height, alt, max-width:100%
+  // 5. Attributs width, height, alt, max-width:100%
   const imgTags = Array.from(html.matchAll(/<img\b[^>]*>/gi)).map((m) => m[0]);
   const badAttrs = imgTags.filter(
-    (tag) => !/width=/i.test(tag) || !/alt=/i.test(tag) || !/max-width:\s*100%/i.test(tag)
+    (tag) => !/width=/i.test(tag) || !/height=/i.test(tag) || !/alt=/i.test(tag) || !/max-width:\s*100%/i.test(tag)
   );
   checks.push({
     id: 'image_attributes',
-    label: '3. Proportions & attributs HTML images',
+    label: '5. Proportions verrouillées & attributs images',
     status: badAttrs.length === 0 ? 'pass' : 'warn',
     detail:
       badAttrs.length === 0
-        ? 'Dimensions explicites, attribut alt et max-width:100% conformes.'
-        : `${badAttrs.length} balise(s) image sans attribut width/alt/max-width.`
+        ? 'Attributs width, height, alt et max-width:100% conformes sur chaque visuel.'
+        : `${badAttrs.length} balise(s) image sans width/height/alt complet.`
   });
 
-  // 4. Architecture tableau sans bordures techniques
-  const hasPresentationTables = lower.includes('role="presentation"') && lower.includes('cellpadding="0"');
-  const hasTechOutline = /dashed\s+#dc2626|contenteditable/i.test(html);
+  // 6. Contrôle débordement horizontal (max-width <= 680px)
+  const containerMaxMatch = html.match(/class="email-container"[^>]*max-width:(\d+)px/i);
+  const maxWidthVal = containerMaxMatch ? Number(containerMaxMatch[1]) : 600;
   checks.push({
-    id: 'table_architecture',
-    label: '4. Structure en tableaux & zéro bordure technique',
-    status: hasPresentationTables && !hasTechOutline ? 'pass' : 'fail',
-    detail:
-      hasPresentationTables && !hasTechOutline
-        ? 'Structure tableaux email propre sans attributs contenteditable ni pointillés de studio.'
-        : 'Bordure technique ou attribut studio détecté dans la sortie email.'
+    id: 'horizontal_overflow',
+    label: '6. Largeur maîtrisée anti-débordement',
+    status: maxWidthVal <= 680 ? 'pass' : 'warn',
+    detail: `Conteneur principal calibré à ${maxWidthVal}px max avec fluides 100% sur mobile.`
   });
 
-  // 5. Zéro JS & CSS inline
-  const hasScript = /<script\b/i.test(html);
+  // 7. Polices fallback email sûres
+  const hasSafeFonts =
+    lower.includes('arial, helvetica, sans-serif') ||
+    lower.includes('arial,helvetica,sans-serif') ||
+    lower.includes('georgia');
   checks.push({
-    id: 'no_js_inline_css',
-    label: '5. Zéro JavaScript & CSS inline email-safe',
-    status: !hasScript && lower.includes('style="') ? 'pass' : 'fail',
-    detail: !hasScript ? 'Aucun script JS, styles inline conformes.' : 'Balise <script> interdite détectée.'
+    id: 'font_fallbacks',
+    label: '7. Polices sûres avec fallback multi-OS',
+    status: hasSafeFonts ? 'pass' : 'warn',
+    detail: hasSafeFonts ? 'Piles email Arial / Georgia / Courier présentes.' : 'Ajouter une police fallback email.'
   });
 
-  // 6. Responsive Mobile 620px
+  // 8. Responsive Mobile 620px
   const hasResponsiveCss = lower.includes('@media') && lower.includes('620px') && lower.includes('name="viewport"');
   checks.push({
     id: 'mobile_responsive',
-    label: '6. Adaptation responsive Mobile / Tablette',
+    label: '8. Empilement responsive Mobile (<=620px)',
     status: hasResponsiveCss ? 'pass' : 'fail',
     detail: hasResponsiveCss
-      ? 'Media query @media (max-width:620px) et viewport mobile actifs.'
+      ? 'Media query @media (max-width:620px) + .stack-col actifs.'
       : 'Règles responsive mobiles manquantes.'
   });
 
-  // 7. Compatibilité Gmail / Outlook / Apple Mail / Yahoo
-  const hasMsoFallback = lower.includes('<!--[if mso]>') && lower.includes('arial,helvetica,sans-serif');
+  // 9. Compatibilité Outlook MSO / Apple Mail / Yahoo / Kit
+  const hasMsoFallback =
+    lower.includes('<!--[if mso]>') &&
+    lower.includes('mso-table-lspace:0pt') &&
+    lower.includes('x-apple-disable-message-reformatting');
   checks.push({
     id: 'client_compat',
-    label: '7. Compatibilité Gmail, Outlook, Yahoo, Apple Mail',
+    label: '9. Spécificités Outlook MSO, Apple Mail, Yahoo & Kit',
     status: hasMsoFallback ? 'pass' : 'warn',
     detail: hasMsoFallback
-      ? 'Commentaires conditionnels MSO Outlook et piles de polices email présents.'
-      : 'Ajouter les commentaires conditionnels Outlook MSO.'
+      ? 'Conditionnels MSO, reset Apple reformatting et espacement tableaux Outlook actifs.'
+      : 'Certaines directives Outlook MSO ou Apple Mail sont incomplètes.'
+  });
+
+  // 10. Limite Gmail Clipping (< 102 Ko HTML)
+  checks.push({
+    id: 'gmail_clipping',
+    label: '10. Poids HTML anti-troncature Gmail (< 102 Ko)',
+    status: htmlSizeKb < 95 ? 'pass' : htmlSizeKb <= 115 ? 'warn' : 'fail',
+    detail: `Poids du source HTML compilé : ${htmlSizeKb} Ko ${
+      htmlSizeKb < 95 ? '(optimal — non tronqué par Gmail).' : '(lourd — vérifiez les URI locales restantes).'
+    }`
   });
 
   const passWeight = checks.reduce((acc, c) => acc + (c.status === 'pass' ? 1 : c.status === 'warn' ? 0.5 : 0), 0);
@@ -1815,7 +2588,8 @@ export function auditCompiledEmailHtml(project: ReplicaProject, html: string): E
     unhostedImagesCount: unhostedImgs.length,
     missingTextsCount: missingTexts.length,
     totalTextsChecked: expectedTexts.length,
-    totalImagesChecked: imgSrcMatches.length
+    totalImagesChecked: imgSrcMatches.length,
+    htmlSizeKb
   };
 }
 
@@ -1823,13 +2597,12 @@ export function repairCompiledEmailHtml(
   project: ReplicaProject,
   currentHtml: string
 ): { fixedHtml: string; audit: EmailQualityAuditResult } {
-  // Régénération propre si bordure technique ou attribut studio présent, sinon patch CSS/attributs
   let repaired = currentHtml
     .replace(/<script[\s\S]*?<\/script>/gi, '')
     .replace(/\scontenteditable="true"/gi, '')
     .replace(/\soutline:[^;"]*dashed[^;"]*;?/gi, '');
 
-  repaired = repaired.replace(/<img\b([^>]*)>/gi, (full, attrs) => {
+  repaired = repaired.replace(/<img\b([^>]*)>/gi, (_full, attrs) => {
     let nextAttrs = attrs;
     if (!/alt=/i.test(nextAttrs)) nextAttrs += ' alt="Visuel document"';
     if (!/max-width:/i.test(nextAttrs)) {
@@ -1839,7 +2612,11 @@ export function repairCompiledEmailHtml(
   });
 
   let audit = auditCompiledEmailHtml(project, repaired);
-  if (audit.missingTextsCount > 0 || !repaired.includes('role="presentation"')) {
+  if (
+    audit.missingTextsCount > 0 ||
+    !repaired.includes('role="presentation"') ||
+    /display:\s*(?:flex|grid)|position:\s*absolute/i.test(repaired)
+  ) {
     repaired = compileReplicaToEmailHtml(project, { preferPublicHttps: true });
     audit = auditCompiledEmailHtml(project, repaired);
   }
@@ -1898,7 +2675,12 @@ export async function exportReplicaProjectToPdf(
         const asset = assetById.get(el.assetId);
         if (asset?.localDataUrl) {
           try {
-            doc.addImage(asset.localDataUrl, 'PNG', xMm, yMm, wMm, hMm, undefined, 'FAST', el.rotation || 0);
+            const drawHmm =
+              el.lockAspectRatio && asset.widthPx > 0 && asset.heightPx > 0
+                ? wMm * (asset.heightPx / asset.widthPx)
+                : hMm;
+            const imgFmt = asset.localDataUrl.startsWith('data:image/jpeg') ? 'JPEG' : 'PNG';
+            doc.addImage(asset.localDataUrl, imgFmt, xMm, yMm, wMm, drawHmm, undefined, 'FAST', el.rotation || 0);
           } catch {
             // ignore bad format
           }
@@ -1961,6 +2743,11 @@ export async function exportReplicaProjectToPdf(
           align: el.textAlign === 'justify' ? 'left' : el.textAlign,
           maxWidth: Math.max(12, wMm)
         });
+        if (el.textDecoration === 'underline') {
+          doc.setDrawColor(tr, tg, tb);
+          doc.setLineWidth(0.22);
+          doc.line(xMm, baselineY + 0.8, xMm + Math.min(wMm, doc.getTextWidth((el.text || '').split('\n')[0])), baselineY + 0.8);
+        }
       }
     }
   }
@@ -1970,11 +2757,6 @@ export async function exportReplicaProjectToPdf(
   return { doc, filename, blob: doc.output('blob') };
 }
 
-/**
- * Exporte le projet répliqué en un vrai fichier Word (.docx) entièrement éditable
- * (paragraphes, styles de texte, tableaux Word modifiables, et images extraites intégrées)
- * sans aplatir la page en une seule capture image.
- */
 export async function exportReplicaProjectToDocx(
   project: ReplicaProject
 ): Promise<{ blob: Blob; filename: string }> {
@@ -2004,36 +2786,49 @@ export async function exportReplicaProjectToDocx(
       ? AlignmentType.JUSTIFIED
       : AlignmentType.LEFT;
 
+  const usableWidthPx = Math.round(((project.widthMm - project.marginsMm.left - project.marginsMm.right) / 25.4) * 96);
+
   const elementToDocxBlock = (el: ReplicaElement): Array<Paragraph | Table> => {
     if (el.kind === 'text') {
       const fontName =
         el.fontFamily === 'serif' ? 'Georgia' : el.fontFamily === 'monospace' ? 'Courier New' : 'Calibri';
       const hexNoHash = (el.color || '#0F172A').replace('#', '');
-      return [
-        new Paragraph({
-          alignment: mapDocxAlign(el.textAlign),
-          spacing: { after: 100 },
-          children: [
-            new TextRun({
-              text: el.text,
-              font: fontName,
-              size: Math.max(14, Math.round(el.fontSizePt * 2)),
-              bold: el.fontWeight === '700' || el.fontWeight === '800' || el.fontWeight === '600',
-              italics: el.fontStyle === 'italic',
-              underline: el.textDecoration === 'underline' ? {} : undefined,
-              color: hexNoHash.length === 6 ? hexNoHash : '0F172A'
-            })
-          ]
-        })
-      ];
+      const textLines = el.text.split('\n');
+      return textLines.map(
+        (lineStr, idx) =>
+          new Paragraph({
+            alignment: mapDocxAlign(el.textAlign),
+            spacing: { after: idx === textLines.length - 1 ? 100 : 25 },
+            shading:
+              el.backgroundColor && el.backgroundColor !== 'transparent'
+                ? { fill: el.backgroundColor.replace('#', ''), type: ShadingType.CLEAR }
+                : undefined,
+            children: [
+              new TextRun({
+                text: lineStr,
+                font: fontName,
+                size: Math.max(14, Math.round(el.fontSizePt * 2)),
+                bold: el.fontWeight === '700' || el.fontWeight === '800' || el.fontWeight === '600',
+                italics: el.fontStyle === 'italic',
+                underline: el.textDecoration === 'underline' ? {} : undefined,
+                color: hexNoHash.length === 6 ? hexNoHash : '0F172A'
+              })
+            ]
+          })
+      );
     }
 
     if (el.kind === 'image') {
       const asset = assetById.get(el.assetId);
       const bytes = asset?.localDataUrl ? dataUrlToUint8(asset.localDataUrl) : null;
       if (!bytes) return [];
-      const wPx = Math.max(28, Math.round((el.wPct / 100) * 620));
-      const hPx = Math.max(20, Math.round((el.hPct / 100) * 860));
+      const wPx = Math.max(28, Math.round((el.wPct / 100) * Math.max(460, usableWidthPx)));
+      // Verrouiller les proportions natives exactes dans Word
+      const hPx =
+        asset && asset.widthPx > 0 && asset.heightPx > 0
+          ? Math.max(16, Math.round(wPx * (asset.heightPx / asset.widthPx)))
+          : Math.max(20, Math.round((el.hPct / 100) * 860));
+      const imgType = asset?.localDataUrl.startsWith('data:image/jpeg') ? 'jpg' : 'png';
       return [
         new Paragraph({
           alignment: el.xPct > 52 ? AlignmentType.RIGHT : el.xPct > 28 ? AlignmentType.CENTER : AlignmentType.LEFT,
@@ -2041,10 +2836,23 @@ export async function exportReplicaProjectToDocx(
           children: [
             new ImageRun({
               data: bytes,
-              type: 'png',
+              type: imgType,
               transformation: { width: wPx, height: hPx }
             })
           ]
+        })
+      ];
+    }
+
+    if (el.kind === 'shape' && el.shapeType === 'line_h') {
+      const lineHex = (el.strokeColor || '#0B2545').replace('#', '');
+      return [
+        new Paragraph({
+          spacing: { after: 80 },
+          border: {
+            bottom: { style: BorderStyle.SINGLE, size: Math.max(4, el.strokeWidthPx * 4), color: lineHex }
+          },
+          children: []
         })
       ];
     }
@@ -2106,7 +2914,6 @@ export async function exportReplicaProjectToDocx(
       .filter((e) => e.visible && e.pageIndex === pIdx && (e.kind !== 'image' || e.visualRole !== 'filigrane'))
       .sort((a, b) => a.yPct - b.yPct || a.xPct - b.xPct);
 
-    // Grouper en bandes horizontales : si >=2 éléments côte à côte, utiliser une table Word sans bordures
     const bands: ReplicaElement[][] = [];
     for (const el of pageEls) {
       const last = bands[bands.length - 1];

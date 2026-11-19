@@ -44,7 +44,9 @@ import {
   deletePostulantRecord,
   publishPostulantToEntretien,
   generatePostulantEmailTemplate,
-  generatePostulantKitPdf
+  generatePostulantKitPdf,
+  generateKitCandidatZipPackage,
+  buildKitCandidatWordHtml
 } from '../../services/postulantDossierService';
 import {
   CricContractVariables,
@@ -85,7 +87,9 @@ import {
   FolderArrangementMode,
   PackagedDocumentFile,
   buildDefaultEmployeeFolderName,
-  exportSelectedDocumentsIntoFolder
+  exportSelectedDocumentsIntoFolder,
+  triggerBlobDownload,
+  triggerStaggeredIndividualDownloads
 } from '../../services/autoFolderExportService';
 import {
   CANDIDATE_TICKET_STAMP_PRESETS,
@@ -100,6 +104,7 @@ import { OfficialStampGeneratorModal } from './OfficialStampGeneratorModal';
 import { UniversalVisualGeneratorModal } from './UniversalVisualGeneratorModal';
 import { BrandLogo } from '../BrandLogo';
 import {
+  ActorScopeId,
   getSavedPdfAssetsConfig,
   loadPdfAssetsConfigFromFirestore,
   savePdfAssetsConfigToFirestore,
@@ -121,10 +126,24 @@ import { PosteCatalogItem } from '../../services/posteCatalogService';
 import { FichesEtDocEsModule } from './FichesEtDocEsModule';
 import {
   FichesDocEsData,
+  KIT_LAYOUT_PRESETS,
+  KitDocLayoutMap,
+  KitDocVisualScopeMap,
   buildDefaultFichesDocEsData,
   saveFichesDocEsData,
   loadFichesDocEsData,
-  generateSingleDocEsPdf
+  loadKitDocLayoutsSync,
+  saveKitDocLayouts,
+  loadKitDocLayoutsFromFirestore,
+  loadKitDocVisualScopesSync,
+  saveKitDocVisualScopes,
+  loadKitDocVisualScopesFromFirestore,
+  resolveLayoutTemplateForDocEsModel,
+  resolveActorAssetsForDocEsModel,
+  generateSingleDocEsPdfAsync,
+  getDocEsModelsForCasType,
+  renderDocEsPlainText,
+  generateKitDocEsIndividualPdfsAsync
 } from '../../services/fichesEtDocEsService';
 import {
   HousingAndNotaryData,
@@ -154,7 +173,10 @@ interface PostulantNouveauMasterModuleProps {
   settings: SiteSettings;
   employees?: Employee[];
   onOpenInWebmail?: (html: string) => void;
-  onEmployeeCreated?: (emp: Employee) => void;
+  onEmployeeCreated?: (
+    emp: Employee,
+    options?: { navigateToEmployeesTab?: boolean }
+  ) => Promise<void> | void;
   onBack?: () => void;
 }
 
@@ -321,7 +343,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
     buildDefaultHousingAndNotaryData(postulant, settings)
   );
 
-  // File d'actions automatiques (1 Clic)
+  // File d'actions automatiques (1 Clic) — Inclut les documents principaux prêts à télécharger en dossier
   const [autoQueue, setAutoQueue] = useState<AutoActionQueue>({
     saveDossier: true,
     syncDocEs: true,
@@ -329,15 +351,21 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
     createEmployee: true,
     downloadKitPdf: true,
     downloadContratPdf: true,
-    downloadPromessePdf: false,
-    downloadTicketPdf: false,
-    downloadOffrePdf: false,
+    downloadPromessePdf: true,
+    downloadTicketPdf: true,
+    downloadOffrePdf: true,
     downloadBundlePdf: false,
-    downloadTab9Pdf: false,
-    downloadTab10Pdf: false,
-    downloadTab11Pdf: false,
-    downloadTab12Pdf: false
+    downloadTab9Pdf: true,
+    downloadTab10Pdf: true,
+    downloadTab11Pdf: true,
+    downloadTab12Pdf: true
   });
+
+  // Mises en page & sources visuelles (6 Parties) personnalisées par document dans 01. Kit Candidat
+  const [kitDocLayouts, setKitDocLayouts] = useState<KitDocLayoutMap>(() => loadKitDocLayoutsSync());
+  const [kitDocVisualScopes, setKitDocVisualScopes] = useState<KitDocVisualScopeMap>(() =>
+    loadKitDocVisualScopesSync()
+  );
 
   // Mission 2 : Classement automatique dans un dossier nommé d'après le salarié
   const [packageAsFolder, setPackageAsFolder] = useState<boolean>(true);
@@ -376,6 +404,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
 
   const [copiedNotification, setCopiedNotification] = useState<string | null>(null);
   const [isAutoExecuting, setIsAutoExecuting] = useState(false);
+  const [isSendingToEmployees, setIsSendingToEmployees] = useState(false);
   const [isPublishingEntretien, setIsPublishingEntretien] = useState(false);
   const [isPublishingOffre, setIsPublishingOffre] = useState(false);
 
@@ -422,6 +451,18 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
     loadAllLayoutTemplatesFromFirestore().then((templates) => {
       if (Object.keys(templates).length > 0) {
         setLayoutTemplates(templates);
+      }
+    });
+
+    loadKitDocLayoutsFromFirestore().then((layouts) => {
+      if (Object.keys(layouts).length > 0) {
+        setKitDocLayouts(layouts);
+      }
+    });
+
+    loadKitDocVisualScopesFromFirestore().then((scopes) => {
+      if (Object.keys(scopes).length > 0) {
+        setKitDocVisualScopes(scopes);
       }
     });
 
@@ -744,16 +785,134 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
     customVisualText: customVisualText['promesse'] || undefined
   });
 
+  const buildEmployeeRecordFromPostulant = (source: PostulantInfo): Employee => {
+    const nowIso = new Date().toISOString();
+    const parts = (source.nomComplet || '').trim().split(/\s+/);
+    const prenom = source.prenom?.trim() || parts[0] || 'Salarié';
+    const nom = source.nom?.trim() || parts.slice(1).join(' ') || source.nomComplet || 'Candidat';
+    const nomComplet = source.nomComplet?.trim() || `${prenom} ${nom}`.trim();
+    return {
+      id: Date.now(),
+      matricule: source.matricule || `EMP-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
+      civilite: source.civilite,
+      nom_complet: nomComplet.toUpperCase(),
+      prenom,
+      nom: nom.toUpperCase(),
+      email: source.email,
+      telephone: source.telephone,
+      adresse: source.adresse,
+      date_naissance: source.dateNaissance || '1990-01-01',
+      nationalite: source.nationalite,
+      numero_piece_identite: source.numeroPieceIdentite || '',
+      contact_urgence: source.contactUrgence || '',
+      poste: source.intitulePoste,
+      departement: source.departement,
+      manager: source.representantEmployeurNom || 'ANTOINE FORESTIN',
+      ni: source.numeroImmatriculationEntreprise || 'BC1129970',
+      responsabilites: source.responsabilitesMissions || [],
+      type_contrat: source.typeContrat === 'CDD' ? 'CDD' : 'CDI',
+      date_effet: source.dateEffet,
+      date_embauche: source.dateEffet,
+      duree_periode_essai: source.dureePeriodeEssai,
+      lieu_travail: source.adresseEntreprise,
+      horaires: source.horairesTravail || '37.5h / semaine (Temps plein)',
+      salaire: source.salaireMensuel,
+      salaire_horaire: source.salaireHoraire,
+      devise: 'CAD',
+      hebergement_fourni: true,
+      adresse_hebergement: housingData.hebergementAdresseComplete,
+      doc_contact_phone: source.contactDocPhone,
+      doc_contact_email: source.contactDocEmail,
+      photo: uploadedAssets.photoCandidat || source.photoUrl || '',
+      photo_url: uploadedAssets.photoCandidat || source.photoUrl || '',
+      logo_url: uploadedAssets.logo || source.logoUrl || '',
+      signature_url: uploadedAssets.signature || source.signatureUrl || '',
+      cachet_url: uploadedAssets.cachet || source.cachetUrl || '',
+      filigrane_url: uploadedAssets.filigrane || source.filigraneUrl || '',
+      contrat_pdf_url: '',
+      has_custom_pdf: true,
+      must_change_password: false,
+      is_active: true,
+      created_at: source.createdAt || nowIso,
+      updated_at: nowIso
+    };
+  };
+
   const handleSavePostulant = async (infoToSave = postulant) => {
     try {
       const saved = await savePostulantRecord(infoToSave);
       setPostulant(saved);
+      await saveFichesDocEsData(saved.id, docEsData);
       await saveActorUploadedAssetsToFirestore(uploadedAssets);
       await loadPostulants();
       triggerToast(`Dossier de ${saved.nomComplet} sauvegardé dans Firestore.`);
     } catch {
       triggerToast('Erreur lors de la sauvegarde du dossier.');
     }
+  };
+
+  const handleSaveCandidateAndSendToEmployees = async (navigateToTab = true) => {
+    setIsSendingToEmployees(true);
+    try {
+      const updatedPostulant: PostulantInfo = {
+        ...postulant,
+        statutDossier: 'valide',
+        updatedAt: new Date().toISOString()
+      };
+      const saved = await savePostulantRecord(updatedPostulant);
+      setPostulant(saved);
+      await saveFichesDocEsData(saved.id, docEsData);
+      await saveActorUploadedAssetsToFirestore(uploadedAssets);
+      await loadPostulants();
+
+      const newEmp = buildEmployeeRecordFromPostulant(saved);
+      if (onEmployeeCreated) {
+        await onEmployeeCreated(newEmp, { navigateToEmployeesTab: navigateToTab });
+      }
+      triggerToast(
+        `${newEmp.nom_complet} (${newEmp.matricule}) enregistré et envoyé vers « Salariés & Contrats ».`
+      );
+    } catch (err) {
+      console.error(err);
+      triggerToast("Erreur lors de l'enregistrement vers Salariés & Contrats.");
+    } finally {
+      setIsSendingToEmployees(false);
+    }
+  };
+
+  const handleChangeKitDocLayout = (modelId: number, presetId: string) => {
+    setKitDocLayouts((prev) => {
+      const next = { ...prev, [modelId]: presetId };
+      void saveKitDocLayouts(next);
+      return next;
+    });
+    triggerToast(`Mise en page du Modèle ${modelId} mise à jour.`);
+  };
+
+  const handleApplyPresetToAllKitDocs = (presetId: string) => {
+    const models = getDocEsModelsForCasType(postulant.casType);
+    setKitDocLayouts((prev) => {
+      const next = { ...prev };
+      models.forEach((m) => {
+        next[m.id] = presetId;
+      });
+      void saveKitDocLayouts(next);
+      return next;
+    });
+    triggerToast(
+      presetId === 'auto_doc'
+        ? `Mise en page variée automatique activée pour les ${models.length} documents du Kit.`
+        : `Mise en page appliquée aux ${models.length} documents du Kit Candidat.`
+    );
+  };
+
+  const handleChangeKitDocVisualScope = (modelId: number, scope: ActorScopeId | 'auto') => {
+    setKitDocVisualScopes((prev) => {
+      const next = { ...prev, [modelId]: scope };
+      void saveKitDocVisualScopes(next);
+      return next;
+    });
+    triggerToast(`Source visuelle (6 Parties) mise à jour pour le Modèle ${modelId}.`);
   };
 
   const handleNewBlankPostulant = () => {
@@ -865,64 +1024,58 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
         executedActions.push('Entretien publié');
       }
 
+      const kitOptions = {
+        uploadedAssets,
+        assetsConfig,
+        layoutTemplates,
+        kitDocLayouts,
+        kitDocVisualScopes
+      };
+
       if (autoQueue.createEmployee && onEmployeeCreated) {
-        const newEmp: Employee = {
-          id: Date.now(),
-          matricule: updated.matricule || `EMP-${Date.now()}`,
-          civilite: updated.civilite,
-          nom_complet: updated.nomComplet,
-          prenom: updated.prenom,
-          nom: updated.nom,
-          email: updated.email,
-          telephone: updated.telephone,
-          adresse: updated.adresse,
-          date_naissance: updated.dateNaissance || '1990-01-01',
-          nationalite: updated.nationalite,
-          poste: updated.intitulePoste,
-          departement: updated.departement,
-          type_contrat: updated.typeContrat,
-          date_effet: updated.dateEffet,
-          date_embauche: updated.dateEffet,
-          duree_periode_essai: updated.dureePeriodeEssai,
-          lieu_travail: updated.adresseEntreprise,
-          horaires: updated.horairesTravail || '37.5h / semaine (Temps plein)',
-          salaire: updated.salaireMensuel,
-          salaire_horaire: updated.salaireHoraire,
-          devise: 'CAD',
-          hebergement_fourni: true,
-          adresse_hebergement: housingData.hebergementAdresseComplete,
-          photo: updated.photoUrl || '',
-          photo_url: updated.photoUrl || '',
-          contrat_pdf_url: '',
-          has_custom_pdf: false,
-          must_change_password: true,
-          is_active: true,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        };
-        onEmployeeCreated(newEmp);
-        executedActions.push('Salarié créé');
+        const newEmp = buildEmployeeRecordFromPostulant(updated);
+        await onEmployeeCreated(newEmp, { navigateToEmployeesTab: false });
+        executedActions.push('Salarié envoyé vers Salariés & Contrats');
       }
 
       if (autoQueue.downloadKitPdf) {
         const { doc, filename } = await generatePostulantKitPdf(
           updated,
           settings,
-          customVisualText['dossier_kit']
+          customVisualText['dossier_kit'],
+          docEsData,
+          layoutTemplates.doc_es,
+          kitOptions
         );
-        if (packageAsFolder) {
+        const kitIndividuals = await generateKitDocEsIndividualPdfsAsync(
+          updated,
+          docEsData,
+          settings,
+          layoutTemplates,
+          kitDocLayouts,
+          uploadedAssets,
+          assetsConfig,
+          kitDocVisualScopes
+        );
+        packagedFiles.push({
+          filename,
+          blob: doc.output('blob'),
+          category: 'administratif_rh',
+          actor: 'Candidat',
+          orderIndex: 1,
+          label: `01. Kit Candidat Compilé (${updated.casType === 'agence' ? 'Agence · 7 docs' : 'Direct · 8 docs'})`
+        });
+        kitIndividuals.forEach((item, idx) => {
           packagedFiles.push({
-            filename,
-            blob: doc.output('blob'),
-            category: 'administratif_rh',
-            actor: 'Candidat',
-            orderIndex: 1,
-            label: '01. Kit Candidat Complet'
+            filename: item.filename,
+            blob: item.doc.output('blob'),
+            category: 'fiches_doc_es',
+            actor: item.model.category === 'interne' ? 'Employeur' : 'Candidat',
+            orderIndex: 100 + item.model.id,
+            label: `Kit DOC ES · ${item.model.number} (${idx + 1}/${kitIndividuals.length})`
           });
-        } else {
-          doc.save(filename);
-        }
-        executedActions.push('Kit PDF');
+        });
+        executedActions.push(`Kit PDF (${kitIndividuals.length} Fiches DOC ES)`);
       }
 
       if (autoQueue.downloadContratPdf) {
@@ -930,71 +1083,55 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
           cricModelChoice === 'model1'
             ? await generateModel1AttestationPdf(cricVars, customVisualText['contrat'])
             : await generateModel2ContratPdf(cricVars, customVisualText['contrat']);
-        if (packageAsFolder) {
-          packagedFiles.push({
-            filename,
-            blob: doc.output('blob'),
-            category: 'contrats_promesses',
-            actor: 'Cabinet_CRIC',
-            orderIndex: 2,
-            label: '02. Contrat CRIC'
-          });
-        } else {
-          doc.save(filename);
-        }
+        packagedFiles.push({
+          filename,
+          blob: doc.output('blob'),
+          category: 'contrats_promesses',
+          actor: 'Cabinet_CRIC',
+          orderIndex: 2,
+          label: '02. Contrat CRIC'
+        });
         executedActions.push('Contrat CRIC PDF');
       }
 
       if (autoQueue.downloadPromessePdf) {
         const promesseObj = buildPromesseObj();
-        if (packageAsFolder) {
-          const doc = await generatePromesseEmbauchePdfDoc(promesseObj);
-          const safeNom = (updated.nomComplet || 'Salarie').replace(/\s+/g, '_');
-          packagedFiles.push({
-            filename: `Promesse_Embauche_${safeNom}.pdf`,
-            blob: doc.output('blob'),
-            category: 'contrats_promesses',
-            actor: 'Employeur',
-            orderIndex: 3,
-            label: "03. Promesse d'Embauche"
-          });
-        } else {
-          await downloadPromesseEmbauchePdf(promesseObj);
-        }
+        const doc = await generatePromesseEmbauchePdfDoc(promesseObj);
+        const safeNom = (updated.nomComplet || 'Salarie').replace(/\s+/g, '_');
+        packagedFiles.push({
+          filename: `Promesse_Embauche_${safeNom}.pdf`,
+          blob: doc.output('blob'),
+          category: 'contrats_promesses',
+          actor: 'Employeur',
+          orderIndex: 3,
+          label: "03. Promesse d'Embauche"
+        });
         executedActions.push('Promesse PDF');
       }
 
       if (autoQueue.downloadTicketPdf) {
         const { doc, filename } = await generateTicketEntretienPdf(ticketData, effectiveEmployerLogo);
-        if (packageAsFolder) {
-          packagedFiles.push({
-            filename,
-            blob: doc.output('blob'),
-            category: 'administratif_rh',
-            actor: 'Employeur',
-            orderIndex: 4,
-            label: "04. Ticket d'Entretien"
-          });
-        } else {
-          doc.save(filename);
-        }
+        packagedFiles.push({
+          filename,
+          blob: doc.output('blob'),
+          category: 'administratif_rh',
+          actor: 'Employeur',
+          orderIndex: 4,
+          label: "04. Ticket d'Entretien"
+        });
         executedActions.push('Ticket PDF');
       }
 
       if (autoQueue.downloadOffrePdf) {
-        if (packageAsFolder) {
-          const { doc, filename } = await generateJobOfferPdf(jobOffer, effectiveEmployerLogo);
-          packagedFiles.push({
-            filename,
-            blob: doc.output('blob'),
-            category: 'contrats_promesses',
-            actor: 'Employeur',
-            orderIndex: 5,
-            label: '05. Offre & CNP'
-          });
-        } else {
-          await downloadJobOfferPdf(jobOffer, effectiveEmployerLogo);
-        }
+        const { doc, filename } = await generateJobOfferPdf(jobOffer, effectiveEmployerLogo);
+        packagedFiles.push({
+          filename,
+          blob: doc.output('blob'),
+          category: 'contrats_promesses',
+          actor: 'Employeur',
+          orderIndex: 5,
+          label: '05. Offre & CNP'
+        });
         executedActions.push('Offre CNP PDF');
       }
 
@@ -1013,18 +1150,14 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
           companyName: updated.nomEntreprise
         };
         const { doc, filename } = await generateAssembledBookBundlePdf(bundleData, settings);
-        if (packageAsFolder) {
-          packagedFiles.push({
-            filename,
-            blob: doc.output('blob'),
-            category: 'contrats_promesses',
-            actor: 'Employeur',
-            orderIndex: 7,
-            label: '07. Bundle Couverture Livre'
-          });
-        } else {
-          doc.save(filename);
-        }
+        packagedFiles.push({
+          filename,
+          blob: doc.output('blob'),
+          category: 'contrats_promesses',
+          actor: 'Employeur',
+          orderIndex: 7,
+          label: '07. Bundle Couverture Livre'
+        });
         executedActions.push('Bundle PDF');
       }
 
@@ -1081,37 +1214,38 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
           customVisualText[ht.textKey],
           layoutTemplates[ht.docKey]
         );
-        if (packageAsFolder) {
-          packagedFiles.push({
-            filename,
-            blob: doc.output('blob'),
-            category: 'hebergement_notaire_hir',
-            actor: ht.actor,
-            orderIndex: ht.tabNum,
-            label: ht.label
-          });
-        } else {
-          doc.save(filename);
-        }
+        packagedFiles.push({
+          filename,
+          blob: doc.output('blob'),
+          category: 'hebergement_notaire_hir',
+          actor: ht.actor,
+          orderIndex: ht.tabNum,
+          label: ht.label
+        });
         executedActions.push(`Onglet ${ht.tabNum} PDF`);
       }
 
       let folderFeedback = '';
-      if (packageAsFolder && packagedFiles.length > 0) {
-        const exportRes = await exportSelectedDocumentsIntoFolder(packagedFiles, {
-          employeeOrCandidateName: updated.nomComplet,
-          referenceCode: updated.codeIdCandidature,
-          customFolderName: customAutoFolderName.trim() || undefined,
-          arrangementMode: autoArrangementMode,
-          preferNativeDirectoryPicker: preferNativeDirPicker,
-          includeManifestTxt: true
-        });
-        folderFeedback =
-          exportRes.method === 'directory_picker'
-            ? ` · Classés dans dossier local « ${exportRes.rootFolderName}/ » (${exportRes.fileCount} PDF)`
-            : ` · Dossier « ${exportRes.rootFolderName}/ » téléchargé (.zip, ${exportRes.fileCount} PDF)`;
-        if (exportRes.warning) {
-          folderFeedback += ` (${exportRes.warning})`;
+      if (packagedFiles.length > 0) {
+        if (packageAsFolder) {
+          const exportRes = await exportSelectedDocumentsIntoFolder(packagedFiles, {
+            employeeOrCandidateName: updated.nomComplet,
+            referenceCode: updated.codeIdCandidature,
+            customFolderName: customAutoFolderName.trim() || undefined,
+            arrangementMode: autoArrangementMode,
+            preferNativeDirectoryPicker: preferNativeDirPicker,
+            includeManifestTxt: true
+          });
+          folderFeedback =
+            exportRes.method === 'directory_picker'
+              ? ` · Enregistrés dans le dossier « ${exportRes.rootFolderName}/ » (${exportRes.fileCount} PDF)`
+              : ` · Dossier « ${exportRes.rootFolderName}/ » téléchargé (.zip, ${exportRes.fileCount} PDF)`;
+          if (exportRes.warning) {
+            folderFeedback += ` (${exportRes.warning})`;
+          }
+        } else {
+          const count = await triggerStaggeredIndividualDownloads(packagedFiles, updated.nomComplet);
+          folderFeedback = ` · ${count} PDF individuels téléchargés (${updated.nomComplet})`;
         }
       }
 
@@ -1187,10 +1321,41 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
     const { doc, filename } = await generatePostulantKitPdf(
       postulant,
       settings,
-      customVisualText['dossier_kit']
+      customVisualText['dossier_kit'],
+      docEsData,
+      layoutTemplates.doc_es,
+      {
+        uploadedAssets,
+        assetsConfig,
+        layoutTemplates,
+        kitDocLayouts,
+        kitDocVisualScopes
+      }
     );
     doc.save(filename);
-    triggerToast('Kit Candidat officiel téléchargé.');
+    const count = getDocEsModelsForCasType(postulant.casType).length;
+    triggerToast(
+      `Kit Candidat (${postulant.casType === 'agence' ? 'Via Agence' : 'Direct'} · ${count} PDF avec mises en page & visuels 6 Parties) téléchargé.`
+    );
+  };
+
+  const handleDownloadKitZipPackage = async () => {
+    const { zipBlob, zipFilename, pdfCount } = await generateKitCandidatZipPackage(
+      postulant,
+      settings,
+      docEsData,
+      layoutTemplates.doc_es,
+      customVisualText['dossier_kit'],
+      {
+        uploadedAssets,
+        assetsConfig,
+        layoutTemplates,
+        kitDocLayouts,
+        kitDocVisualScopes
+      }
+    );
+    triggerBlobDownload(zipBlob, zipFilename);
+    triggerToast(`Dossier ZIP « ${zipFilename} » (${pdfCount} PDFs avec visuels & mises en page) téléchargé.`);
   };
 
   const downloadHtmlFile = (filename: string, html: string) => {
@@ -1645,7 +1810,9 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                 style={{
                   textAlign: bp.titleAlign,
                   backgroundColor: bp.titleHasBox ? effectiveLayout.highlightTintColor : 'transparent',
-                  border: bp.titleHasBox ? `1.5px solid ${effectiveLayout.primaryColor}` : undefined,
+                  borderTop: bp.titleHasBox ? `1.5px solid ${effectiveLayout.primaryColor}` : undefined,
+                  borderRight: bp.titleHasBox ? `1.5px solid ${effectiveLayout.primaryColor}` : undefined,
+                  borderLeft: bp.titleHasBox ? `1.5px solid ${effectiveLayout.primaryColor}` : undefined,
                   borderBottom: bp.titleHasUnderline
                     ? `2px solid ${effectiveLayout.accentColor}`
                     : bp.titleHasBox
@@ -1949,22 +2116,23 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
   const checkedCount = Object.values(autoQueue).filter(Boolean).length;
 
   return (
-    <div className="bg-white rounded-2xl shadow-lg border border-slate-200 overflow-hidden font-sans">
+    <div className="ds-card overflow-hidden font-sans">
       {/* 1. EN-TÊTE CLAIR ET ÉPURÉ */}
-      <div className="bg-[#0B2545] text-white px-4 sm:px-6 py-4 sm:py-5 border-b border-[#163968] flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      <div className="bg-brand-navy text-white px-4 sm:px-6 py-4 sm:py-5 border-b border-brand-navy-mid flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div className="flex items-start gap-3 min-w-0">
           {onBack && (
             <button
               type="button"
               onClick={onBack}
-              className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer mt-0.5 shrink-0"
+              aria-label="Retour à la section précédente"
+              className="min-h-[44px] min-w-[44px] rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
               title="Retour à la section précédente"
             >
-              <ArrowLeft className="w-4 h-4 text-amber-300" />
+              <ArrowLeft className="w-4 h-4 text-brand-amber" aria-hidden="true" />
             </button>
           )}
-          <div className="p-2.5 rounded-xl bg-amber-400/15 border border-amber-300/30 shrink-0">
-            <UserPlus className="w-6 h-6 text-amber-300" />
+          <div className="p-2.5 rounded-xl bg-brand-amber/15 border border-brand-amber/30 shrink-0">
+            <UserPlus className="w-6 h-6 text-brand-amber" aria-hidden="true" />
           </div>
           <div className="min-w-0">
             <h2 className="text-lg sm:text-2xl font-extrabold tracking-tight text-white">
@@ -1985,6 +2153,21 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
           >
             <Save className="w-4 h-4 text-amber-300" />
             <span>Sauvegarder</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void handleSaveCandidateAndSendToEmployees(true)}
+            disabled={isSendingToEmployees}
+            className="min-h-[44px] px-3.5 sm:px-4 py-2 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-semibold text-xs sm:text-sm flex items-center gap-2 cursor-pointer disabled:opacity-50 whitespace-nowrap"
+            title="Enregistre le candidat dans Firestore et l'envoie vers Salariés & Contrats"
+          >
+            {isSendingToEmployees ? (
+              <RefreshCw className="w-4 h-4 animate-spin" />
+            ) : (
+              <UserCheck className="w-4 h-4 text-amber-300" />
+            )}
+            <span>{isSendingToEmployees ? 'Envoi...' : 'Enregistrer → Salariés & Contrats'}</span>
           </button>
 
           <button
@@ -3011,6 +3194,39 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                     ))}
                   </div>
                 </div>
+                <div className="p-4 rounded-xl bg-blue-50/70 border border-blue-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-bold text-[#0B2545]">
+                      Validation &amp; Transfert du Nouveau Candidat
+                    </h4>
+                    <p className="text-xs text-slate-600 mt-0.5">
+                      Enregistre le dossier complet dans Firestore et l’ajoute immédiatement dans « Salariés &amp; Contrats ».
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleSavePostulant()}
+                      className="min-h-[40px] px-4 py-2 rounded-lg bg-white hover:bg-slate-100 border border-slate-300 text-slate-800 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Save className="w-3.5 h-3.5 text-[#0066B3]" />
+                      <span>Sauvegarder le dossier</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleSaveCandidateAndSendToEmployees(true)}
+                      disabled={isSendingToEmployees}
+                      className="min-h-[40px] px-4 py-2 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      {isSendingToEmployees ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <UserCheck className="w-3.5 h-3.5 text-amber-300" />
+                      )}
+                      <span>Enregistrer &amp; Envoyer → Salariés &amp; Contrats</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -3068,15 +3284,19 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             }}
             onDownloadDocPdf={async (docKey) => {
               if (docKey === 'doc_es') {
-                const { doc, filename } = generateSingleDocEsPdf(
+                const { doc, filename } = await generateSingleDocEsPdfAsync(
                   1,
                   postulant,
                   docEsData,
                   settings,
-                  layoutTemplates.doc_es
+                  layoutTemplates,
+                  kitDocLayouts,
+                  uploadedAssets,
+                  assetsConfig,
+                  kitDocVisualScopes
                 );
                 doc.save(filename);
-                triggerToast('Fiche DOC ES PDF (mise en page imitée) téléchargée.');
+                triggerToast('Fiche DOC ES PDF (mise en page imitée & visuels 6 Parties) téléchargée.');
                 return;
               }
               const tabNumMap: Record<'t9' | 't10' | 't11' | 't12', HousingTabNumber> = {
@@ -3289,12 +3509,38 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                           className="rounded text-[#0066B3]"
                         />
                         <span className="text-[11px] font-semibold text-slate-700">
-                          Demander un dossier disque direct (Chrome/Edge, sinon ZIP auto)
+                          Dossier disque natif si autorisé (Chrome/Edge PC), sinon archive dossier .zip (PC, Android &amp; iPhone)
                         </span>
                       </label>
                     </div>
                   </div>
                 )}
+
+                <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[11px] text-slate-600">
+                    Un clic sur <strong>Génération Automatique ({checkedCount})</strong> télécharge directement l’ensemble des PDF cochés dans votre ordinateur ou téléphone.
+                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleSaveCandidateAndSendToEmployees(true)}
+                      disabled={isSendingToEmployees}
+                      className="px-3 py-2 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      <UserCheck className="w-3.5 h-3.5 text-amber-300" />
+                      <span>Enregistrer &amp; Envoyer → Salariés &amp; Contrats</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleRunAutomaticFullGeneration}
+                      disabled={isAutoExecuting}
+                      className="px-3.5 py-2 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      {isAutoExecuting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                      <span>Télécharger le Dossier PDF ({checkedCount})</span>
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
@@ -3504,108 +3750,653 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
         {/* CONTENU DES ONGLETS 01 À 13                                               */}
         {/* ========================================================================= */}
 
-        {/* ONGLET 01 : KIT CANDIDAT COMPLET */}
-        {activeManualTab === 'dossier_kit' && (
-          <InteractiveDocumentCanvas
-            title={`Kit Candidat : ${postulant.nomComplet} (${postulant.intitulePoste})`}
-            documentTypeLabel="Onglet 01 · Kit Candidat Officiel"
-            assetsConfig={assetsConfig}
-            onChangeAssetsConfig={handleUpdateAssetsConfig}
-            uploadedAssetUrls={uploadedAssets}
-            exclusiveVisualSet={{
-              logo: effectiveEmployerLogo,
-              signature: uploadedAssets.signature,
-              cachet: uploadedAssets.cachet,
-              filigrane: uploadedAssets.filigrane,
-              arrierePlan: uploadedAssets.arrierePlan,
-              barcode: effectiveBarcode,
-              qrcode: effectiveQrCode
-            }}
-            htmlEmailContent={emailModel.html}
-            onDownloadPdf={handleDownloadKitPdf}
-            onDownloadWord={() => {
-              downloadWordDocument(
-                `Kit_Candidat_${postulant.codeIdCandidature}`,
-                `Kit Candidat Officiel - ${postulant.nomComplet}`,
-                emailModel.html
-              );
-              triggerToast('Kit Candidat exporté au format Word (.docx).');
-            }}
-            onDownloadHtml={(html) => downloadHtmlFile(`Kit_Candidat_${postulant.codeIdCandidature}.html`, html)}
-            onOpenInWebmail={onOpenInWebmail}
-            onExportSuccess={triggerToast}
-            onTextEdited={(text) => setCustomVisualText((prev) => ({ ...prev, dossier_kit: text }))}
-            hasCustomText={Boolean(customVisualText['dossier_kit'])}
-            onResetText={() =>
-              setCustomVisualText((prev) => {
-                const copy = { ...prev };
-                delete copy['dossier_kit'];
-                return copy;
-              })
-            }
-          >
-            <div
-              contentEditable
-              suppressContentEditableWarning
-              className="space-y-4 font-sans text-sm text-slate-800 leading-relaxed whitespace-pre-wrap outline-none p-4 hover:bg-amber-50/40 rounded-lg cursor-text"
-            >
-              {customVisualText['dossier_kit'] ? (
-                customVisualText['dossier_kit']
-              ) : postulant.casType === 'direct' ? (
-                <>
-                  <h2 className="text-lg font-bold text-[#0B2545] border-b border-slate-200 pb-3">
-                    DOSSIER D’ACCUEIL &amp; KIT D’ENTRETIEN OFFICIEL (RECRUTEMENT EN DIRECT)
-                  </h2>
-                  <p>
-                    <strong>CANDIDAT :</strong> {postulant.civilite} {postulant.nomComplet} · Nationalité :{' '}
-                    {postulant.nationalite}
-                  </p>
-                  <p>
-                    <strong>POSTE CONVOQUÉ :</strong> {postulant.intitulePoste} (Code CNP {postulant.codeCnp})
-                  </p>
-                  <p>
-                    <strong>DATE &amp; HEURE :</strong> {postulant.dateEntretien} à {postulant.heureEntretien}
-                  </p>
-                  <p>
-                    <strong>MODALITÉ &amp; LIEU :</strong> {postulant.modaliteEntretien} · {postulant.lieuEntretien}
-                  </p>
-                  <p>
-                    <strong>RÉMUNÉRATION :</strong> {postulant.salaireHoraire.toFixed(2)} $ CAD / h (~
-                    {postulant.salaireMensuel.toLocaleString('fr-CA')} $ CAD / mois)
-                  </p>
-                  <p>
-                    <strong>EMPLOYEUR :</strong> {postulant.nomEntreprise} — {postulant.adresseEntreprise}
-                  </p>
-                </>
-              ) : (
-                <>
-                  <h2 className="text-lg font-bold text-[#0066B3] border-b border-slate-200 pb-3">
-                    FICHE DE LIAISON TRIPARTITE &amp; KIT DE PRÉPARATION (AGENCE DE PLACEMENT CRIC)
-                  </h2>
-                  <p>
-                    <strong>EMPLOYEUR :</strong> {postulant.nomEntreprise} ({postulant.adresseEntreprise})
-                  </p>
-                  <p>
-                    <strong>PRESTATAIRE MANDATÉ :</strong> {postulant.nomAgence} (Permis CNESST{' '}
-                    {postulant.permisCnesst} · CCIC {postulant.numeroCcic})
-                  </p>
-                  <p>
-                    <strong>CANDIDAT :</strong> {postulant.nomComplet} · Réf. Dossier : {postulant.codeIdCandidature}
-                  </p>
-                  <p>
-                    <strong>POSTE :</strong> {postulant.intitulePoste} (CNP {postulant.codeCnp})
-                  </p>
-                  <p>
-                    <strong>STATUT ENTRETIEN :</strong>{' '}
-                    {postulant.dispenseEntretienParGarantie
-                      ? 'Dispense activée par garantie de compétences du Prestataire'
-                      : `Entretien programmé le ${postulant.dateEntretien} à ${postulant.heureEntretien}`}
-                  </p>
-                </>
-              )}
+        {/* ONGLET 01 : KIT CANDIDAT COMPLET (CONSTITUÉ DES PDF "FICHES ET DOC ES" SELON CAS DIRECT / AGENCE) */}
+        {activeManualTab === 'dossier_kit' && (() => {
+          const activeKitModels = getDocEsModelsForCasType(postulant.casType);
+          const isAgenceKit = postulant.casType === 'agence';
+          const kitOptions = {
+            uploadedAssets,
+            assetsConfig,
+            layoutTemplates,
+            kitDocLayouts,
+            kitDocVisualScopes
+          };
+          const kitWordHtml = buildKitCandidatWordHtml(
+            postulant,
+            docEsData,
+            settings,
+            customVisualText['dossier_kit'],
+            kitOptions
+          );
+
+          const scopeSelectLabels: { value: ActorScopeId | 'auto'; label: string }[] = [
+            { value: 'auto', label: 'Auto (selon canal)' },
+            { value: 'employeur', label: '1. Employeur' },
+            { value: 'prestataire', label: '2. Cabinet CRIC' },
+            { value: 'hebEmployeur', label: '3. Hébergement (Ong. 9)' },
+            { value: 'notaire', label: '4. Notaire BC (Ong. 10)' },
+            { value: 'inspecteurHir', label: '5. Inspecteur HIR (Ong. 11)' },
+            { value: 'commissaireDeclaration', label: '6. Déclaration (Ong. 12)' }
+          ];
+
+          return (
+            <div className="space-y-4">
+              {/* Panneau de composition, mise en page par document & téléchargement du Kit */}
+              <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4 shadow-xs">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-100 pb-3.5">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-[#0B2545] text-amber-300 uppercase">
+                        01. Kit Candidat · Fiches &amp; DOC ES
+                      </span>
+                      <span
+                        className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                          isAgenceKit
+                            ? 'bg-indigo-50 text-indigo-800 border border-indigo-200'
+                            : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                        }`}
+                      >
+                        {isAgenceKit
+                          ? `Avec agence de placement · ${activeKitModels.length} documents PDF (Modèles 9 à 15)`
+                          : `Candidature directe · ${activeKitModels.length} documents PDF (Modèles 1 à 8)`}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-600 mt-1.5">
+                      Choisissez une mise en page dédiée par document et utilisez automatiquement tous vos fichiers importés dans « 3. Visuels, Logos &amp; Tampons (6 Parties) ».
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Sélecteur synchronisé Direct / Agence */}
+                    <div className="inline-flex bg-slate-100 border border-slate-200 rounded-lg p-1 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setPostulant({ ...postulant, casType: 'direct' })}
+                        className={`px-2.5 py-1.5 text-xs font-bold rounded-md cursor-pointer transition-colors ${
+                          !isAgenceKit ? 'bg-[#0066B3] text-white' : 'text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        Candidature directe (1–8)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPostulant({ ...postulant, casType: 'agence' })}
+                        className={`px-2.5 py-1.5 text-xs font-bold rounded-md cursor-pointer transition-colors ${
+                          isAgenceKit ? 'bg-[#0066B3] text-white' : 'text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        Via agence de placement (9–15)
+                      </button>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleDownloadKitPdf}
+                      className="px-3 py-2 rounded-lg bg-[#0B2545] hover:bg-[#134074] text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5 text-amber-300" />
+                      <span>Kit PDF Compilé ({activeKitModels.length} docs)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleDownloadKitZipPackage}
+                      className="px-3 py-2 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5" />
+                      <span>Dossier Tous les PDF (.zip)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setActiveWorkspaceTab('assets')}
+                      className="px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Palette className="w-3.5 h-3.5 text-[#0066B3]" />
+                      <span>3. Visuels (6 Parties)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setActiveManualTab('doc_es')}
+                      className="px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Edit3 className="w-3.5 h-3.5 text-[#0066B3]" />
+                      <span>Éditer Fiches DOC ES</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Barre rapide de mise en page pour l'ensemble du Kit */}
+                <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-bold text-[#0B2545]">Mise en page globale du Kit :</span>
+                    <button
+                      type="button"
+                      onClick={() => handleApplyPresetToAllKitDocs('auto_doc')}
+                      className="px-2.5 py-1 rounded bg-[#0066B3] text-white font-semibold hover:bg-[#005291] cursor-pointer"
+                    >
+                      Variée Automatique (Par type de document)
+                    </button>
+                    {KIT_LAYOUT_PRESETS.filter((p) => p.id !== 'auto_doc').map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => handleApplyPresetToAllKitDocs(preset.id)}
+                        className="px-2 py-1 rounded bg-white border border-slate-300 hover:border-[#0066B3] text-slate-700 font-semibold cursor-pointer inline-flex items-center gap-1"
+                      >
+                        <span
+                          className="w-2 h-2 rounded-full shrink-0"
+                          style={{ backgroundColor: preset.primaryColor }}
+                        />
+                        <span>{preset.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Grille des documents PDF inclus dans le Kit avec sélecteur Mise en page + Visuels (6 Parties) par document */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  {activeKitModels.map((m) => {
+                    const docLayout = resolveLayoutTemplateForDocEsModel(
+                      m.id,
+                      layoutTemplates,
+                      kitDocLayouts,
+                      layoutTemplates.doc_es
+                    );
+                    const docVisuals = resolveActorAssetsForDocEsModel(
+                      m.id,
+                      postulant,
+                      uploadedAssets,
+                      assetsConfig,
+                      kitDocVisualScopes[m.id]
+                    );
+                    const activePresetKey = kitDocLayouts[m.id] || 'auto_doc';
+                    const activeScopeKey = kitDocVisualScopes[m.id] || 'auto';
+                    const visualsCount = [
+                      docVisuals.logo.url,
+                      docVisuals.signature.url,
+                      docVisuals.cachet.url,
+                      docVisuals.filigrane.url,
+                      docVisuals.arrierePlan.url,
+                      docVisuals.barcode.url,
+                      docVisuals.qrcode.url
+                    ].filter(Boolean).length;
+
+                    return (
+                      <div
+                        key={m.id}
+                        className="p-3 rounded-xl border bg-slate-50/70 flex flex-col justify-between gap-2.5 text-xs"
+                        style={{
+                          borderColor: docLayout.accentColor || '#cbd5e1',
+                          borderTopWidth: '4px',
+                          borderTopColor: docLayout.primaryColor || '#0B2545'
+                        }}
+                      >
+                        <div>
+                          <div className="flex items-center justify-between gap-1.5">
+                            <span
+                              className="font-mono font-bold text-[10px]"
+                              style={{ color: docLayout.primaryColor || '#0066B3' }}
+                            >
+                              {m.number}
+                            </span>
+                            <span
+                              className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                m.category === 'interne'
+                                  ? 'bg-slate-200 text-slate-800'
+                                  : m.category === 'tripartite'
+                                  ? 'bg-purple-100 text-purple-900'
+                                  : 'bg-emerald-100 text-emerald-800'
+                              }`}
+                            >
+                              {m.category === 'interne'
+                                ? 'Interne RH'
+                                : m.category === 'tripartite'
+                                ? 'Tripartite'
+                                : 'Remis Candidat'}
+                            </span>
+                          </div>
+                          <p className="font-bold text-slate-900 mt-1 line-clamp-2 leading-snug">
+                            {m.title}
+                          </p>
+                          <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-slate-600">
+                            <span className="px-1.5 py-0.5 rounded bg-white border border-slate-200 font-semibold">
+                              {visualsCount} visuel(s) 6 Parties
+                            </span>
+                            {docVisuals.logo.url && (
+                              <img
+                                src={docVisuals.logo.url}
+                                alt=""
+                                className="h-4 max-w-[40px] object-contain"
+                              />
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="space-y-1.5 pt-1.5 border-t border-slate-200/80">
+                          <label className="block">
+                            <span className="text-[10px] font-bold text-slate-500 uppercase block mb-0.5">
+                              Mise en page :
+                            </span>
+                            <select
+                              value={activePresetKey}
+                              onChange={(e) => handleChangeKitDocLayout(m.id, e.target.value)}
+                              className="w-full px-2 py-1 rounded border border-slate-300 bg-white text-[11px] font-semibold text-slate-800 cursor-pointer"
+                            >
+                              {KIT_LAYOUT_PRESETS.map((pr) => (
+                                <option key={pr.id} value={pr.id}>
+                                  {pr.label}
+                                </option>
+                              ))}
+                              {layoutTemplates.t9 && <option value="import_t9">Importé Onglet 9 (Hébergement)</option>}
+                              {layoutTemplates.t10 && <option value="import_t10">Importé Onglet 10 (Notaire)</option>}
+                              {layoutTemplates.t11 && <option value="import_t11">Importé Onglet 11 (HIR)</option>}
+                              {layoutTemplates.t12 && <option value="import_t12">Importé Onglet 12 (Déclaration)</option>}
+                            </select>
+                          </label>
+
+                          <label className="block">
+                            <span className="text-[10px] font-bold text-slate-500 uppercase block mb-0.5">
+                              Visuels (6 Parties) :
+                            </span>
+                            <select
+                              value={activeScopeKey}
+                              onChange={(e) =>
+                                handleChangeKitDocVisualScope(m.id, e.target.value as ActorScopeId | 'auto')
+                              }
+                              className="w-full px-2 py-1 rounded border border-slate-300 bg-white text-[11px] font-semibold text-slate-800 cursor-pointer"
+                            >
+                              {scopeSelectLabels.map((sc) => (
+                                <option key={sc.value} value={sc.value}>
+                                  {sc.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-1.5 pt-1 border-t border-slate-200/80">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const el = document.getElementById(`kit-doc-es-${m.id}`);
+                              el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            }}
+                            className="text-[11px] font-semibold text-slate-600 hover:text-[#0066B3] cursor-pointer"
+                          >
+                            Voir ci-dessous
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const { doc, filename } = await generateSingleDocEsPdfAsync(
+                                m.id,
+                                postulant,
+                                docEsData,
+                                settings,
+                                layoutTemplates,
+                                kitDocLayouts,
+                                uploadedAssets,
+                                assetsConfig,
+                                kitDocVisualScopes
+                              );
+                              doc.save(filename);
+                              triggerToast(
+                                `PDF ${m.number} (${m.title}) téléchargé avec mise en page & visuels.`
+                              );
+                            }}
+                            className="px-2.5 py-1 rounded bg-white hover:bg-[#0B2545] hover:text-white border border-slate-300 text-slate-800 text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer transition-colors"
+                            title={`Télécharger le PDF individuel : ${m.title}`}
+                          >
+                            <Download className="w-3 h-3" />
+                            <span>PDF</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <InteractiveDocumentCanvas
+                title={`Kit Candidat (${isAgenceKit ? 'Via Agence · 7 PDF DOC ES' : 'Direct · 8 PDF DOC ES'}) : ${postulant.nomComplet}`}
+                documentTypeLabel={`Onglet 01 · Kit Candidat (${isAgenceKit ? 'Agence' : 'Direct'})`}
+                assetsConfig={assetsConfig}
+                onChangeAssetsConfig={handleUpdateAssetsConfig}
+                uploadedAssetUrls={uploadedAssets}
+                layoutTemplate={layoutTemplates.doc_es}
+                preferCustomPdfDownloadWhenUnedited={true}
+                exclusiveVisualSet={{
+                  logo: isAgenceKit
+                    ? uploadedAssets.logoPrestataire || effectiveEmployerLogo
+                    : effectiveEmployerLogo,
+                  signature: isAgenceKit
+                    ? uploadedAssets.signaturePrestataire || uploadedAssets.signature
+                    : uploadedAssets.signature,
+                  cachet: isAgenceKit
+                    ? uploadedAssets.cachetPrestataire || uploadedAssets.cachet
+                    : uploadedAssets.cachet,
+                  filigrane: isAgenceKit
+                    ? uploadedAssets.filigranePrestataire || uploadedAssets.filigrane
+                    : uploadedAssets.filigrane,
+                  arrierePlan: isAgenceKit
+                    ? uploadedAssets.arrierePlanPrestataire || uploadedAssets.arrierePlan
+                    : uploadedAssets.arrierePlan,
+                  barcode: isAgenceKit
+                    ? uploadedAssets.barcodePrestataire || effectiveBarcode
+                    : effectiveBarcode,
+                  qrcode: isAgenceKit
+                    ? uploadedAssets.qrcodePrestataire || effectiveQrCode
+                    : effectiveQrCode
+                }}
+                htmlEmailContent={emailModel.html}
+                onDownloadPdf={handleDownloadKitPdf}
+                onDownloadWord={() => {
+                  downloadWordDocument(
+                    `Kit_Candidat_${isAgenceKit ? 'Agence' : 'Direct'}_${postulant.codeIdCandidature}`,
+                    `Kit Candidat Officiel - ${postulant.nomComplet}`,
+                    kitWordHtml
+                  );
+                  triggerToast('Kit Candidat complet exporté au format Word (.docx).');
+                }}
+                onDownloadHtml={(html) => downloadHtmlFile(`Kit_Candidat_${postulant.codeIdCandidature}.html`, html)}
+                onOpenInWebmail={onOpenInWebmail}
+                onExportSuccess={triggerToast}
+                onTextEdited={(text) => setCustomVisualText((prev) => ({ ...prev, dossier_kit: text }))}
+                hasCustomText={Boolean(customVisualText['dossier_kit'])}
+                onResetText={() =>
+                  setCustomVisualText((prev) => {
+                    const copy = { ...prev };
+                    delete copy['dossier_kit'];
+                    return copy;
+                  })
+                }
+              >
+                <div
+                  contentEditable
+                  suppressContentEditableWarning
+                  className="space-y-6 font-sans text-sm text-slate-800 leading-relaxed outline-none p-2 rounded-lg cursor-text"
+                >
+                  {/* Couverture & Sommaire du Kit */}
+                  <div className="border-b-2 border-[#0B2545] pb-4 space-y-2">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-[#0066B3]">
+                        {isAgenceKit
+                          ? 'PARCOURS AVEC AGENCE DE PLACEMENT · PARTIE 2 FICHES & DOC ES'
+                          : 'PARCOURS CANDIDATURE DIRECTE · PARTIE 1 FICHES & DOC ES'}
+                      </span>
+                      <span className="text-[11px] font-mono font-bold text-slate-600">
+                        Réf. {postulant.codeIdCandidature}
+                      </span>
+                    </div>
+                    <h2 className="text-lg font-black text-[#0B2545]">
+                      {isAgenceKit
+                        ? 'KIT CANDIDAT OFFICIEL — VIA AGENCE DE PLACEMENT (7 DOCUMENTS PDF)'
+                        : 'KIT CANDIDAT OFFICIEL — CANDIDATURE EN DIRECT (8 DOCUMENTS PDF)'}
+                    </h2>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs bg-slate-50 border border-slate-200 rounded-lg p-3">
+                      <div>
+                        <strong>Postulant :</strong> {postulant.civilite} {postulant.nomComplet} ({postulant.nationalite})
+                      </div>
+                      <div>
+                        <strong>Poste :</strong> {postulant.intitulePoste} (CNP {postulant.codeCnp})
+                      </div>
+                      <div>
+                        <strong>Employeur :</strong> {postulant.nomEntreprise}
+                      </div>
+                      <div>
+                        {isAgenceKit ? (
+                          <>
+                            <strong>Agence mandataire :</strong> {postulant.nomAgence} (CNESST {postulant.permisCnesst})
+                          </>
+                        ) : (
+                          <>
+                            <strong>Entretien :</strong> {postulant.dateEntretien} à {postulant.heureEntretien}
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="pt-2">
+                      <p className="text-xs font-bold text-[#0B2545] uppercase mb-1.5">
+                        Sommaire des documents « Fiches et DOC ES » inclus :
+                      </p>
+                      <ol className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-xs text-slate-700 list-decimal pl-4">
+                        {activeKitModels.map((m) => (
+                          <li key={m.id}>
+                            <strong>{m.number}</strong> : {m.title}
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  </div>
+
+                  {customVisualText['dossier_kit'] && (
+                    <div className="p-3 rounded-lg bg-amber-50 border border-amber-300 text-xs whitespace-pre-wrap">
+                      {customVisualText['dossier_kit']}
+                    </div>
+                  )}
+
+                  {/* Rendu complet de chaque document Fiches et DOC ES avec sa mise en page & visuels 6 Parties */}
+                  <div className="space-y-6">
+                    {activeKitModels.map((m, idx) => {
+                      const rendered = renderDocEsPlainText(m.id, postulant, docEsData, settings);
+                      const docLayout = resolveEffectiveLayout(
+                        resolveLayoutTemplateForDocEsModel(
+                          m.id,
+                          layoutTemplates,
+                          kitDocLayouts,
+                          layoutTemplates.doc_es
+                        )
+                      );
+                      const bp = docLayout?.spatialBlueprint;
+                      const docVisuals = resolveActorAssetsForDocEsModel(
+                        m.id,
+                        postulant,
+                        uploadedAssets,
+                        assetsConfig,
+                        kitDocVisualScopes[m.id]
+                      );
+                      const primaryCol = docLayout?.primaryColor || '#0B2545';
+                      const accentCol = docLayout?.accentColor || '#0066B3';
+                      const pageBg = docLayout?.pageBgColor || '#ffffff';
+                      const fontCss =
+                        docLayout?.fontFamily === 'times'
+                          ? 'Georgia, "Times New Roman", serif'
+                          : docLayout?.fontFamily === 'courier'
+                          ? '"Courier New", monospace'
+                          : 'system-ui, -apple-system, sans-serif';
+                      const cleanBody = rendered.content
+                        .replace(/^[=\-_]{4,}\s*$/gm, '')
+                        .replace(/\n{3,}/g, '\n\n')
+                        .trim();
+
+                      return (
+                        <section
+                          key={m.id}
+                          id={`kit-doc-es-${m.id}`}
+                          className="rounded-xl p-4 sm:p-5 shadow-xs space-y-3 relative overflow-hidden"
+                          style={{
+                            backgroundColor: pageBg,
+                            fontFamily: fontCss,
+                            borderTop:
+                              docLayout?.borderStyle === 'double'
+                                ? `4px double ${docLayout.borderColor || primaryCol}`
+                                : `1.5px solid ${docLayout?.borderColor || '#cbd5e1'}`,
+                            borderRight:
+                              docLayout?.borderStyle === 'double'
+                                ? `4px double ${docLayout.borderColor || primaryCol}`
+                                : `1.5px solid ${docLayout?.borderColor || '#cbd5e1'}`,
+                            borderBottom:
+                              docLayout?.borderStyle === 'double'
+                                ? `4px double ${docLayout.borderColor || primaryCol}`
+                                : `1.5px solid ${docLayout?.borderColor || '#cbd5e1'}`,
+                            borderLeft: bp?.hasLeftAccentStripe
+                              ? `6px solid ${primaryCol}`
+                              : docLayout?.borderStyle === 'double'
+                              ? `4px double ${docLayout.borderColor || primaryCol}`
+                              : `1.5px solid ${docLayout?.borderColor || '#cbd5e1'}`
+                          }}
+                        >
+                          {docVisuals.arrierePlan.url && (
+                            <img
+                              src={docVisuals.arrierePlan.url}
+                              alt=""
+                              className="pointer-events-none select-none absolute inset-0 w-full h-full object-cover opacity-15"
+                            />
+                          )}
+                          {docVisuals.filigrane.url && (
+                            <img
+                              src={docVisuals.filigrane.url}
+                              alt=""
+                              className="pointer-events-none select-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 max-h-44 opacity-10 object-contain"
+                            />
+                          )}
+
+                          {/* En-tête stylisé selon la mise en page du document */}
+                          <div
+                            className={`relative z-10 flex flex-wrap items-center justify-between gap-2 pb-2.5 ${
+                              bp?.headerLayout === 'filled_banner' ? 'p-3 rounded-lg text-white -mx-1' : 'border-b'
+                            }`}
+                            style={{
+                              backgroundColor:
+                                bp?.headerLayout === 'filled_banner'
+                                  ? docLayout?.headerBgColor || primaryCol
+                                  : undefined,
+                              borderBottomColor: accentCol
+                            }}
+                          >
+                            <div className="flex items-center gap-3">
+                              {docVisuals.logo.url && (
+                                <img
+                                  src={docVisuals.logo.url}
+                                  alt="Logo Acteur"
+                                  className={`h-9 max-w-[96px] object-contain ${
+                                    bp?.headerLayout === 'filled_banner' ? 'bg-white p-1 rounded' : ''
+                                  }`}
+                                />
+                              )}
+                              <div>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span
+                                    className="px-2 py-0.5 rounded text-[10px] font-bold"
+                                    style={{
+                                      backgroundColor:
+                                        bp?.headerLayout === 'filled_banner' ? 'rgba(255,255,255,0.18)' : primaryCol,
+                                      color: '#FDE047'
+                                    }}
+                                  >
+                                    DOCUMENT {idx + 1}/{activeKitModels.length} · {m.number}
+                                  </span>
+                                  <span
+                                    className={`text-[10px] font-semibold ${
+                                      bp?.headerLayout === 'filled_banner' ? 'text-blue-100' : 'text-slate-500'
+                                    }`}
+                                  >
+                                    {docLayout?.detectedSummary || 'Mise en page standard'}
+                                  </span>
+                                </div>
+                                <h3
+                                  className="text-sm sm:text-base font-extrabold mt-1"
+                                  style={{
+                                    color: bp?.headerLayout === 'filled_banner' ? '#ffffff' : primaryCol
+                                  }}
+                                >
+                                  {rendered.title}
+                                </h3>
+                                {rendered.subtitle && (
+                                  <p
+                                    className={`text-[11px] ${
+                                      bp?.headerLayout === 'filled_banner' ? 'text-blue-100' : 'text-slate-500'
+                                    }`}
+                                  >
+                                    {rendered.subtitle}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+
+                            {docVisuals.logoSecondary?.url && (
+                              <img
+                                src={docVisuals.logoSecondary.url}
+                                alt="Logo Secondaire"
+                                className={`h-8 max-w-[84px] object-contain ${
+                                  bp?.headerLayout === 'filled_banner' ? 'bg-white p-1 rounded' : ''
+                                }`}
+                              />
+                            )}
+                          </div>
+
+                          <div className="relative z-10 text-xs whitespace-pre-wrap leading-relaxed text-slate-800">
+                            {cleanBody}
+                          </div>
+
+                          {/* Pied visuels authentification (Signature, Cachet, Code-Barres, QR Code) issus de 3. Visuels 6 Parties */}
+                          {(docVisuals.signature.url ||
+                            docVisuals.cachet.url ||
+                            docVisuals.signatureSecondary?.url ||
+                            docVisuals.cachetSecondary?.url ||
+                            docVisuals.barcode.url ||
+                            docVisuals.qrcode.url) && (
+                            <div className="relative z-10 pt-3 mt-2 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-3">
+                              <div className="flex items-center gap-2">
+                                {docVisuals.barcode.url && (
+                                  <img
+                                    src={docVisuals.barcode.url}
+                                    alt="Code-Barres"
+                                    className="h-7 object-contain"
+                                  />
+                                )}
+                                {docVisuals.qrcode.url && (
+                                  <img
+                                    src={docVisuals.qrcode.url}
+                                    alt="QR Code"
+                                    className="w-10 h-10 object-contain border border-slate-200 rounded bg-white p-0.5"
+                                  />
+                                )}
+                              </div>
+                              <div className="flex items-center gap-3">
+                                {docVisuals.cachetSecondary?.url && (
+                                  <img
+                                    src={docVisuals.cachetSecondary.url}
+                                    alt="Cachet 2"
+                                    className="h-10 object-contain"
+                                  />
+                                )}
+                                {docVisuals.signatureSecondary?.url && (
+                                  <img
+                                    src={docVisuals.signatureSecondary.url}
+                                    alt="Signature 2"
+                                    className="h-8 object-contain"
+                                  />
+                                )}
+                                {docVisuals.cachet.url && (
+                                  <img
+                                    src={docVisuals.cachet.url}
+                                    alt="Cachet Officiel"
+                                    className="h-11 object-contain"
+                                  />
+                                )}
+                                {docVisuals.signature.url && (
+                                  <img
+                                    src={docVisuals.signature.url}
+                                    alt="Signature Officielle"
+                                    className="h-9 object-contain"
+                                  />
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </section>
+                      );
+                    })}
+                  </div>
+                </div>
+              </InteractiveDocumentCanvas>
             </div>
-          </InteractiveDocumentCanvas>
-        )}
+          );
+        })()}
 
         {/* ONGLET 02 : CONTRAT DE TRAVAIL & PRESTATION CRIC */}
         {activeManualTab === 'contrat' && (
@@ -4278,6 +5069,13 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             }}
             settings={settings}
             layoutTemplate={layoutTemplates.doc_es}
+            layoutTemplates={layoutTemplates}
+            kitDocLayouts={kitDocLayouts}
+            onChangeKitDocLayout={handleChangeKitDocLayout}
+            kitDocVisualScopes={kitDocVisualScopes}
+            onChangeKitDocVisualScope={handleChangeKitDocVisualScope}
+            uploadedAssets={uploadedAssets}
+            assetsConfig={assetsConfig}
             onOpenInWebmail={onOpenInWebmail}
             onToast={triggerToast}
           />
