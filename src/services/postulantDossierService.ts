@@ -16,11 +16,14 @@ import type { PdfImportedAssetsConfig, UploadedAssetUrlsMap } from './department
 import {
   DocEsPreloadedImages,
   FichesDocEsData,
+  KitDocHeaderMap,
   KitDocLayoutMap,
   KitDocVisualScopeMap,
   buildDefaultFichesDocEsData,
   loadStoredFichesDocEsSync,
   getDocEsModelsForCasType,
+  getDocEsActorRequirement,
+  resolveActorAssetsForDocEsModel,
   renderDocEsPlainText,
   resolveLayoutTemplateForDocEsModel,
   preloadDocEsModelVisuals,
@@ -506,13 +509,14 @@ export interface PostulantKitGenerationOptions {
   assetsConfig?: PdfImportedAssetsConfig;
   layoutTemplates?: LayoutTemplatesMap;
   kitDocLayouts?: KitDocLayoutMap;
+  kitDocHeaders?: KitDocHeaderMap;
   kitDocVisualScopes?: KitDocVisualScopeMap;
 }
 
 /**
  * Génère le PDF complet du Kit Candidat constitué de l'ensemble des documents PDF
  * énumérés dans "Fiches et DOC ES" selon le type de candidature ('direct' : Modèles 1 à 8 | 'agence' : Modèles 9 à 15),
- * avec mise en page par document et intégration de tous les visuels "3. Visuels, Logos & Tampons (6 Parties)".
+ * avec mise en page par document, modèle d'en-tête dédié et intégration stricte des visuels "3. Visuels, Logos & Tampons (6 Parties)".
  */
 export async function generatePostulantKitPdf(
   p: PostulantInfo,
@@ -541,7 +545,8 @@ export async function generatePostulantKitPdf(
         m.id,
         mergedLayoutTemplates,
         kitOptions?.kitDocLayouts,
-        layoutTemplate || mergedLayoutTemplates.doc_es
+        layoutTemplate || mergedLayoutTemplates.doc_es,
+        kitOptions?.kitDocHeaders
       );
       perModelImages[m.id] = await preloadDocEsModelVisuals(
         m.id,
@@ -553,7 +558,7 @@ export async function generatePostulantKitPdf(
     })
   );
 
-  // Résoudre aussi les visuels de la page de couverture à partir des réglages Employeur/CRIC
+  // Résoudre aussi les visuels de la page de couverture sans jamais mélanger Employeur et Cabinet CRIC
   const firstModelId = models[0]?.id || (p.casType === 'agence' ? 9 : 1);
   const coverImages: DocEsPreloadedImages = perModelImages[firstModelId]
     ? { ...perModelImages[firstModelId] }
@@ -569,13 +574,13 @@ export async function generatePostulantKitPdf(
     if (!coverImages.logoEmp && p.logoUrl) {
       coverImages.logoEmp = await loadStaticImageAsPngDataUrl(p.logoUrl);
     }
-    if (!coverImages.logoAgence && p.logoAgenceUrl) {
+    if (p.casType === 'agence' && !coverImages.logoAgence && p.logoAgenceUrl) {
       coverImages.logoAgence = await loadStaticImageAsPngDataUrl(p.logoAgenceUrl);
     }
-    if (!coverImages.cachet && p.cachetUrl) {
+    if (!coverImages.cachet && p.cachetUrl && p.casType !== 'agence') {
       coverImages.cachet = await loadStaticImageAsPngDataUrl(p.cachetUrl);
     }
-    if (!coverImages.signature && p.signatureUrl) {
+    if (!coverImages.signature && p.signatureUrl && p.casType !== 'agence') {
       coverImages.signature = await loadStaticImageAsPngDataUrl(p.signatureUrl);
     }
     if (!coverImages.photo && p.photoUrl) {
@@ -599,7 +604,7 @@ export async function generatePostulantKitPdf(
 
 /**
  * Génère l'archive ZIP contenant tous les PDF individuels "Fiches et DOC ES" + le Kit PDF compilé
- * correspondant au type de candidature ('direct' vs 'agence'), avec mise en page par document et visuels 6 Parties.
+ * correspondant au type de candidature ('direct' vs 'agence'), avec mise en page, en-têtes et visuels 6 Parties.
  */
 export async function generateKitCandidatZipPackage(
   p: PostulantInfo,
@@ -634,7 +639,8 @@ export async function generateKitCandidatZipPackage(
     kitOptions?.kitDocLayouts,
     kitOptions?.uploadedAssets,
     kitOptions?.assetsConfig,
-    kitOptions?.kitDocVisualScopes
+    kitOptions?.kitDocVisualScopes,
+    kitOptions?.kitDocHeaders
   );
 
   const zip = new JSZip();
@@ -684,16 +690,42 @@ export function buildKitCandidatWordHtml(
         m.id,
         kitOptions?.layoutTemplates,
         kitOptions?.kitDocLayouts,
-        kitOptions?.layoutTemplates?.doc_es
+        kitOptions?.layoutTemplates?.doc_es,
+        kitOptions?.kitDocHeaders
+      );
+      const actorReq = getDocEsActorRequirement(m.id);
+      const visuals = resolveActorAssetsForDocEsModel(
+        m.id,
+        p,
+        kitOptions?.uploadedAssets,
+        kitOptions?.assetsConfig,
+        kitOptions?.kitDocVisualScopes?.[m.id]
       );
       const primaryColor = docTpl?.primaryColor || '#0B2545';
       const accentColor = docTpl?.accentColor || '#0066B3';
+      const headerMode = docTpl?.spatialBlueprint?.headerLayout || 'split_lr';
       const cleanBody = rendered.content
         .replace(/^[=\-_]{4,}\s*$/gm, '')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
+      const headerHtml =
+        headerMode === 'filled_banner'
+          ? `<div style="background:${docTpl?.headerBgColor || primaryColor}; color:#ffffff; padding:12px 14px; border-bottom:3px solid ${accentColor}; margin-bottom:12px;">
+               <div style="font-size:11pt; font-weight:bold;">${visuals.primaryEntityName}</div>
+               <div style="font-size:8.5pt; opacity:0.85;">${visuals.primarySubLine} · ${actorReq.badgeLabel}</div>
+             </div>`
+          : headerMode === 'centered_stack'
+          ? `<div style="text-align:center; border-bottom:2px solid ${primaryColor}; padding-bottom:8px; margin-bottom:12px;">
+               <div style="font-size:11.5pt; font-weight:bold; color:${primaryColor};">${visuals.primaryEntityName}</div>
+               <div style="font-size:8.5pt; color:#475569;">${visuals.primarySubLine} · Réf. ${d.referenceDossier}</div>
+             </div>`
+          : `<div style="border-bottom:2px solid ${accentColor}; padding-bottom:8px; margin-bottom:12px;">
+               <div style="font-size:11pt; font-weight:bold; color:${primaryColor};">${visuals.primaryEntityName}${visuals.secondaryEntityName ? ` &amp; ${visuals.secondaryEntityName}` : ''}</div>
+               <div style="font-size:8.5pt; color:#475569;">${visuals.primarySubLine} · ${actorReq.badgeLabel}</div>
+             </div>`;
       return `
         <div style="page-break-before: always; border: 1.5px solid ${accentColor}; border-top: 5px solid ${primaryColor}; padding: 20px; margin-top: 24px;">
+          ${headerHtml}
           <p style="font-size: 9pt; font-weight: bold; color: ${accentColor}; margin: 0 0 4px 0;">${m.number} · ${m.categoryLabel}</p>
           <h2 style="font-size: 14pt; color: ${primaryColor}; margin: 0 0 4px 0;">${rendered.title}</h2>
           <p style="font-size: 9.5pt; color: #475569; margin: 0 0 12px 0;">${rendered.subtitle}</p>

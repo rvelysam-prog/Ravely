@@ -1092,6 +1092,13 @@ export interface DocEsAssetSlotResolved {
 export interface DocEsResolvedActorVisuals {
   primaryActor: ActorScopeId;
   secondaryActor?: ActorScopeId;
+  primaryEntityName: string;
+  primarySubLine: string;
+  primaryRepName: string;
+  primaryRepTitle: string;
+  secondaryEntityName?: string;
+  secondaryRepName?: string;
+  secondaryRepTitle?: string;
   logo: DocEsAssetSlotResolved;
   logoSecondary?: DocEsAssetSlotResolved;
   signature: DocEsAssetSlotResolved;
@@ -1106,6 +1113,15 @@ export interface DocEsResolvedActorVisuals {
 }
 
 export interface DocEsPreloadedImages {
+  primaryActor?: ActorScopeId;
+  secondaryActor?: ActorScopeId;
+  primaryEntityName?: string;
+  primarySubLine?: string;
+  primaryRepName?: string;
+  primaryRepTitle?: string;
+  secondaryEntityName?: string;
+  secondaryRepName?: string;
+  secondaryRepTitle?: string;
   logoEmp?: string;
   logoAgence?: string;
   signature?: string;
@@ -1207,8 +1223,70 @@ export const KIT_LAYOUT_PRESETS: KitLayoutPresetMeta[] = [
 export type KitDocLayoutMap = Record<number, string>;
 export type KitDocVisualScopeMap = Record<number, ActorScopeId | 'auto'>;
 
+export type KitHeaderPresetId =
+  | 'auto_header'
+  | 'bandeau_royal'
+  | 'en_tete_scinde'
+  | 'centre_solennel'
+  | 'barre_accent_haut'
+  | 'gauche_epure'
+  | 'bipartite_double_logo'
+  | 'cartouche_institutionnel';
+
+export interface KitHeaderPresetMeta {
+  id: KitHeaderPresetId;
+  label: string;
+  shortDesc: string;
+}
+
+export const KIT_HEADER_PRESETS: KitHeaderPresetMeta[] = [
+  {
+    id: 'auto_header',
+    label: 'Automatique (Selon mise en page)',
+    shortDesc: 'Adapte automatiquement l’en-tête au document et aux acteurs impliqués'
+  },
+  {
+    id: 'bandeau_royal',
+    label: 'Bandeau Plein Exécutif',
+    shortDesc: 'Bandeau plein coloré, logo encadré et références à droite'
+  },
+  {
+    id: 'en_tete_scinde',
+    label: 'En-tête Scindé (Logo Gauche · Réf. Droite)',
+    shortDesc: 'Ligne d’en-tête aérée gauche/droite avec filet de séparation'
+  },
+  {
+    id: 'centre_solennel',
+    label: 'Centré Solennel (Sceau / Cabinet)',
+    shortDesc: 'Logo centré en haut, titre institutionnel centré et ligne de séparation'
+  },
+  {
+    id: 'barre_accent_haut',
+    label: 'Barre Supérieure + En-tête Épuré',
+    shortDesc: 'Liseré supérieur couleur primaire et en-tête épuré'
+  },
+  {
+    id: 'gauche_epure',
+    label: 'Minimaliste Gauche + Filet Discret',
+    shortDesc: 'En-tête aligné à gauche avec filet discret et repère de page'
+  },
+  {
+    id: 'bipartite_double_logo',
+    label: 'Bipartite / Tripartite (Double Logo Cabinet & Employeur)',
+    shortDesc: 'Affiche côte à côte les deux acteurs (Cabinet CRIC & Entreprise Employeur)'
+  },
+  {
+    id: 'cartouche_institutionnel',
+    label: 'Cartouche Institutionnel Encadré',
+    shortDesc: 'Grand bandeau officiel 25 mm avec mention d’entité et cartouche référence'
+  }
+];
+
+export type KitDocHeaderMap = Record<number, KitHeaderPresetId | string>;
+
 const LS_KIT_DOC_LAYOUTS_KEY = 'atlantic_kit_doc_layouts_v1';
 const LS_KIT_DOC_VISUAL_SCOPES_KEY = 'atlantic_kit_doc_visual_scopes_v1';
+const LS_KIT_DOC_HEADERS_KEY = 'atlantic_kit_doc_headers_v1';
 
 export function loadKitDocLayoutsSync(): KitDocLayoutMap {
   try {
@@ -1229,7 +1307,12 @@ export async function saveKitDocLayouts(map: KitDocLayoutMap): Promise<void> {
   try {
     await setDoc(
       doc(db, 'document_layout_templates', 'kit_doc_layouts'),
-      { map, updatedAt: new Date().toISOString() },
+      {
+        docKey: 'doc_es',
+        sourceFileName: 'kit_doc_layouts',
+        map,
+        updatedAt: new Date().toISOString()
+      },
       { merge: true }
     );
   } catch {}
@@ -1274,7 +1357,12 @@ export async function saveKitDocVisualScopes(map: KitDocVisualScopeMap): Promise
   try {
     await setDoc(
       doc(db, 'document_layout_templates', 'kit_doc_visual_scopes'),
-      { map, updatedAt: new Date().toISOString() },
+      {
+        docKey: 'doc_es',
+        sourceFileName: 'kit_doc_visual_scopes',
+        map,
+        updatedAt: new Date().toISOString()
+      },
       { merge: true }
     );
   } catch {}
@@ -1291,6 +1379,56 @@ export async function loadKitDocVisualScopesFromFirestore(): Promise<KitDocVisua
         try {
           if (typeof localStorage !== 'undefined') {
             localStorage.setItem(LS_KIT_DOC_VISUAL_SCOPES_KEY, JSON.stringify(merged));
+          }
+        } catch {}
+        return merged;
+      }
+    }
+  } catch {}
+  return local;
+}
+
+export function loadKitDocHeadersSync(): KitDocHeaderMap {
+  try {
+    if (typeof localStorage === 'undefined') return {};
+    const raw = localStorage.getItem(LS_KIT_DOC_HEADERS_KEY);
+    return raw ? (JSON.parse(raw) as KitDocHeaderMap) : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function saveKitDocHeaders(map: KitDocHeaderMap): Promise<void> {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(LS_KIT_DOC_HEADERS_KEY, JSON.stringify(map));
+    }
+  } catch {}
+  try {
+    await setDoc(
+      doc(db, 'document_layout_templates', 'kit_doc_headers'),
+      {
+        docKey: 'doc_es',
+        sourceFileName: 'kit_doc_headers',
+        map,
+        updatedAt: new Date().toISOString()
+      },
+      { merge: true }
+    );
+  } catch {}
+}
+
+export async function loadKitDocHeadersFromFirestore(): Promise<KitDocHeaderMap> {
+  const local = loadKitDocHeadersSync();
+  try {
+    const snap = await getDoc(doc(db, 'document_layout_templates', 'kit_doc_headers'));
+    if (snap.exists()) {
+      const data = snap.data() as { map?: KitDocHeaderMap };
+      if (data?.map) {
+        const merged = { ...local, ...data.map };
+        try {
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem(LS_KIT_DOC_HEADERS_KEY, JSON.stringify(merged));
           }
         } catch {}
         return merged;
@@ -1550,45 +1688,246 @@ export function getRecommendedPresetForModel(modelId: number): Exclude<KitLayout
   return 'executif_navy';
 }
 
+export function getRecommendedHeaderPresetForModel(modelId: number): Exclude<KitHeaderPresetId, 'auto_header'> {
+  if ([9, 10, 11, 15].includes(modelId)) return 'bipartite_double_logo';
+  if ([4, 14].includes(modelId)) return 'barre_accent_haut';
+  if ([6, 7, 12, 13].includes(modelId)) return 'centre_solennel';
+  if ([1, 2, 3].includes(modelId)) return 'en_tete_scinde';
+  if ([5, 8].includes(modelId)) return 'bandeau_royal';
+  return 'bandeau_royal';
+}
+
+export function applyHeaderPresetToLayout(
+  layout: ReferenceLayoutTemplate,
+  headerPresetId: KitHeaderPresetId | string | undefined,
+  modelId: number
+): ReferenceLayoutTemplate & { _headerPresetId?: string; _forceDualHeader?: boolean } {
+  const effectiveHeaderId =
+    !headerPresetId || headerPresetId === 'auto_header'
+      ? undefined
+      : headerPresetId;
+
+  const baseEffective = resolveEffectiveLayout(layout) || layout;
+  if (!effectiveHeaderId) {
+    return {
+      ...baseEffective,
+      _headerPresetId: getRecommendedHeaderPresetForModel(modelId),
+      _forceDualHeader: [9, 10, 11, 15].includes(modelId)
+    };
+  }
+
+  const curBp = baseEffective.spatialBlueprint!;
+  if (effectiveHeaderId === 'bandeau_royal') {
+    return {
+      ...baseEffective,
+      headerStyle: 'bandeau_plein',
+      headerAlign: 'left',
+      logoPlacement: 'top_left',
+      spatialBlueprint: { ...curBp, headerLayout: 'filled_banner', headerHasDivider: false, headerBannerHeightMm: 22 },
+      _headerPresetId: effectiveHeaderId
+    };
+  }
+  if (effectiveHeaderId === 'cartouche_institutionnel') {
+    return {
+      ...baseEffective,
+      headerStyle: 'bandeau_plein',
+      headerAlign: 'left',
+      logoPlacement: 'top_left',
+      spatialBlueprint: { ...curBp, headerLayout: 'filled_banner', headerHasDivider: true, headerBannerHeightMm: 26 },
+      _headerPresetId: effectiveHeaderId
+    };
+  }
+  if (effectiveHeaderId === 'en_tete_scinde') {
+    return {
+      ...baseEffective,
+      headerStyle: 'split_officiel',
+      headerAlign: 'split',
+      logoPlacement: 'top_left',
+      spatialBlueprint: { ...curBp, headerLayout: 'split_lr', headerHasDivider: true, headerBannerHeightMm: 0 },
+      _headerPresetId: effectiveHeaderId
+    };
+  }
+  if (effectiveHeaderId === 'centre_solennel') {
+    return {
+      ...baseEffective,
+      headerStyle: 'encadre_classique',
+      headerAlign: 'center',
+      logoPlacement: 'top_center',
+      spatialBlueprint: { ...curBp, headerLayout: 'centered_stack', headerHasDivider: true, headerBannerHeightMm: 0 },
+      _headerPresetId: effectiveHeaderId
+    };
+  }
+  if (effectiveHeaderId === 'barre_accent_haut') {
+    return {
+      ...baseEffective,
+      headerStyle: 'entete_epure',
+      headerAlign: 'left',
+      logoPlacement: 'top_left',
+      spatialBlueprint: { ...curBp, headerLayout: 'top_accent_bar', headerHasDivider: true, headerBannerHeightMm: 0 },
+      _headerPresetId: effectiveHeaderId
+    };
+  }
+  if (effectiveHeaderId === 'gauche_epure') {
+    return {
+      ...baseEffective,
+      headerStyle: 'entete_epure',
+      headerAlign: 'left',
+      logoPlacement: 'top_left',
+      spatialBlueprint: { ...curBp, headerLayout: 'left_clean', headerHasDivider: true, headerBannerHeightMm: 0, hasTopRightMarker: true },
+      _headerPresetId: effectiveHeaderId
+    };
+  }
+  if (effectiveHeaderId === 'bipartite_double_logo') {
+    return {
+      ...baseEffective,
+      headerStyle: 'split_officiel',
+      headerAlign: 'split',
+      logoPlacement: 'top_left',
+      spatialBlueprint: { ...curBp, headerLayout: 'split_lr', headerHasDivider: true, headerBannerHeightMm: 0 },
+      _headerPresetId: effectiveHeaderId,
+      _forceDualHeader: true
+    };
+  }
+  return baseEffective;
+}
+
 export function resolveLayoutTemplateForDocEsModel(
   modelId: number,
   layoutTemplates?: LayoutTemplatesMap,
   kitDocLayouts?: KitDocLayoutMap,
-  fallbackDocEsTemplate?: ReferenceLayoutTemplate
-): ReferenceLayoutTemplate {
+  fallbackDocEsTemplate?: ReferenceLayoutTemplate,
+  kitDocHeaders?: KitDocHeaderMap
+): ReferenceLayoutTemplate & { _headerPresetId?: string; _forceDualHeader?: boolean } {
   const chosenKey = kitDocLayouts?.[modelId] || 'auto_doc';
+  let resolved: ReferenceLayoutTemplate;
 
   if (chosenKey === 'modele_importe') {
-    if (layoutTemplates?.doc_es) return layoutTemplates.doc_es;
-    if (fallbackDocEsTemplate) return fallbackDocEsTemplate;
-  }
-  if (chosenKey === 'import_t9' && layoutTemplates?.t9) return layoutTemplates.t9;
-  if (chosenKey === 'import_t10' && layoutTemplates?.t10) return layoutTemplates.t10;
-  if (chosenKey === 'import_t11' && layoutTemplates?.t11) return layoutTemplates.t11;
-  if (chosenKey === 'import_t12' && layoutTemplates?.t12) return layoutTemplates.t12;
-
-  if (chosenKey === 'auto_doc') {
+    resolved = layoutTemplates?.doc_es || fallbackDocEsTemplate || buildPresetReferenceLayout(getRecommendedPresetForModel(modelId), modelId);
+  } else if (chosenKey === 'import_t9' && layoutTemplates?.t9) {
+    resolved = layoutTemplates.t9;
+  } else if (chosenKey === 'import_t10' && layoutTemplates?.t10) {
+    resolved = layoutTemplates.t10;
+  } else if (chosenKey === 'import_t11' && layoutTemplates?.t11) {
+    resolved = layoutTemplates.t11;
+  } else if (chosenKey === 'import_t12' && layoutTemplates?.t12) {
+    resolved = layoutTemplates.t12;
+  } else if (chosenKey === 'auto_doc') {
     if (fallbackDocEsTemplate && !kitDocLayouts?.[modelId]) {
-      return fallbackDocEsTemplate;
+      resolved = fallbackDocEsTemplate;
+    } else {
+      resolved = buildPresetReferenceLayout(getRecommendedPresetForModel(modelId), modelId);
     }
-    return buildPresetReferenceLayout(getRecommendedPresetForModel(modelId), modelId);
-  }
-
-  if (
+  } else if (
     chosenKey === 'executif_navy' ||
     chosenKey === 'moderne_azur' ||
     chosenKey === 'notarial_double' ||
     chosenKey === 'grille_ats' ||
     chosenKey === 'protocole_canada'
   ) {
-    return buildPresetReferenceLayout(chosenKey, modelId);
+    resolved = buildPresetReferenceLayout(chosenKey, modelId);
+  } else {
+    resolved =
+      fallbackDocEsTemplate ||
+      layoutTemplates?.doc_es ||
+      buildPresetReferenceLayout(getRecommendedPresetForModel(modelId), modelId);
   }
 
-  return (
-    fallbackDocEsTemplate ||
-    layoutTemplates?.doc_es ||
-    buildPresetReferenceLayout(getRecommendedPresetForModel(modelId), modelId)
-  );
+  return applyHeaderPresetToLayout(resolved, kitDocHeaders?.[modelId], modelId);
+}
+
+/**
+ * Classification stricte des documents selon les 6 parties ("3. Visuels, Logos & Tampons") :
+ * - Modèles 1 à 8 (Direct) : Entreprise Employeur uniquement
+ * - Modèle 9 (Brief de recrutement) : Entreprise Employeur (émetteur) -> Cabinet CRIC
+ * - Modèles 10, 11, 15 (Prestation, Dossier présentation, Liaison tripartite) : Cabinet CRIC & Employeur
+ * - Modèles 12, 13, 14 (Inscription agence, RGPD agence, Préparation entretien) : Cabinet CRIC (Agence) uniquement
+ */
+export function getDocEsActorRequirement(modelId: number): {
+  primaryActor: ActorScopeId;
+  secondaryActor?: ActorScopeId;
+  isDualParty: boolean;
+  badgeLabel: string;
+} {
+  if (modelId >= 1 && modelId <= 8) {
+    return {
+      primaryActor: 'employeur',
+      isDualParty: false,
+      badgeLabel: 'Employeur (Entreprise)'
+    };
+  }
+  if (modelId === 9) {
+    return {
+      primaryActor: 'employeur',
+      secondaryActor: 'prestataire',
+      isDualParty: true,
+      badgeLabel: 'Employeur ↔ Cabinet CRIC'
+    };
+  }
+  if ([10, 11, 15].includes(modelId)) {
+    return {
+      primaryActor: 'prestataire',
+      secondaryActor: 'employeur',
+      isDualParty: true,
+      badgeLabel: modelId === 15 ? 'Tripartite : Cabinet CRIC & Employeur' : 'Cabinet CRIC & Employeur'
+    };
+  }
+  return {
+    primaryActor: 'prestataire',
+    isDualParty: false,
+    badgeLabel: 'Cabinet / Agence CRIC'
+  };
+}
+
+function getActorEntityInfo(
+  actor: ActorScopeId,
+  p: PostulantInfo
+): { entityName: string; subLine: string; repName: string; repTitle: string } {
+  if (actor === 'prestataire') {
+    return {
+      entityName: p.nomAgence || 'CABINET / AGENCE MANDATAIRE CRIC',
+      subLine: `CNESST ${p.permisCnesst || 'N/A'} · CCIC ${p.numeroCcic || 'N/A'}`,
+      repName: p.representantAgenceNom || 'Conseiller CRIC',
+      repTitle: p.representantAgenceTitre || 'Consultant en Immigration (CRIC)'
+    };
+  }
+  if (actor === 'notaire') {
+    return {
+      entityName: 'ÉTUDE NOTARIALE & ASSERMENTATION — C.-B.',
+      subLine: `${p.villeSignature || 'Surrey, BC'} · Certification Officielle`,
+      repName: 'Notaire Public Habilité',
+      repTitle: 'Notary Public of British Columbia'
+    };
+  }
+  if (actor === 'inspecteurHir') {
+    return {
+      entityName: 'INSPECTORAT CONFORMITÉ LOGEMENT (HIR / CM)',
+      subLine: 'Inspection Salubrité & Normes Résidentielles C.-B.',
+      repName: 'Inspecteur Certifié HIR',
+      repTitle: 'Housing Inspection Representative'
+    };
+  }
+  if (actor === 'commissaireDeclaration') {
+    return {
+      entityName: 'COMMISSARIAT À L’ASSERMENTATION (CER-CLT)',
+      subLine: `${p.nomEntreprise} · Déclaration Officielle`,
+      repName: p.representantEmployeurNom,
+      repTitle: 'Commissaire / Déclarant Habilité'
+    };
+  }
+  if (actor === 'hebEmployeur') {
+    return {
+      entityName: `${p.nomEntreprise} — SERVICE HÉBERGEMENT`,
+      subLine: p.adresseEntreprise || 'Colombie-Britannique, Canada',
+      repName: p.representantEmployeurNom,
+      repTitle: p.representantEmployeurTitre
+    };
+  }
+  return {
+    entityName: p.nomEntreprise,
+    subLine: p.adresseEntreprise || 'Colombie-Britannique, Canada',
+    repName: p.representantEmployeurNom,
+    repTitle: p.representantEmployeurTitre
+  };
 }
 
 function getAssetKeysForActorScope(actor: ActorScopeId): {
@@ -1640,84 +1979,80 @@ export function resolveActorAssetsForDocEsModel(
   assetsConfig: PdfImportedAssetsConfig = DEFAULT_PDF_ASSETS_CONFIG,
   scopeOverride?: ActorScopeId | 'auto'
 ): DocEsResolvedActorVisuals {
-  const isAgenceModel = modelId >= 9 || p.casType === 'agence';
+  const req = getDocEsActorRequirement(modelId);
   const primaryActor: ActorScopeId =
-    scopeOverride && scopeOverride !== 'auto'
-      ? scopeOverride
-      : isAgenceModel
-      ? 'prestataire'
-      : 'employeur';
+    scopeOverride && scopeOverride !== 'auto' ? scopeOverride : req.primaryActor;
 
   const primaryKeys = getAssetKeysForActorScope(primaryActor);
-  const empKeys = getAssetKeysForActorScope('employeur');
+  const defaultCfgFor = (slot: keyof typeof primaryKeys, key: ImportedAssetKey): PdfAssetItemSettings =>
+    assetsConfig[key] ||
+    DEFAULT_PDF_ASSETS_CONFIG[key] ||
+    DEFAULT_PDF_ASSETS_CONFIG[slot === 'barcode' ? 'barcodeEmployeur' : slot === 'qrcode' ? 'qrcodeEmployeur' : slot] ||
+    DEFAULT_PDF_ASSETS_CONFIG.logo;
 
-  const pickWithFallback = (
-    slot: keyof typeof primaryKeys,
-    directUrlFallback?: string
+  const pickStrictActorSlot = (
+    actor: ActorScopeId,
+    slot: keyof typeof primaryKeys
   ): DocEsAssetSlotResolved => {
-    const pKey = primaryKeys[slot];
-    const pUrl = uploadedAssets[pKey];
-    if (pUrl && pUrl.trim()) {
-      return {
-        key: pKey,
-        url: pUrl,
-        cfg:
-          assetsConfig[pKey] ||
-          DEFAULT_PDF_ASSETS_CONFIG[pKey] ||
-          DEFAULT_PDF_ASSETS_CONFIG[empKeys[slot]] ||
-          DEFAULT_PDF_ASSETS_CONFIG.logo
-      };
+    const keys = getAssetKeysForActorScope(actor);
+    const k = keys[slot];
+    let url = uploadedAssets[k] || '';
+
+    // Replis strictement bornés AU MÊME ACTEUR (jamais de mélange Cabinet <-> Employeur !)
+    if (!url.trim()) {
+      if (actor === 'employeur') {
+        if (slot === 'logo') url = p.logoUrl || '';
+        else if (slot === 'signature') url = p.signatureUrl || '';
+        else if (slot === 'cachet') url = p.cachetUrl || '';
+        else if (slot === 'filigrane') url = p.filigraneUrl || '';
+      } else if (actor === 'prestataire') {
+        if (slot === 'logo') url = p.logoAgenceUrl || '';
+      }
     }
-    const eKey = empKeys[slot];
-    const eUrl = uploadedAssets[eKey] || directUrlFallback || '';
+
     return {
-      key: eKey,
-      url: eUrl,
-      cfg:
-        assetsConfig[eKey] ||
-        DEFAULT_PDF_ASSETS_CONFIG[eKey] ||
-        DEFAULT_PDF_ASSETS_CONFIG.logo
+      key: k,
+      url,
+      cfg: defaultCfgFor(slot, k)
     };
   };
 
+  const primaryEntity = getActorEntityInfo(primaryActor, p);
+
   const result: DocEsResolvedActorVisuals = {
     primaryActor,
-    logo: pickWithFallback('logo', primaryActor === 'prestataire' ? p.logoAgenceUrl || p.logoUrl : p.logoUrl),
-    signature: pickWithFallback('signature', p.signatureUrl),
-    cachet: pickWithFallback('cachet', p.cachetUrl),
-    filigrane: pickWithFallback('filigrane', p.filigraneUrl),
-    arrierePlan: pickWithFallback('arrierePlan'),
-    barcode: pickWithFallback('barcode'),
-    qrcode: pickWithFallback('qrcode'),
+    primaryEntityName: primaryEntity.entityName,
+    primarySubLine: primaryEntity.subLine,
+    primaryRepName: primaryEntity.repName,
+    primaryRepTitle: primaryEntity.repTitle,
+    logo: pickStrictActorSlot(primaryActor, 'logo'),
+    signature: pickStrictActorSlot(primaryActor, 'signature'),
+    cachet: pickStrictActorSlot(primaryActor, 'cachet'),
+    filigrane: pickStrictActorSlot(primaryActor, 'filigrane'),
+    arrierePlan: pickStrictActorSlot(primaryActor, 'arrierePlan'),
+    barcode: pickStrictActorSlot(primaryActor, 'barcode'),
+    qrcode: pickStrictActorSlot(primaryActor, 'qrcode'),
     photoUrl: uploadedAssets.photoCandidat || p.photoUrl
   };
 
-  // Pour les documents bipartite / tripartite (Modèles 9, 10, 11, 15), inclure aussi le second acteur (Employeur)
-  if ((modelId >= 9 && [9, 10, 11, 15].includes(modelId)) || (isAgenceModel && primaryActor === 'prestataire')) {
-    result.secondaryActor = 'employeur';
-    const empLogo = uploadedAssets[empKeys.logo] || p.logoUrl || '';
-    const empSig = uploadedAssets[empKeys.signature] || p.signatureUrl || '';
-    const empCachet = uploadedAssets[empKeys.cachet] || p.cachetUrl || '';
-    if (empLogo && empLogo !== result.logo.url) {
-      result.logoSecondary = {
-        key: empKeys.logo,
-        url: empLogo,
-        cfg: assetsConfig[empKeys.logo] || DEFAULT_PDF_ASSETS_CONFIG.logo
-      };
-    }
-    if (empSig && empSig !== result.signature.url) {
-      result.signatureSecondary = {
-        key: empKeys.signature,
-        url: empSig,
-        cfg: assetsConfig[empKeys.signature] || DEFAULT_PDF_ASSETS_CONFIG.signature
-      };
-    }
-    if (empCachet && empCachet !== result.cachet.url) {
-      result.cachetSecondary = {
-        key: empKeys.cachet,
-        url: empCachet,
-        cfg: assetsConfig[empKeys.cachet] || DEFAULT_PDF_ASSETS_CONFIG.cachet
-      };
+  // Pour les documents bipartite / tripartite (Modèles 9, 10, 11, 15), inclure strictement le second acteur complémentaire
+  const isManualOverrideSingle = Boolean(scopeOverride && scopeOverride !== 'auto');
+  if (req.isDualParty && !isManualOverrideSingle) {
+    const secActor: ActorScopeId =
+      primaryActor === 'employeur' ? 'prestataire' : req.secondaryActor || 'employeur';
+    if (secActor !== primaryActor) {
+      const secEntity = getActorEntityInfo(secActor, p);
+      result.secondaryActor = secActor;
+      result.secondaryEntityName = secEntity.entityName;
+      result.secondaryRepName = secEntity.repName;
+      result.secondaryRepTitle = secEntity.repTitle;
+
+      const secLogo = pickStrictActorSlot(secActor, 'logo');
+      const secSig = pickStrictActorSlot(secActor, 'signature');
+      const secCachet = pickStrictActorSlot(secActor, 'cachet');
+      if (secLogo.url) result.logoSecondary = secLogo;
+      if (secSig.url) result.signatureSecondary = secSig;
+      if (secCachet.url) result.cachetSecondary = secCachet;
     }
   }
 
@@ -1762,7 +2097,7 @@ export async function preloadDocEsModelVisuals(
     photo
   ] = await Promise.all([
     prepareSafeAssetForPdf(resolved.logo.url, resolved.logo.cfg),
-    prepareSafeAssetForPdf(resolved.logoSecondary?.url || uploadedAssets.logoPrestataire || p.logoAgenceUrl, resolved.logoSecondary?.cfg || assetsConfig.logoPrestataire),
+    prepareSafeAssetForPdf(resolved.logoSecondary?.url, resolved.logoSecondary?.cfg),
     prepareSafeAssetForPdf(resolved.signature.url, resolved.signature.cfg),
     prepareSafeAssetForPdf(resolved.signatureSecondary?.url, resolved.signatureSecondary?.cfg),
     prepareSafeAssetForPdf(resolved.cachet.url, resolved.cachet.cfg),
@@ -1775,6 +2110,15 @@ export async function preloadDocEsModelVisuals(
   ]);
 
   return {
+    primaryActor: resolved.primaryActor,
+    secondaryActor: resolved.secondaryActor,
+    primaryEntityName: resolved.primaryEntityName,
+    primarySubLine: resolved.primarySubLine,
+    primaryRepName: resolved.primaryRepName,
+    primaryRepTitle: resolved.primaryRepTitle,
+    secondaryEntityName: resolved.secondaryEntityName,
+    secondaryRepName: resolved.secondaryRepName,
+    secondaryRepTitle: resolved.secondaryRepTitle,
     logoEmp,
     logoAgence,
     signature,
@@ -1954,8 +2298,22 @@ export function renderDocEsModelIntoPdf(
     }
   };
 
+  const actorMeta = getDocEsActorRequirement(modelId);
+  const headerMetaExtras = layoutTemplate as (ReferenceLayoutTemplate & { _headerPresetId?: string; _forceDualHeader?: boolean }) | undefined;
+  const headerEntityFallback =
+    actorMeta.primaryActor === 'prestataire'
+      ? p.nomAgence || p.nomEntreprise
+      : p.nomEntreprise;
+  const primaryEntityLabel = (imgs?.primaryEntityName || headerEntityFallback).toUpperCase();
+  const primarySubLabel =
+    imgs?.primarySubLine ||
+    (actorMeta.primaryActor === 'prestataire'
+      ? `CABINET CRIC · CNESST ${p.permisCnesst} · MODÈLE ${modelId}`
+      : `MODULE FICHES ET DOC ES · MODÈLE ${modelId}`);
+  const isDualHeader = Boolean(headerMetaExtras?._forceDualHeader || imgs?.logoAgence || imgs?.secondaryEntityName);
+
   if (bp) {
-    // 1. En-tête piloté strictement par le SpatialBlueprint du modèle choisi
+    // 1. En-tête piloté strictement par le SpatialBlueprint & le modèle d'en-tête choisi
     if (bp.headerLayout === 'top_accent_bar') {
       doc.setFillColor(...primaryRgb);
       doc.rect(0, 0, PAGE_WIDTH, 5, 'F');
@@ -1967,6 +2325,11 @@ export function renderDocEsModelIntoPdf(
       const bw = effective?.borderStyle !== 'none' ? PAGE_WIDTH - 28 : PAGE_WIDTH;
       doc.setFillColor(...headerRgb);
       doc.rect(bx, y - 2, bw, bannerH, 'F');
+      if (bp.headerHasDivider) {
+        doc.setDrawColor(...accentRgb);
+        doc.setLineWidth(0.75);
+        doc.line(bx, y - 2 + bannerH, bx + bw, y - 2 + bannerH);
+      }
 
       drawHeaderLogos(true, y - 2, bannerH);
 
@@ -1978,13 +2341,13 @@ export function renderDocEsModelIntoPdf(
           ? MARGIN_LEFT + 36
           : MARGIN_LEFT;
       doc.setFont(pdfFont, 'bold');
-      doc.setFontSize(11);
+      doc.setFontSize(10.5);
       doc.setTextColor(...headerTextRgb);
-      doc.text(p.nomEntreprise.toUpperCase(), textStartX, y + 6.5);
+      doc.text(primaryEntityLabel, textStartX, y + 6.5, { maxWidth: isDualHeader ? 72 : 108 });
       doc.setFont(pdfFont, 'normal');
-      doc.setFontSize(8);
+      doc.setFontSize(7.6);
       doc.setTextColor(...accentRgb);
-      doc.text(`MODULE FICHES ET DOC ES · MODÈLE ${modelId}`, textStartX, y + 12.5);
+      doc.text(primarySubLabel, textStartX, y + 12.5, { maxWidth: isDualHeader ? 74 : 112 });
 
       if (!imgs?.logoAgence || imgs.logoAgence === imgs.logoEmp || effective?.logoPlacement === 'top_right') {
         doc.setFontSize(8);
@@ -1999,13 +2362,13 @@ export function renderDocEsModelIntoPdf(
         y += 14.5;
       }
       doc.setFont(pdfFont, 'bold');
-      doc.setFontSize(13);
+      doc.setFontSize(12.5);
       doc.setTextColor(...primaryRgb);
-      doc.text(p.nomEntreprise.toUpperCase(), PAGE_WIDTH / 2, y + 3.5, { align: 'center' });
+      doc.text(primaryEntityLabel, PAGE_WIDTH / 2, y + 3.5, { align: 'center', maxWidth: CONTENT_WIDTH - 10 });
       doc.setFont(pdfFont, 'normal');
-      doc.setFontSize(8.2);
+      doc.setFontSize(8);
       doc.setTextColor(71, 85, 105);
-      doc.text(`MODULE FICHES ET DOC ES · MODÈLE ${modelId} · RÉF : ${d.referenceDossier}`, PAGE_WIDTH / 2, y + 8.5, {
+      doc.text(`${primarySubLabel} · RÉF : ${d.referenceDossier}`, PAGE_WIDTH / 2, y + 8.5, {
         align: 'center'
       });
       y += 12;
@@ -2016,22 +2379,36 @@ export function renderDocEsModelIntoPdf(
         y += 4;
       }
     } else if (bp.headerLayout === 'split_lr') {
-      if (imgs?.logoEmp) {
+      if (imgs?.logoEmp || imgs?.logoAgence) {
         drawHeaderLogos(false, y - 1, 13);
       }
       const leftTextX = imgs?.logoEmp && effective?.logoPlacement !== 'top_right' ? MARGIN_LEFT + 35 : MARGIN_LEFT;
       doc.setFont(pdfFont, 'bold');
-      doc.setFontSize(11.5);
+      doc.setFontSize(10.5);
       doc.setTextColor(...primaryRgb);
-      doc.text(p.nomEntreprise.toUpperCase(), leftTextX, y + 4.5);
+      doc.text(primaryEntityLabel, leftTextX, y + 4.2, { maxWidth: isDualHeader ? 68 : 96 });
       doc.setFont(pdfFont, 'normal');
-      doc.setFontSize(8);
+      doc.setFontSize(7.5);
       doc.setTextColor(71, 85, 105);
-      if (!imgs?.logoAgence || imgs.logoAgence === imgs.logoEmp) {
-        doc.text(`Système ATS · Modèle ${modelId}`, PAGE_WIDTH - MARGIN_RIGHT, y + 3.5, { align: 'right' });
+      doc.text(primarySubLabel, leftTextX, y + 8.6, { maxWidth: isDualHeader ? 68 : 96 });
+
+      const rightTextX = imgs?.logoAgence && imgs.logoAgence !== imgs.logoEmp
+        ? PAGE_WIDTH - MARGIN_RIGHT - 32
+        : PAGE_WIDTH - MARGIN_RIGHT;
+      if (isDualHeader && imgs?.secondaryEntityName) {
+        doc.setFont(pdfFont, 'bold');
+        doc.setFontSize(8.2);
+        doc.setTextColor(...primaryRgb);
+        doc.text(imgs.secondaryEntityName.toUpperCase(), rightTextX, y + 4.2, { align: 'right', maxWidth: 60 });
+        doc.setFont(pdfFont, 'normal');
+        doc.setFontSize(7.3);
+        doc.setTextColor(71, 85, 105);
+        doc.text(`Réf. ${d.referenceDossier}`, rightTextX, y + 8.6, { align: 'right' });
+      } else if (!imgs?.logoAgence || imgs.logoAgence === imgs.logoEmp) {
+        doc.text(`Modèle ${modelId} · ${actorMeta.badgeLabel}`, PAGE_WIDTH - MARGIN_RIGHT, y + 3.5, { align: 'right' });
         doc.text(`Dossier : ${d.referenceDossier}`, PAGE_WIDTH - MARGIN_RIGHT, y + 8, { align: 'right' });
       }
-      y += imgs?.logoEmp ? 15 : 11;
+      y += imgs?.logoEmp || imgs?.logoAgence ? 15 : 11;
       if (bp.headerHasDivider) {
         doc.setDrawColor(...accentRgb);
         doc.setLineWidth(0.5);
@@ -2045,9 +2422,13 @@ export function renderDocEsModelIntoPdf(
       }
       const leftTextX = imgs?.logoEmp && effective?.logoPlacement !== 'top_right' ? MARGIN_LEFT + 36 : MARGIN_LEFT;
       doc.setFont(pdfFont, 'bold');
-      doc.setFontSize(12.5);
+      doc.setFontSize(12);
       doc.setTextColor(...primaryRgb);
-      doc.text(p.nomEntreprise.toUpperCase(), leftTextX, y + 5.5);
+      doc.text(primaryEntityLabel, leftTextX, y + 5, { maxWidth: 112 });
+      doc.setFont(pdfFont, 'normal');
+      doc.setFontSize(7.6);
+      doc.setTextColor(71, 85, 105);
+      doc.text(`${primarySubLabel} · Dossier ${d.referenceDossier}`, leftTextX, y + 9.8, { maxWidth: 112 });
       if (bp.hasTopRightMarker) {
         doc.setDrawColor(180, 190, 200);
         doc.setLineWidth(0.2);
@@ -2055,7 +2436,7 @@ export function renderDocEsModelIntoPdf(
         doc.setFillColor(20, 25, 35);
         doc.rect(PAGE_WIDTH - MARGIN_RIGHT - 2.1, y + 0.9, 1.2, 1.2, 'F');
       }
-      y += imgs?.logoEmp ? 15 : 10;
+      y += imgs?.logoEmp ? 15 : 12;
       if (bp.headerHasDivider) {
         doc.setDrawColor(...primaryRgb);
         doc.setLineWidth(0.35);
@@ -2276,13 +2657,10 @@ export function renderDocEsModelIntoPdf(
     doc.setFont(pdfFont, 'bold');
     doc.setFontSize(7.5);
     doc.setTextColor(...primaryRgb);
-    doc.text(
-      p.casType === 'agence'
-        ? `${p.nomAgence} · ${p.nomEntreprise}`
-        : `${p.nomEntreprise} · ${p.representantEmployeurNom}`,
-      MARGIN_LEFT,
-      sigBlockY + 4
-    );
+    const sigEntityHeader = imgs.secondaryEntityName
+      ? `${imgs.primaryEntityName || primaryEntityLabel}  |  ${imgs.secondaryEntityName}`
+      : `${imgs.primaryEntityName || primaryEntityLabel} · ${imgs.primaryRepName || p.representantEmployeurNom}`;
+    doc.text(sigEntityHeader.slice(0, 105), MARGIN_LEFT, sigBlockY + 4);
 
     if (imgs.barcode) {
       try {
@@ -2297,29 +2675,52 @@ export function renderDocEsModelIntoPdf(
       } catch {}
     }
 
+    if (imgs.cachetSecondary || imgs.signatureSecondary) {
+      doc.setFont(pdfFont, 'bold');
+      doc.setFontSize(6.5);
+      doc.setTextColor(71, 85, 105);
+      doc.text(
+        imgs.secondaryActor === 'employeur' ? 'Pour l’Entreprise (Employeur) :' : 'Pour le Cabinet CRIC :',
+        PAGE_WIDTH / 2 - 4,
+        sigBlockY + 8
+      );
+    }
     if (imgs.cachetSecondary) {
       try {
         const csBox = pxCfgToMm(imgs.cfgs?.cachetSecondary, 16, 16, 26, 26);
-        doc.addImage(imgs.cachetSecondary, 'PNG', PAGE_WIDTH / 2 - 4 + csBox.dx, sigBlockY + csBox.dy, csBox.w, csBox.h);
+        doc.addImage(imgs.cachetSecondary, 'PNG', PAGE_WIDTH / 2 - 4 + csBox.dx, sigBlockY + 9 + csBox.dy, csBox.w, csBox.h);
       } catch {}
     }
     if (imgs.signatureSecondary) {
       try {
         const ssBox = pxCfgToMm(imgs.cfgs?.signatureSecondary, 22, 11, 34, 16);
-        doc.addImage(imgs.signatureSecondary, 'PNG', PAGE_WIDTH / 2 + 14 + ssBox.dx, sigBlockY + 2 + ssBox.dy, ssBox.w, ssBox.h);
+        doc.addImage(imgs.signatureSecondary, 'PNG', PAGE_WIDTH / 2 + 14 + ssBox.dx, sigBlockY + 11 + ssBox.dy, ssBox.w, ssBox.h);
       } catch {}
     }
 
+    if (imgs.cachet || imgs.signature) {
+      doc.setFont(pdfFont, 'bold');
+      doc.setFontSize(6.5);
+      doc.setTextColor(...primaryRgb);
+      doc.text(
+        imgs.primaryActor === 'prestataire'
+          ? 'Visa & Cachet Cabinet CRIC :'
+          : 'Visa & Cachet Employeur :',
+        PAGE_WIDTH - MARGIN_RIGHT,
+        sigBlockY + 8,
+        { align: 'right' }
+      );
+    }
     if (imgs.cachet) {
       try {
         const cBox = pxCfgToMm(imgs.cfgs?.cachet, 18, 18, 28, 28);
-        doc.addImage(imgs.cachet, 'PNG', PAGE_WIDTH - MARGIN_RIGHT - 48 + cBox.dx, sigBlockY + cBox.dy, cBox.w, cBox.h);
+        doc.addImage(imgs.cachet, 'PNG', PAGE_WIDTH - MARGIN_RIGHT - 48 + cBox.dx, sigBlockY + 9 + cBox.dy, cBox.w, cBox.h);
       } catch {}
     }
     if (imgs.signature) {
       try {
         const sBox = pxCfgToMm(imgs.cfgs?.signature, 25, 12, 36, 18);
-        doc.addImage(imgs.signature, 'PNG', PAGE_WIDTH - MARGIN_RIGHT - 26 + sBox.dx, sigBlockY + 2 + sBox.dy, sBox.w, sBox.h);
+        doc.addImage(imgs.signature, 'PNG', PAGE_WIDTH - MARGIN_RIGHT - 26 + sBox.dx, sigBlockY + 11 + sBox.dy, sBox.w, sBox.h);
       } catch {}
     }
   }
@@ -2412,9 +2813,16 @@ export async function generateSingleDocEsPdfAsync(
   kitDocLayouts?: KitDocLayoutMap,
   uploadedAssets?: UploadedAssetUrlsMap,
   assetsConfig?: PdfImportedAssetsConfig,
-  kitDocVisualScopes?: KitDocVisualScopeMap
+  kitDocVisualScopes?: KitDocVisualScopeMap,
+  kitDocHeaders?: KitDocHeaderMap
 ): Promise<{ doc: jsPDF; filename: string }> {
-  const layoutTpl = resolveLayoutTemplateForDocEsModel(modelId, layoutTemplates, kitDocLayouts, layoutTemplates?.doc_es);
+  const layoutTpl = resolveLayoutTemplateForDocEsModel(
+    modelId,
+    layoutTemplates,
+    kitDocLayouts,
+    layoutTemplates?.doc_es,
+    kitDocHeaders
+  );
   const preloadedImages = await preloadDocEsModelVisuals(
     modelId,
     p,
@@ -2737,7 +3145,8 @@ export async function generateKitDocEsIndividualPdfsAsync(
   kitDocLayouts?: KitDocLayoutMap,
   uploadedAssets?: UploadedAssetUrlsMap,
   assetsConfig?: PdfImportedAssetsConfig,
-  kitDocVisualScopes?: KitDocVisualScopeMap
+  kitDocVisualScopes?: KitDocVisualScopeMap,
+  kitDocHeaders?: KitDocHeaderMap
 ): Promise<{ model: DocEsModelMeta; doc: jsPDF; filename: string }[]> {
   const models = getDocEsModelsForCasType(p.casType);
   const results: { model: DocEsModelMeta; doc: jsPDF; filename: string }[] = [];
@@ -2751,7 +3160,8 @@ export async function generateKitDocEsIndividualPdfsAsync(
       kitDocLayouts,
       uploadedAssets,
       assetsConfig,
-      kitDocVisualScopes
+      kitDocVisualScopes,
+      kitDocHeaders
     );
     results.push({ model, doc, filename });
   }

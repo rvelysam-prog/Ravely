@@ -51,7 +51,8 @@ import {
   ChevronLeft,
   Square,
   Columns,
-  SlidersHorizontal
+  SlidersHorizontal,
+  X
 } from 'lucide-react';
 import { LayoutTargetDocKey } from '../../services/layoutImitationService';
 import {
@@ -83,7 +84,8 @@ import {
   computeAspectLockedHeightPct,
   computeVisualFidelityReport,
   computeAsyncVisualCoverage,
-  computeFastHash
+  computeFastHash,
+  extractStyledTextBlockFromRegion
 } from '../../services/documentReplicaService';
 import { ResponsivePaperWrapper } from '../common/ResponsivePaperWrapper';
 
@@ -397,6 +399,8 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [activeTableCell, setActiveTableCell] = useState<{ elId: string; r: number; c: number } | null>(null);
+  const [isConvertingToText, setIsConvertingToText] = useState(false);
+  const [floatingMenuDismissedId, setFloatingMenuDismissedId] = useState<string | null>(null);
   const [showLayersPanel, setShowLayersPanel] = useState(false);
   const [layerKindFilter, setLayerKindFilter] = useState<'all' | 'text' | 'image' | 'table' | 'shape'>('all');
 
@@ -732,6 +736,7 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
     if (editingTextId === el.id) return;
 
     setEditingTextId(null);
+    setFloatingMenuDismissedId(null);
     if (el.kind !== 'table') setActiveTableCell(null);
 
     let nextSelected = selectedIds;
@@ -1245,6 +1250,30 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
         el.id === primarySelected.id ? ({ ...el, ...patch } as ReplicaElement) : el
       )
     }));
+  };
+
+  const handleConvertElementToTextBlock = async (el: ReplicaElement) => {
+    if (!project || isConvertingToText) return;
+    setIsConvertingToText(true);
+    try {
+      const res = await extractStyledTextBlockFromRegion(project, el);
+      commitProjectChange((prev) => ({
+        ...prev,
+        elements: prev.elements.map((item) => (item.id === el.id ? res.textElement : item))
+      }));
+      setSelectedIds([res.textElement.id]);
+      setActiveTableCell(null);
+      setFloatingMenuDismissedId(null);
+      onToast(
+        res.ocrSucceeded
+          ? `Bloc converti en texte éditable (${res.styleSummary})`
+          : `Bloc converti en texte (${res.styleSummary})`
+      );
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : 'Erreur lors de l’extraction OCR du bloc.');
+    } finally {
+      setIsConvertingToText(false);
+    }
   };
 
   const unhostedCount = (project?.assets || []).filter(
@@ -2836,6 +2865,208 @@ export const InteractiveReplicaStudio: React.FC<InteractiveReplicaStudioProps> =
                           }}
                         />
                       )}
+
+                      {/* FENÊTRE CONTEXTUELLE FLOTTANTE À CÔTÉ DE LA CASE DE SÉLECTION (ÉTAPE 5 CANVA) */}
+                      {step === 5 &&
+                        primarySelected &&
+                        selectedIds.length === 1 &&
+                        editingTextId !== primarySelected.id &&
+                        compareMode !== 'overlay' &&
+                        floatingMenuDismissedId !== primarySelected.id &&
+                        (() => {
+                          const elRight = primarySelected.xPct + primarySelected.wPct;
+                          const elBottom = primarySelected.yPct + primarySelected.hPct;
+                          let menuLeftPct = clamp(primarySelected.xPct + 2, 1.5, 65);
+                          let menuTopPct = clamp(primarySelected.yPct, 1.5, 72);
+
+                          if (elRight <= 65) {
+                            menuLeftPct = elRight + 1.5;
+                            menuTopPct = clamp(primarySelected.yPct, 1.5, 72);
+                          } else if (primarySelected.xPct >= 36) {
+                            menuLeftPct = clamp(primarySelected.xPct - 34.5, 1.5, 65);
+                            menuTopPct = clamp(primarySelected.yPct, 1.5, 72);
+                          } else if (elBottom <= 71) {
+                            menuLeftPct = clamp(primarySelected.xPct + 1.5, 1.5, 64);
+                            menuTopPct = elBottom + 1.5;
+                          } else if (primarySelected.yPct >= 26) {
+                            menuLeftPct = clamp(primarySelected.xPct + 1.5, 1.5, 64);
+                            menuTopPct = clamp(primarySelected.yPct - 25, 1.5, 72);
+                          }
+
+                          const kindBadge =
+                            primarySelected.kind === 'image'
+                              ? { label: 'Visuel', cls: 'bg-emerald-100 text-emerald-800' }
+                              : primarySelected.kind === 'table'
+                              ? { label: 'Tableau', cls: 'bg-indigo-100 text-indigo-800' }
+                              : primarySelected.kind === 'shape'
+                              ? { label: 'Forme', cls: 'bg-amber-100 text-amber-800' }
+                              : { label: 'Texte', cls: 'bg-blue-100 text-blue-800' };
+
+                          return (
+                            <div
+                              onPointerDown={(e) => e.stopPropagation()}
+                              onClick={(e) => e.stopPropagation()}
+                              style={{
+                                left: `${menuLeftPct}%`,
+                                top: `${menuTopPct}%`
+                              }}
+                              className="absolute z-[96] w-[250px] rounded-xl border border-slate-200 bg-white/98 backdrop-blur-xs shadow-xl p-2.5 text-left select-none"
+                            >
+                              <div className="flex items-center justify-between gap-1.5 border-b border-slate-100 pb-1.5 mb-2">
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase shrink-0 ${kindBadge.cls}`}>
+                                    {kindBadge.label}
+                                  </span>
+                                  <span className="text-[11px] font-bold text-[#0B2545] truncate">
+                                    {primarySelected.name}
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setFloatingMenuDismissedId(primarySelected.id)}
+                                  className="p-0.5 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-700 cursor-pointer shrink-0"
+                                  title="Fermer ce menu contextuel"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+
+                              <div className="space-y-1.5">
+                                <button
+                                  type="button"
+                                  disabled={isConvertingToText}
+                                  onClick={() => void handleConvertElementToTextBlock(primarySelected)}
+                                  className="w-full px-2.5 py-2 rounded-lg bg-[#0066B3] hover:bg-[#005291] text-white text-[11px] font-extrabold flex items-center justify-start gap-2 shadow-xs transition-colors cursor-pointer disabled:opacity-65"
+                                >
+                                  {isConvertingToText ? (
+                                    <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
+                                  ) : (
+                                    <ScanText className="w-3.5 h-3.5 shrink-0" />
+                                  )}
+                                  <span className="truncate">
+                                    {isConvertingToText
+                                      ? 'Extraction OCR + styles...'
+                                      : 'Bloc de texte (OCR + styles)'}
+                                  </span>
+                                </button>
+                                <p className="text-[10px] leading-snug text-slate-500 px-0.5">
+                                  Extrait le texte de cette zone (police, taille, couleur, fond &amp; alignement) et remplace l’élément sélectionné.
+                                </p>
+
+                                {primarySelected.kind === 'text' && !primarySelected.locked && (
+                                  <div className="grid grid-cols-2 gap-1 pt-1 border-t border-slate-100">
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditingTextId(primarySelected.id)}
+                                      className="px-2 py-1.5 rounded-md bg-blue-50 hover:bg-blue-100 text-[#0B2545] text-[10px] font-bold inline-flex items-center justify-center gap-1 cursor-pointer"
+                                    >
+                                      <Edit3 className="w-3 h-3 text-[#0066B3]" />
+                                      <span>Éditer texte</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        updateSelectedElement({
+                                          fontWeight:
+                                            primarySelected.fontWeight === '700' || primarySelected.fontWeight === '800'
+                                              ? '400'
+                                              : '700'
+                                        })
+                                      }
+                                      className="px-2 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-800 text-[10px] font-bold inline-flex items-center justify-center gap-1 cursor-pointer"
+                                    >
+                                      <Bold className="w-3 h-3" />
+                                      <span>
+                                        {primarySelected.fontWeight === '700' || primarySelected.fontWeight === '800'
+                                          ? 'Normal'
+                                          : 'Gras'}
+                                      </span>
+                                    </button>
+                                  </div>
+                                )}
+
+                                {primarySelected.kind === 'image' && (
+                                  <div className="grid grid-cols-2 gap-1 pt-1 border-t border-slate-100">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const asset = assetById.get((primarySelected as ReplicaImageElement).assetId);
+                                        if (!asset) return;
+                                        const lockedH = computeAspectLockedHeightPct(
+                                          primarySelected.wPct,
+                                          asset.widthPx,
+                                          asset.heightPx,
+                                          project.widthMm,
+                                          project.heightMm
+                                        );
+                                        updateSelectedElement({ hPct: lockedH, lockAspectRatio: true });
+                                        onToast('Ratio 1:1 original restauré.');
+                                      }}
+                                      className="px-2 py-1.5 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-900 text-[10px] font-bold inline-flex items-center justify-center gap-1 cursor-pointer"
+                                    >
+                                      <Sparkles className="w-3 h-3" />
+                                      <span>Ratio 1:1</span>
+                                    </button>
+                                    <label className="px-2 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-800 text-[10px] font-bold inline-flex items-center justify-center gap-1 cursor-pointer">
+                                      <Upload className="w-3 h-3" />
+                                      <span>Remplacer</span>
+                                      <input
+                                        type="file"
+                                        accept="image/*"
+                                        className="hidden"
+                                        onChange={(e) => {
+                                          const f = e.target.files?.[0];
+                                          e.target.value = '';
+                                          if (f) {
+                                            void handleReplaceAssetImage(
+                                              (primarySelected as ReplicaImageElement).assetId,
+                                              f
+                                            );
+                                          }
+                                        }}
+                                      />
+                                    </label>
+                                  </div>
+                                )}
+
+                                <div className="grid grid-cols-3 gap-1 pt-1 border-t border-slate-100">
+                                  <button
+                                    type="button"
+                                    onClick={handleDuplicateSelected}
+                                    className="px-1.5 py-1 rounded-md bg-slate-50 hover:bg-slate-100 text-slate-700 text-[10px] font-semibold inline-flex items-center justify-center gap-1 cursor-pointer"
+                                    title="Dupliquer"
+                                  >
+                                    <Copy className="w-3 h-3" />
+                                    <span>Dupliq.</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={handleToggleLockSelected}
+                                    className="px-1.5 py-1 rounded-md bg-slate-50 hover:bg-slate-100 text-slate-700 text-[10px] font-semibold inline-flex items-center justify-center gap-1 cursor-pointer"
+                                    title={primarySelected.locked ? 'Déverrouiller' : 'Verrouiller'}
+                                  >
+                                    {primarySelected.locked ? (
+                                      <Unlock className="w-3 h-3 text-amber-600" />
+                                    ) : (
+                                      <Lock className="w-3 h-3" />
+                                    )}
+                                    <span>{primarySelected.locked ? 'Déverr.' : 'Verr.'}</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={handleDeleteSelected}
+                                    disabled={primarySelected.locked}
+                                    className="px-1.5 py-1 rounded-md bg-red-50 hover:bg-red-100 text-red-700 text-[10px] font-semibold inline-flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40"
+                                    title="Supprimer"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                    <span>Suppr.</span>
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
                     </div>
                   </ResponsivePaperWrapper>
                 </div>

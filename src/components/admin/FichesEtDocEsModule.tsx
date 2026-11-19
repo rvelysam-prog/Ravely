@@ -26,8 +26,12 @@ import {
   FichesDocEsData,
   DOC_ES_MODELS_CATALOG,
   KIT_LAYOUT_PRESETS,
+  KIT_HEADER_PRESETS,
+  KitDocHeaderMap,
   KitDocLayoutMap,
   KitDocVisualScopeMap,
+  getDocEsActorRequirement,
+  resolveActorAssetsForDocEsModel,
   renderDocEsPlainText,
   generateSingleDocEsPdfAsync,
   resolveLayoutTemplateForDocEsModel,
@@ -55,6 +59,8 @@ interface FichesEtDocEsModuleProps {
   layoutTemplates?: LayoutTemplatesMap;
   kitDocLayouts?: KitDocLayoutMap;
   onChangeKitDocLayout?: (modelId: number, presetId: string) => void;
+  kitDocHeaders?: KitDocHeaderMap;
+  onChangeKitDocHeader?: (modelId: number, headerId: string) => void;
   kitDocVisualScopes?: KitDocVisualScopeMap;
   onChangeKitDocVisualScope?: (modelId: number, scope: ActorScopeId | 'auto') => void;
   uploadedAssets?: UploadedAssetUrlsMap;
@@ -72,6 +78,8 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
   layoutTemplates,
   kitDocLayouts,
   onChangeKitDocLayout,
+  kitDocHeaders,
+  onChangeKitDocHeader,
   kitDocVisualScopes,
   onChangeKitDocVisualScope,
   uploadedAssets,
@@ -122,11 +130,20 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
   );
 
   const activeModel = modelsCatalog.find((m) => m.id === selectedModelId) || modelsCatalog[0];
+  const actorReq = getDocEsActorRequirement(selectedModelId);
+  const resolvedActorVisuals = resolveActorAssetsForDocEsModel(
+    selectedModelId,
+    postulant,
+    uploadedAssets,
+    assetsConfig,
+    kitDocVisualScopes?.[selectedModelId]
+  );
   const resolvedModelLayout = resolveLayoutTemplateForDocEsModel(
     selectedModelId,
     layoutTemplates,
     kitDocLayouts,
-    layoutTemplate
+    layoutTemplate,
+    kitDocHeaders
   );
   const effectiveLayout = resolveEffectiveLayout(resolvedModelLayout);
   const bp: SpatialBlueprint | undefined = effectiveLayout?.spatialBlueprint;
@@ -136,7 +153,7 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
-  // Téléchargement PDF (avec mise en page du document & visuels des 6 Parties)
+  // Téléchargement PDF (avec mise en page, en-tête du document & visuels stricts des 6 Parties)
   const handleDownloadPdf = async () => {
     const { doc, filename } = await generateSingleDocEsPdfAsync(
       selectedModelId,
@@ -147,10 +164,11 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
       kitDocLayouts,
       uploadedAssets,
       assetsConfig,
-      kitDocVisualScopes
+      kitDocVisualScopes,
+      kitDocHeaders
     );
     doc.save(filename);
-    onToast(`Document PDF ${activeModel.number} téléchargé avec mise en page et visuels appliqués !`);
+    onToast(`Document PDF ${activeModel.number} téléchargé avec mise en page, en-tête et visuels appliqués !`);
   };
 
   // Téléchargement Word (.docx)
@@ -173,7 +191,8 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
       `DOC_ES_${activeModel.number.replace(/\s+/g, '_')}_${postulant.nom.toUpperCase()}`,
       activeModel.title,
       `<div style="font-family: ${fontCss}; color: ${effectiveLayout?.bodyTextColor || '#1e293b'};">
-        <p style="font-weight:bold; color:${primary}; margin-bottom:4px;">${postulant.nomEntreprise}</p>
+        <p style="font-weight:bold; color:${primary}; margin-bottom:2px;">${resolvedActorVisuals.primaryEntityName}${resolvedActorVisuals.secondaryEntityName ? ` &amp; ${resolvedActorVisuals.secondaryEntityName}` : ''}</p>
+        <p style="font-size:9pt; color:#475569; margin:0 0 6px 0;">${resolvedActorVisuals.primarySubLine} · ${actorReq.badgeLabel}</p>
         ${refPillHtml}
         <h1 style="text-align:${titleAlign}; color:#0f172a; font-size:16pt; margin:14px 0 4px 0;">${title}</h1>
         <p style="text-align:${titleAlign}; color:#475569; font-size:10pt; margin:0 0 14px 0;">${renderedContent.subtitle}</p>
@@ -421,8 +440,8 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
               </button>
             </div>
 
-            {(onChangeKitDocLayout || onChangeKitDocVisualScope) && (
-              <div className="w-full pt-3 mt-1 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+            {(onChangeKitDocLayout || onChangeKitDocHeader || onChangeKitDocVisualScope) && (
+              <div className="w-full pt-3 mt-1 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
                 {onChangeKitDocLayout && (
                   <label className="flex flex-col gap-1">
                     <span className="text-[10px] font-bold uppercase text-slate-500">
@@ -445,10 +464,28 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
                     </select>
                   </label>
                 )}
+                {onChangeKitDocHeader && (
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[10px] font-bold uppercase text-slate-500">
+                      Modèle d&apos;en-tête
+                    </span>
+                    <select
+                      value={kitDocHeaders?.[selectedModelId] || 'auto_header'}
+                      onChange={(e) => onChangeKitDocHeader(selectedModelId, e.target.value)}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-slate-50 font-semibold text-slate-800 cursor-pointer"
+                    >
+                      {KIT_HEADER_PRESETS.map((hp) => (
+                        <option key={hp.id} value={hp.id}>
+                          {hp.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 {onChangeKitDocVisualScope && (
                   <label className="flex flex-col gap-1">
                     <span className="text-[10px] font-bold uppercase text-slate-500">
-                      Visuels appliqués (3. Visuels 6 Parties)
+                      Visuels ({actorReq.badgeLabel})
                     </span>
                     <select
                       value={kitDocVisualScopes?.[selectedModelId] || 'auto'}
@@ -457,7 +494,7 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
                       }
                       className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-slate-50 font-semibold text-slate-800 cursor-pointer"
                     >
-                      <option value="auto">Automatique (Employeur / Cabinet CRIC)</option>
+                      <option value="auto">Automatique ({actorReq.badgeLabel})</option>
                       <option value="employeur">1. Entreprise Employeur</option>
                       <option value="prestataire">2. Cabinet CRIC (Agence)</option>
                       <option value="hebEmployeur">3. Hébergement (Onglet 9)</option>
@@ -519,83 +556,146 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
                 color: effectiveLayout?.bodyTextColor || '#1e293b'
               }}
             >
+              {/* Visuels de fond & filigrane strictement liés à l'acteur du document */}
+              {resolvedActorVisuals.arrierePlan.url && (
+                <img
+                  src={resolvedActorVisuals.arrierePlan.url}
+                  alt=""
+                  className="pointer-events-none select-none absolute inset-0 w-full h-full object-cover opacity-15"
+                />
+              )}
+              {resolvedActorVisuals.filigrane.url && (
+                <img
+                  src={resolvedActorVisuals.filigrane.url}
+                  alt=""
+                  className="pointer-events-none select-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 max-h-48 opacity-10 object-contain"
+                />
+              )}
+
               {/* Bandeau d'accentuation supérieur si top_accent_bar */}
               {bp?.headerLayout === 'top_accent_bar' && (
                 <div
-                  className="-mx-7 -mt-7 mb-4 h-2"
+                  className="-mx-7 -mt-7 mb-4 h-2 relative z-10"
                   style={{ backgroundColor: effectiveLayout?.primaryColor || '#0B2545' }}
                 />
               )}
 
-              {/* En-tête de page piloté par le SpatialBlueprint du modèle importé */}
+              {/* En-tête de page piloté par le modèle d'en-tête & l'acteur strict */}
               {bp ? (
-                <div className="space-y-3">
+                <div className="space-y-3 relative z-10">
                   {bp.headerLayout === 'filled_banner' ? (
                     <div
-                      className="p-4 rounded-md flex items-center justify-between text-white"
+                      className="p-4 rounded-md flex flex-wrap items-center justify-between gap-3 text-white"
                       style={{
                         backgroundColor: effectiveLayout?.headerBgColor || effectiveLayout?.primaryColor || '#0B2545',
                         borderBottom: `3px solid ${effectiveLayout?.accentColor || '#D4A017'}`
                       }}
                     >
-                      <div>
-                        <h4 className="font-extrabold text-base">{postulant.nomEntreprise}</h4>
-                        <p className="text-[11px] opacity-85">Système ATS · {activeModel.number}</p>
+                      <div className="flex items-center gap-3">
+                        {resolvedActorVisuals.logo.url && (
+                          <img
+                            src={resolvedActorVisuals.logo.url}
+                            alt={resolvedActorVisuals.primaryEntityName}
+                            className="h-10 max-w-[110px] object-contain bg-white p-1 rounded"
+                          />
+                        )}
+                        <div>
+                          <h4 className="font-extrabold text-base">{resolvedActorVisuals.primaryEntityName}</h4>
+                          <p className="text-[11px] opacity-85">{resolvedActorVisuals.primarySubLine} · {activeModel.number}</p>
+                        </div>
                       </div>
-                      <div className="text-right text-[11px]">
-                        <div className="font-bold">Réf : {docEsData.referenceDossier}</div>
-                        <div className="opacity-85">Date : {postulant.dateEffet}</div>
+                      <div className="flex items-center gap-3">
+                        <div className="text-right text-[11px]">
+                          <div className="font-bold">Réf : {docEsData.referenceDossier}</div>
+                          <div className="opacity-85">Date : {postulant.dateEffet}</div>
+                        </div>
+                        {resolvedActorVisuals.logoSecondary?.url && (
+                          <img
+                            src={resolvedActorVisuals.logoSecondary.url}
+                            alt={resolvedActorVisuals.secondaryEntityName || ''}
+                            className="h-9 max-w-[90px] object-contain bg-white p-1 rounded"
+                          />
+                        )}
                       </div>
                     </div>
                   ) : bp.headerLayout === 'centered_stack' ? (
                     <div
-                      className="text-center pb-3"
+                      className="text-center pb-3 space-y-1.5"
                       style={{
                         borderBottom: bp.headerHasDivider
                           ? `2px solid ${effectiveLayout?.primaryColor || '#0B2545'}`
                           : undefined
                       }}
                     >
+                      {resolvedActorVisuals.logo.url && (
+                        <img
+                          src={resolvedActorVisuals.logo.url}
+                          alt={resolvedActorVisuals.primaryEntityName}
+                          className="h-10 max-w-[130px] object-contain mx-auto"
+                        />
+                      )}
                       <h4
                         className="font-extrabold text-lg"
                         style={{ color: effectiveLayout?.primaryColor || '#0B2545' }}
                       >
-                        {postulant.nomEntreprise}
+                        {resolvedActorVisuals.primaryEntityName}
                       </h4>
                       <p className="text-[11px] text-slate-500">
-                        {postulant.adresseEntreprise} · Réf : {docEsData.referenceDossier}
+                        {resolvedActorVisuals.primarySubLine} · Réf : {docEsData.referenceDossier}
                       </p>
                     </div>
                   ) : (
                     <div
-                      className="flex items-start justify-between pb-2"
+                      className="flex flex-wrap items-start justify-between gap-3 pb-2.5"
                       style={{
                         borderBottom: bp.headerHasDivider
                           ? `2px solid ${effectiveLayout?.accentColor || effectiveLayout?.primaryColor || '#0B2545'}`
                           : undefined
                       }}
                     >
-                      <div>
-                        <h4
-                          className="font-extrabold text-lg tracking-tight"
-                          style={{ color: effectiveLayout?.primaryColor || '#0B2545' }}
-                        >
-                          {postulant.nomEntreprise}
-                        </h4>
-                        <p className="text-[11px] text-slate-600">{postulant.adresseEntreprise}</p>
+                      <div className="flex items-center gap-3">
+                        {resolvedActorVisuals.logo.url && (
+                          <img
+                            src={resolvedActorVisuals.logo.url}
+                            alt={resolvedActorVisuals.primaryEntityName}
+                            className="h-10 max-w-[115px] object-contain"
+                          />
+                        )}
+                        <div>
+                          <h4
+                            className="font-extrabold text-base sm:text-lg tracking-tight"
+                            style={{ color: effectiveLayout?.primaryColor || '#0B2545' }}
+                          >
+                            {resolvedActorVisuals.primaryEntityName}
+                          </h4>
+                          <p className="text-[11px] text-slate-600">{resolvedActorVisuals.primarySubLine}</p>
+                        </div>
                       </div>
-                      {bp.headerLayout === 'split_lr' ? (
-                        <div className="text-right text-[11px] text-slate-600">
-                          <span className="font-bold block" style={{ color: effectiveLayout?.primaryColor || '#0B2545' }}>
-                            Réf : {docEsData.referenceDossier}
-                          </span>
-                          <span>Date : {postulant.dateEffet}</span>
-                        </div>
-                      ) : bp.hasTopRightMarker ? (
-                        <div className="w-3 h-3 border border-slate-300 flex items-center justify-center shrink-0">
-                          <div className="w-1.5 h-1.5 bg-slate-900" />
-                        </div>
-                      ) : null}
+                      <div className="flex items-center gap-3">
+                        {bp.headerLayout === 'split_lr' ? (
+                          <div className="text-right text-[11px] text-slate-600">
+                            <span className="font-bold block" style={{ color: effectiveLayout?.primaryColor || '#0B2545' }}>
+                              {resolvedActorVisuals.secondaryEntityName || `Réf : ${docEsData.referenceDossier}`}
+                            </span>
+                            <span>
+                              {resolvedActorVisuals.secondaryEntityName
+                                ? `Réf : ${docEsData.referenceDossier} · ${postulant.dateEffet}`
+                                : `Date : ${postulant.dateEffet}`}
+                            </span>
+                          </div>
+                        ) : bp.hasTopRightMarker ? (
+                          <div className="w-3 h-3 border border-slate-300 flex items-center justify-center shrink-0">
+                            <div className="w-1.5 h-1.5 bg-slate-900" />
+                          </div>
+                        ) : null}
+                        {resolvedActorVisuals.logoSecondary?.url && (
+                          <img
+                            src={resolvedActorVisuals.logoSecondary.url}
+                            alt={resolvedActorVisuals.secondaryEntityName || ''}
+                            className="h-9 max-w-[95px] object-contain"
+                          />
+                        )}
+                      </div>
                     </div>
                   )}
 
@@ -603,7 +703,7 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
                   {(bp.metaLayout === 'two_col_asymmetric' || bp.metaLayout === 'two_col_equal') && (
                     <div className="grid grid-cols-2 gap-4 text-[11px] text-slate-700 pt-1">
                       <div>
-                        <div className="font-bold text-slate-900">{postulant.nomEntreprise}</div>
+                        <div className="font-bold text-slate-900">{resolvedActorVisuals.primaryEntityName}</div>
                         <div>{postulant.intitulePoste} · CNP {postulant.codeCnp}</div>
                       </div>
                       <div className={bp.metaLayout === 'two_col_asymmetric' ? 'text-right pt-2' : 'text-right'}>
@@ -616,8 +716,8 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
                   {bp.metaLayout === 'boxed_grid' && (
                     <div className="grid grid-cols-2 border border-slate-300 bg-slate-50 text-[11px]">
                       <div className="p-2 border-r border-slate-300">
-                        <div className="font-bold text-slate-900">{postulant.nomEntreprise}</div>
-                        <div className="text-slate-600">{postulant.adresseEntreprise}</div>
+                        <div className="font-bold text-slate-900">{resolvedActorVisuals.primaryEntityName}</div>
+                        <div className="text-slate-600">{resolvedActorVisuals.primarySubLine}</div>
                       </div>
                       <div className="p-2">
                         <div className="font-bold text-slate-900">{postulant.nomComplet}</div>
@@ -635,7 +735,7 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
                           color: effectiveLayout?.primaryColor || '#0B663A'
                         }}
                       >
-                        Vos références
+                        Vos références · {actorReq.badgeLabel}
                       </span>
                       <div className="text-slate-700">
                         N° Dossier : <strong className="text-slate-900">{docEsData.referenceDossier}</strong> · Date :{' '}
@@ -646,19 +746,28 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
                 </div>
               ) : (
                 <div
-                  className="pb-3 flex items-center justify-between"
+                  className="pb-3 flex items-center justify-between relative z-10"
                   style={{ borderBottom: `2px solid ${effectiveLayout?.accentColor || '#D4A017'}` }}
                 >
-                  <div>
-                    <h4
-                      className="font-bold text-sm"
-                      style={{ color: effectiveLayout?.primaryColor || '#0B2545' }}
-                    >
-                      {postulant.nomEntreprise}
-                    </h4>
-                    <p className="text-[11px] text-slate-500">
-                      Système de Gestion Documentaire ATS · {activeModel.number}
-                    </p>
+                  <div className="flex items-center gap-3">
+                    {resolvedActorVisuals.logo.url && (
+                      <img
+                        src={resolvedActorVisuals.logo.url}
+                        alt={resolvedActorVisuals.primaryEntityName}
+                        className="h-10 max-w-[110px] object-contain"
+                      />
+                    )}
+                    <div>
+                      <h4
+                        className="font-bold text-sm"
+                        style={{ color: effectiveLayout?.primaryColor || '#0B2545' }}
+                      >
+                        {resolvedActorVisuals.primaryEntityName}
+                      </h4>
+                      <p className="text-[11px] text-slate-500">
+                        {resolvedActorVisuals.primarySubLine} · {activeModel.number}
+                      </p>
+                    </div>
                   </div>
                   <div className="text-right text-[11px] text-slate-600">
                     <span
@@ -733,10 +842,59 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
                 {cleanPreviewContent}
               </div>
 
+              {/* Signatures, cachets & codes auth strictement propres à l'acteur du document */}
+              {(resolvedActorVisuals.signature.url ||
+                resolvedActorVisuals.cachet.url ||
+                resolvedActorVisuals.signatureSecondary?.url ||
+                resolvedActorVisuals.cachetSecondary?.url ||
+                resolvedActorVisuals.barcode.url ||
+                resolvedActorVisuals.qrcode.url) && (
+                <div className="relative z-10 pt-3 mt-2 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    {resolvedActorVisuals.barcode.url && (
+                      <img src={resolvedActorVisuals.barcode.url} alt="Code-Barres" className="h-7 object-contain" />
+                    )}
+                    {resolvedActorVisuals.qrcode.url && (
+                      <img src={resolvedActorVisuals.qrcode.url} alt="QR Code" className="w-10 h-10 object-contain border border-slate-200 rounded bg-white p-0.5" />
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-4">
+                    {(resolvedActorVisuals.cachetSecondary?.url || resolvedActorVisuals.signatureSecondary?.url) && (
+                      <div className="text-right">
+                        <span className="block text-[9px] font-bold text-slate-500 uppercase">
+                          {resolvedActorVisuals.secondaryEntityName || 'Seconde partie'}
+                        </span>
+                        <div className="flex items-center gap-2 justify-end mt-0.5">
+                          {resolvedActorVisuals.cachetSecondary?.url && (
+                            <img src={resolvedActorVisuals.cachetSecondary.url} alt="Cachet 2" className="h-10 object-contain" />
+                          )}
+                          {resolvedActorVisuals.signatureSecondary?.url && (
+                            <img src={resolvedActorVisuals.signatureSecondary.url} alt="Signature 2" className="h-8 object-contain" />
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    <div className="text-right">
+                      <span className="block text-[9px] font-bold text-slate-500 uppercase">
+                        {resolvedActorVisuals.primaryEntityName}
+                      </span>
+                      <div className="flex items-center gap-2 justify-end mt-0.5">
+                        {resolvedActorVisuals.cachet.url && (
+                          <img src={resolvedActorVisuals.cachet.url} alt="Cachet officiel" className="h-11 object-contain" />
+                        )}
+                        {resolvedActorVisuals.signature.url && (
+                          <img src={resolvedActorVisuals.signature.url} alt="Signature officielle" className="h-9 object-contain" />
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Pied de page certifié selon footerLayout */}
               {(!bp || bp.footerLayout !== 'none') && (
                 <div
-                  className={`pt-3 flex items-center text-[10px] text-slate-500 ${
+                  className={`relative z-10 pt-3 flex items-center text-[10px] text-slate-500 ${
                     bp?.footerLayout === 'centered_legal' ? 'justify-center text-center' : 'justify-between'
                   }`}
                   style={{
@@ -744,7 +902,7 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
                   }}
                 >
                   {bp?.footerLayout !== 'minimal_page' && (
-                    <span>{postulant.nomEntreprise} · {postulant.adresseEntreprise}</span>
+                    <span>{resolvedActorVisuals.primaryEntityName} · {resolvedActorVisuals.primarySubLine}</span>
                   )}
                   {bp?.footerLayout !== 'centered_legal' && (
                     <span className="font-bold text-slate-600 flex items-center gap-2">

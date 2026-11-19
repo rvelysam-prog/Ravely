@@ -127,6 +127,8 @@ import { FichesEtDocEsModule } from './FichesEtDocEsModule';
 import {
   FichesDocEsData,
   KIT_LAYOUT_PRESETS,
+  KIT_HEADER_PRESETS,
+  KitDocHeaderMap,
   KitDocLayoutMap,
   KitDocVisualScopeMap,
   buildDefaultFichesDocEsData,
@@ -135,9 +137,13 @@ import {
   loadKitDocLayoutsSync,
   saveKitDocLayouts,
   loadKitDocLayoutsFromFirestore,
+  loadKitDocHeadersSync,
+  saveKitDocHeaders,
+  loadKitDocHeadersFromFirestore,
   loadKitDocVisualScopesSync,
   saveKitDocVisualScopes,
   loadKitDocVisualScopesFromFirestore,
+  getDocEsActorRequirement,
   resolveLayoutTemplateForDocEsModel,
   resolveActorAssetsForDocEsModel,
   generateSingleDocEsPdfAsync,
@@ -361,8 +367,9 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
     downloadTab12Pdf: true
   });
 
-  // Mises en page & sources visuelles (6 Parties) personnalisées par document dans 01. Kit Candidat
+  // Mises en page, en-têtes & sources visuelles (6 Parties) personnalisés par document dans 01. Kit Candidat
   const [kitDocLayouts, setKitDocLayouts] = useState<KitDocLayoutMap>(() => loadKitDocLayoutsSync());
+  const [kitDocHeaders, setKitDocHeaders] = useState<KitDocHeaderMap>(() => loadKitDocHeadersSync());
   const [kitDocVisualScopes, setKitDocVisualScopes] = useState<KitDocVisualScopeMap>(() =>
     loadKitDocVisualScopesSync()
   );
@@ -457,6 +464,12 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
     loadKitDocLayoutsFromFirestore().then((layouts) => {
       if (Object.keys(layouts).length > 0) {
         setKitDocLayouts(layouts);
+      }
+    });
+
+    loadKitDocHeadersFromFirestore().then((headers) => {
+      if (Object.keys(headers).length > 0) {
+        setKitDocHeaders(headers);
       }
     });
 
@@ -906,6 +919,32 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
     );
   };
 
+  const handleChangeKitDocHeader = (modelId: number, headerId: string) => {
+    setKitDocHeaders((prev) => {
+      const next = { ...prev, [modelId]: headerId };
+      void saveKitDocHeaders(next);
+      return next;
+    });
+    triggerToast(`En-tête du Modèle ${modelId} mis à jour.`);
+  };
+
+  const handleApplyHeaderPresetToAllKitDocs = (headerId: string) => {
+    const models = getDocEsModelsForCasType(postulant.casType);
+    setKitDocHeaders((prev) => {
+      const next = { ...prev };
+      models.forEach((m) => {
+        next[m.id] = headerId;
+      });
+      void saveKitDocHeaders(next);
+      return next;
+    });
+    triggerToast(
+      headerId === 'auto_header'
+        ? `En-tête adapté automatiquement pour les ${models.length} documents du Kit.`
+        : `Modèle d'en-tête appliqué aux ${models.length} documents du Kit Candidat.`
+    );
+  };
+
   const handleChangeKitDocVisualScope = (modelId: number, scope: ActorScopeId | 'auto') => {
     setKitDocVisualScopes((prev) => {
       const next = { ...prev, [modelId]: scope };
@@ -1029,6 +1068,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
         assetsConfig,
         layoutTemplates,
         kitDocLayouts,
+        kitDocHeaders,
         kitDocVisualScopes
       };
 
@@ -1055,7 +1095,8 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
           kitDocLayouts,
           uploadedAssets,
           assetsConfig,
-          kitDocVisualScopes
+          kitDocVisualScopes,
+          kitDocHeaders
         );
         packagedFiles.push({
           filename,
@@ -1329,13 +1370,14 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
         assetsConfig,
         layoutTemplates,
         kitDocLayouts,
+        kitDocHeaders,
         kitDocVisualScopes
       }
     );
     doc.save(filename);
     const count = getDocEsModelsForCasType(postulant.casType).length;
     triggerToast(
-      `Kit Candidat (${postulant.casType === 'agence' ? 'Via Agence' : 'Direct'} · ${count} PDF avec mises en page & visuels 6 Parties) téléchargé.`
+      `Kit Candidat (${postulant.casType === 'agence' ? 'Via Agence' : 'Direct'} · ${count} PDF avec mises en page, en-têtes & visuels 6 Parties) téléchargé.`
     );
   };
 
@@ -1351,11 +1393,12 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
         assetsConfig,
         layoutTemplates,
         kitDocLayouts,
+        kitDocHeaders,
         kitDocVisualScopes
       }
     );
     triggerBlobDownload(zipBlob, zipFilename);
-    triggerToast(`Dossier ZIP « ${zipFilename} » (${pdfCount} PDFs avec visuels & mises en page) téléchargé.`);
+    triggerToast(`Dossier ZIP « ${zipFilename} » (${pdfCount} PDFs avec visuels, en-têtes & mises en page) téléchargé.`);
   };
 
   const downloadHtmlFile = (filename: string, html: string) => {
@@ -3293,10 +3336,11 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                   kitDocLayouts,
                   uploadedAssets,
                   assetsConfig,
-                  kitDocVisualScopes
+                  kitDocVisualScopes,
+                  kitDocHeaders
                 );
                 doc.save(filename);
-                triggerToast('Fiche DOC ES PDF (mise en page imitée & visuels 6 Parties) téléchargée.');
+                triggerToast('Fiche DOC ES PDF (mise en page, en-tête & visuels 6 Parties) téléchargée.');
                 return;
               }
               const tabNumMap: Record<'t9' | 't10' | 't11' | 't12', HousingTabNumber> = {
@@ -3759,6 +3803,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             assetsConfig,
             layoutTemplates,
             kitDocLayouts,
+            kitDocHeaders,
             kitDocVisualScopes
           };
           const kitWordHtml = buildKitCandidatWordHtml(
@@ -3770,9 +3815,9 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
           );
 
           const scopeSelectLabels: { value: ActorScopeId | 'auto'; label: string }[] = [
-            { value: 'auto', label: 'Auto (selon canal)' },
-            { value: 'employeur', label: '1. Employeur' },
-            { value: 'prestataire', label: '2. Cabinet CRIC' },
+            { value: 'auto', label: 'Auto (selon document)' },
+            { value: 'employeur', label: '1. Entreprise Employeur' },
+            { value: 'prestataire', label: '2. Cabinet CRIC (Agence)' },
             { value: 'hebEmployeur', label: '3. Hébergement (Ong. 9)' },
             { value: 'notaire', label: '4. Notaire BC (Ong. 10)' },
             { value: 'inspecteurHir', label: '5. Inspecteur HIR (Ong. 11)' },
@@ -3781,7 +3826,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
 
           return (
             <div className="space-y-4">
-              {/* Panneau de composition, mise en page par document & téléchargement du Kit */}
+              {/* Panneau de composition, mise en page, en-tête par document & téléchargement du Kit */}
               <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4 shadow-xs">
                 <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-100 pb-3.5">
                   <div>
@@ -3802,7 +3847,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                       </span>
                     </div>
                     <p className="text-xs text-slate-600 mt-1.5">
-                      Choisissez une mise en page dédiée par document et utilisez automatiquement tous vos fichiers importés dans « 3. Visuels, Logos &amp; Tampons (6 Parties) ».
+                      Choisissez une mise en page et un modèle d&apos;en-tête par document. Les visuels du Cabinet CRIC et de l&apos;Entreprise Employeur (« 3. Visuels, Logos &amp; Tampons (6 Parties) ») sont appliqués strictement selon chaque document.
                     </p>
                   </div>
 
@@ -3895,15 +3940,39 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                   </div>
                 </div>
 
-                {/* Grille des documents PDF inclus dans le Kit avec sélecteur Mise en page + Visuels (6 Parties) par document */}
+                {/* Barre rapide d'en-tête pour l'ensemble du Kit */}
+                <div className="flex flex-wrap items-center justify-between gap-2 bg-blue-50/60 border border-blue-200 rounded-lg px-3 py-2 text-xs">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="font-bold text-[#0B2545]">En-tête global du Kit :</span>
+                    {KIT_HEADER_PRESETS.map((hp) => (
+                      <button
+                        key={hp.id}
+                        type="button"
+                        onClick={() => handleApplyHeaderPresetToAllKitDocs(hp.id)}
+                        className={`px-2.5 py-1 rounded font-semibold cursor-pointer ${
+                          hp.id === 'auto_header'
+                            ? 'bg-[#0B2545] text-amber-300 hover:bg-[#134074]'
+                            : 'bg-white border border-blue-200 hover:border-[#0066B3] text-slate-700'
+                        }`}
+                        title={hp.shortDesc}
+                      >
+                        {hp.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Grille des documents PDF inclus dans le Kit avec sélecteur Mise en page + En-tête + Visuels (6 Parties) */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                   {activeKitModels.map((m) => {
                     const docLayout = resolveLayoutTemplateForDocEsModel(
                       m.id,
                       layoutTemplates,
                       kitDocLayouts,
-                      layoutTemplates.doc_es
+                      layoutTemplates.doc_es,
+                      kitDocHeaders
                     );
+                    const actorReq = getDocEsActorRequirement(m.id);
                     const docVisuals = resolveActorAssetsForDocEsModel(
                       m.id,
                       postulant,
@@ -3912,6 +3981,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                       kitDocVisualScopes[m.id]
                     );
                     const activePresetKey = kitDocLayouts[m.id] || 'auto_doc';
+                    const activeHeaderKey = kitDocHeaders[m.id] || 'auto_header';
                     const activeScopeKey = kitDocVisualScopes[m.id] || 'auto';
                     const visualsCount = [
                       docVisuals.logo.url,
@@ -3920,7 +3990,10 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                       docVisuals.filigrane.url,
                       docVisuals.arrierePlan.url,
                       docVisuals.barcode.url,
-                      docVisuals.qrcode.url
+                      docVisuals.qrcode.url,
+                      docVisuals.logoSecondary?.url,
+                      docVisuals.signatureSecondary?.url,
+                      docVisuals.cachetSecondary?.url
                     ].filter(Boolean).length;
 
                     return (
@@ -3960,15 +4033,31 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                           <p className="font-bold text-slate-900 mt-1 line-clamp-2 leading-snug">
                             {m.title}
                           </p>
-                          <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-slate-600">
+                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-600">
+                            <span
+                              className={`px-1.5 py-0.5 rounded font-bold ${
+                                docVisuals.primaryActor === 'prestataire'
+                                  ? 'bg-indigo-100 text-indigo-900 border border-indigo-200'
+                                  : 'bg-blue-100 text-blue-900 border border-blue-200'
+                              }`}
+                            >
+                              {actorReq.badgeLabel}
+                            </span>
                             <span className="px-1.5 py-0.5 rounded bg-white border border-slate-200 font-semibold">
-                              {visualsCount} visuel(s) 6 Parties
+                              {visualsCount} visuel(s)
                             </span>
                             {docVisuals.logo.url && (
                               <img
                                 src={docVisuals.logo.url}
-                                alt=""
-                                className="h-4 max-w-[40px] object-contain"
+                                alt={docVisuals.primaryEntityName}
+                                className="h-4 max-w-[38px] object-contain"
+                              />
+                            )}
+                            {docVisuals.logoSecondary?.url && (
+                              <img
+                                src={docVisuals.logoSecondary.url}
+                                alt={docVisuals.secondaryEntityName || ''}
+                                className="h-4 max-w-[38px] object-contain"
                               />
                             )}
                           </div>
@@ -3993,6 +4082,23 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                               {layoutTemplates.t10 && <option value="import_t10">Importé Onglet 10 (Notaire)</option>}
                               {layoutTemplates.t11 && <option value="import_t11">Importé Onglet 11 (HIR)</option>}
                               {layoutTemplates.t12 && <option value="import_t12">Importé Onglet 12 (Déclaration)</option>}
+                            </select>
+                          </label>
+
+                          <label className="block">
+                            <span className="text-[10px] font-bold text-slate-500 uppercase block mb-0.5">
+                              En-tête :
+                            </span>
+                            <select
+                              value={activeHeaderKey}
+                              onChange={(e) => handleChangeKitDocHeader(m.id, e.target.value)}
+                              className="w-full px-2 py-1 rounded border border-slate-300 bg-white text-[11px] font-semibold text-slate-800 cursor-pointer"
+                            >
+                              {KIT_HEADER_PRESETS.map((hp) => (
+                                <option key={hp.id} value={hp.id}>
+                                  {hp.label}
+                                </option>
+                              ))}
                             </select>
                           </label>
 
@@ -4039,11 +4145,12 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                                 kitDocLayouts,
                                 uploadedAssets,
                                 assetsConfig,
-                                kitDocVisualScopes
+                                kitDocVisualScopes,
+                                kitDocHeaders
                               );
                               doc.save(filename);
                               triggerToast(
-                                `PDF ${m.number} (${m.title}) téléchargé avec mise en page & visuels.`
+                                `PDF ${m.number} (${m.title}) téléchargé avec mise en page, en-tête & visuels.`
                               );
                             }}
                             className="px-2.5 py-1 rounded bg-white hover:bg-[#0B2545] hover:text-white border border-slate-300 text-slate-800 text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer transition-colors"
@@ -4061,7 +4168,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
 
               <InteractiveDocumentCanvas
                 title={`Kit Candidat (${isAgenceKit ? 'Via Agence · 7 PDF DOC ES' : 'Direct · 8 PDF DOC ES'}) : ${postulant.nomComplet}`}
-                documentTypeLabel={`Onglet 01 · Kit Candidat (${isAgenceKit ? 'Agence' : 'Direct'})`}
+                documentTypeLabel={`Onglet 01 · Kit Candidat (${isAgenceKit ? 'Agence CRIC' : 'Employeur Direct'})`}
                 assetsConfig={assetsConfig}
                 onChangeAssetsConfig={handleUpdateAssetsConfig}
                 uploadedAssetUrls={uploadedAssets}
@@ -4069,25 +4176,25 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                 preferCustomPdfDownloadWhenUnedited={true}
                 exclusiveVisualSet={{
                   logo: isAgenceKit
-                    ? uploadedAssets.logoPrestataire || effectiveEmployerLogo
+                    ? uploadedAssets.logoPrestataire || postulant.logoAgenceUrl
                     : effectiveEmployerLogo,
                   signature: isAgenceKit
-                    ? uploadedAssets.signaturePrestataire || uploadedAssets.signature
-                    : uploadedAssets.signature,
+                    ? uploadedAssets.signaturePrestataire
+                    : uploadedAssets.signature || postulant.signatureUrl,
                   cachet: isAgenceKit
-                    ? uploadedAssets.cachetPrestataire || uploadedAssets.cachet
-                    : uploadedAssets.cachet,
+                    ? uploadedAssets.cachetPrestataire
+                    : uploadedAssets.cachet || postulant.cachetUrl,
                   filigrane: isAgenceKit
-                    ? uploadedAssets.filigranePrestataire || uploadedAssets.filigrane
-                    : uploadedAssets.filigrane,
+                    ? uploadedAssets.filigranePrestataire
+                    : uploadedAssets.filigrane || postulant.filigraneUrl,
                   arrierePlan: isAgenceKit
-                    ? uploadedAssets.arrierePlanPrestataire || uploadedAssets.arrierePlan
+                    ? uploadedAssets.arrierePlanPrestataire
                     : uploadedAssets.arrierePlan,
                   barcode: isAgenceKit
-                    ? uploadedAssets.barcodePrestataire || effectiveBarcode
+                    ? uploadedAssets.barcodePrestataire
                     : effectiveBarcode,
                   qrcode: isAgenceKit
-                    ? uploadedAssets.qrcodePrestataire || effectiveQrCode
+                    ? uploadedAssets.qrcodePrestataire
                     : effectiveQrCode
                 }}
                 htmlEmailContent={emailModel.html}
@@ -4178,19 +4285,20 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                     </div>
                   )}
 
-                  {/* Rendu complet de chaque document Fiches et DOC ES avec sa mise en page & visuels 6 Parties */}
+                  {/* Rendu complet de chaque document Fiches et DOC ES avec sa mise en page, son en-tête & ses visuels stricts 6 Parties */}
                   <div className="space-y-6">
                     {activeKitModels.map((m, idx) => {
                       const rendered = renderDocEsPlainText(m.id, postulant, docEsData, settings);
-                      const docLayout = resolveEffectiveLayout(
-                        resolveLayoutTemplateForDocEsModel(
-                          m.id,
-                          layoutTemplates,
-                          kitDocLayouts,
-                          layoutTemplates.doc_es
-                        )
+                      const resolvedRaw = resolveLayoutTemplateForDocEsModel(
+                        m.id,
+                        layoutTemplates,
+                        kitDocLayouts,
+                        layoutTemplates.doc_es,
+                        kitDocHeaders
                       );
+                      const docLayout = resolveEffectiveLayout(resolvedRaw);
                       const bp = docLayout?.spatialBlueprint;
+                      const actorReq = getDocEsActorRequirement(m.id);
                       const docVisuals = resolveActorAssetsForDocEsModel(
                         m.id,
                         postulant,
@@ -4211,6 +4319,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                         .replace(/^[=\-_]{4,}\s*$/gm, '')
                         .replace(/\n{3,}/g, '\n\n')
                         .trim();
+                      const headerMode = bp?.headerLayout || 'split_lr';
 
                       return (
                         <section
@@ -4254,85 +4363,128 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                             />
                           )}
 
-                          {/* En-tête stylisé selon la mise en page du document */}
-                          <div
-                            className={`relative z-10 flex flex-wrap items-center justify-between gap-2 pb-2.5 ${
-                              bp?.headerLayout === 'filled_banner' ? 'p-3 rounded-lg text-white -mx-1' : 'border-b'
-                            }`}
-                            style={{
-                              backgroundColor:
-                                bp?.headerLayout === 'filled_banner'
-                                  ? docLayout?.headerBgColor || primaryCol
-                                  : undefined,
-                              borderBottomColor: accentCol
-                            }}
-                          >
-                            <div className="flex items-center gap-3">
+                          {headerMode === 'top_accent_bar' && (
+                            <div
+                              className="-mx-5 -mt-5 mb-2 h-2 relative z-10"
+                              style={{ backgroundColor: primaryCol }}
+                            />
+                          )}
+
+                          {/* En-tête stylisé selon le modèle d'en-tête & l'acteur strict */}
+                          {headerMode === 'centered_stack' ? (
+                            <div
+                              className="relative z-10 text-center pb-3 space-y-1 border-b-2"
+                              style={{ borderBottomColor: primaryCol }}
+                            >
                               {docVisuals.logo.url && (
                                 <img
                                   src={docVisuals.logo.url}
-                                  alt="Logo Acteur"
-                                  className={`h-9 max-w-[96px] object-contain ${
-                                    bp?.headerLayout === 'filled_banner' ? 'bg-white p-1 rounded' : ''
-                                  }`}
+                                  alt={docVisuals.primaryEntityName}
+                                  className="h-9 max-w-[120px] object-contain mx-auto"
                                 />
                               )}
-                              <div>
-                                <div className="flex flex-wrap items-center gap-1.5">
-                                  <span
-                                    className="px-2 py-0.5 rounded text-[10px] font-bold"
+                              <div className="text-xs font-extrabold uppercase tracking-wide" style={{ color: primaryCol }}>
+                                {docVisuals.primaryEntityName}
+                              </div>
+                              <div className="text-[10px] text-slate-500">
+                                {docVisuals.primarySubLine} · {actorReq.badgeLabel} · Réf. {postulant.codeIdCandidature}
+                              </div>
+                              <h3 className="text-sm sm:text-base font-extrabold pt-1" style={{ color: primaryCol }}>
+                                {rendered.title}
+                              </h3>
+                              {rendered.subtitle && <p className="text-[11px] text-slate-500">{rendered.subtitle}</p>}
+                            </div>
+                          ) : (
+                            <div
+                              className={`relative z-10 flex flex-wrap items-center justify-between gap-2 pb-2.5 ${
+                                headerMode === 'filled_banner' ? 'p-3 rounded-lg text-white -mx-1' : 'border-b'
+                              }`}
+                              style={{
+                                backgroundColor:
+                                  headerMode === 'filled_banner'
+                                    ? docLayout?.headerBgColor || primaryCol
+                                    : undefined,
+                                borderBottomColor: accentCol
+                              }}
+                            >
+                              <div className="flex items-center gap-3">
+                                {docVisuals.logo.url && (
+                                  <img
+                                    src={docVisuals.logo.url}
+                                    alt={docVisuals.primaryEntityName}
+                                    className={`h-9 max-w-[96px] object-contain ${
+                                      headerMode === 'filled_banner' ? 'bg-white p-1 rounded' : ''
+                                    }`}
+                                  />
+                                )}
+                                <div>
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <span
+                                      className="px-2 py-0.5 rounded text-[10px] font-bold"
+                                      style={{
+                                        backgroundColor:
+                                          headerMode === 'filled_banner' ? 'rgba(255,255,255,0.18)' : primaryCol,
+                                        color: '#FDE047'
+                                      }}
+                                    >
+                                      DOCUMENT {idx + 1}/{activeKitModels.length} · {m.number}
+                                    </span>
+                                    <span
+                                      className={`text-[10px] font-bold ${
+                                        headerMode === 'filled_banner' ? 'text-amber-200' : 'text-slate-600'
+                                      }`}
+                                    >
+                                      {docVisuals.primaryEntityName} · {actorReq.badgeLabel}
+                                    </span>
+                                  </div>
+                                  <h3
+                                    className="text-sm sm:text-base font-extrabold mt-1"
                                     style={{
-                                      backgroundColor:
-                                        bp?.headerLayout === 'filled_banner' ? 'rgba(255,255,255,0.18)' : primaryCol,
-                                      color: '#FDE047'
+                                      color: headerMode === 'filled_banner' ? '#ffffff' : primaryCol
                                     }}
                                   >
-                                    DOCUMENT {idx + 1}/{activeKitModels.length} · {m.number}
-                                  </span>
-                                  <span
-                                    className={`text-[10px] font-semibold ${
-                                      bp?.headerLayout === 'filled_banner' ? 'text-blue-100' : 'text-slate-500'
-                                    }`}
-                                  >
-                                    {docLayout?.detectedSummary || 'Mise en page standard'}
-                                  </span>
+                                    {rendered.title}
+                                  </h3>
+                                  {rendered.subtitle && (
+                                    <p
+                                      className={`text-[11px] ${
+                                        headerMode === 'filled_banner' ? 'text-blue-100' : 'text-slate-500'
+                                      }`}
+                                    >
+                                      {rendered.subtitle}
+                                    </p>
+                                  )}
                                 </div>
-                                <h3
-                                  className="text-sm sm:text-base font-extrabold mt-1"
-                                  style={{
-                                    color: bp?.headerLayout === 'filled_banner' ? '#ffffff' : primaryCol
-                                  }}
-                                >
-                                  {rendered.title}
-                                </h3>
-                                {rendered.subtitle && (
-                                  <p
-                                    className={`text-[11px] ${
-                                      bp?.headerLayout === 'filled_banner' ? 'text-blue-100' : 'text-slate-500'
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                {docVisuals.secondaryEntityName && (
+                                  <span
+                                    className={`text-[10px] font-bold text-right ${
+                                      headerMode === 'filled_banner' ? 'text-blue-100' : 'text-slate-600'
                                     }`}
                                   >
-                                    {rendered.subtitle}
-                                  </p>
+                                    {docVisuals.secondaryEntityName}
+                                  </span>
+                                )}
+                                {docVisuals.logoSecondary?.url && (
+                                  <img
+                                    src={docVisuals.logoSecondary.url}
+                                    alt={docVisuals.secondaryEntityName || 'Logo Secondaire'}
+                                    className={`h-8 max-w-[84px] object-contain ${
+                                      headerMode === 'filled_banner' ? 'bg-white p-1 rounded' : ''
+                                    }`}
+                                  />
                                 )}
                               </div>
                             </div>
-
-                            {docVisuals.logoSecondary?.url && (
-                              <img
-                                src={docVisuals.logoSecondary.url}
-                                alt="Logo Secondaire"
-                                className={`h-8 max-w-[84px] object-contain ${
-                                  bp?.headerLayout === 'filled_banner' ? 'bg-white p-1 rounded' : ''
-                                }`}
-                              />
-                            )}
-                          </div>
+                          )}
 
                           <div className="relative z-10 text-xs whitespace-pre-wrap leading-relaxed text-slate-800">
                             {cleanBody}
                           </div>
 
-                          {/* Pied visuels authentification (Signature, Cachet, Code-Barres, QR Code) issus de 3. Visuels 6 Parties */}
+                          {/* Pied visuels authentification strictement liés aux acteurs du document */}
                           {(docVisuals.signature.url ||
                             docVisuals.cachet.url ||
                             docVisuals.signatureSecondary?.url ||
@@ -4356,35 +4508,51 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                                   />
                                 )}
                               </div>
-                              <div className="flex items-center gap-3">
-                                {docVisuals.cachetSecondary?.url && (
-                                  <img
-                                    src={docVisuals.cachetSecondary.url}
-                                    alt="Cachet 2"
-                                    className="h-10 object-contain"
-                                  />
+                              <div className="flex flex-wrap items-center gap-4">
+                                {(docVisuals.cachetSecondary?.url || docVisuals.signatureSecondary?.url) && (
+                                  <div className="text-right">
+                                    <span className="block text-[9px] font-bold text-slate-500 uppercase">
+                                      {docVisuals.secondaryEntityName || 'Seconde Partie'}
+                                    </span>
+                                    <div className="flex items-center gap-2 justify-end mt-0.5">
+                                      {docVisuals.cachetSecondary?.url && (
+                                        <img
+                                          src={docVisuals.cachetSecondary.url}
+                                          alt="Cachet 2"
+                                          className="h-10 object-contain"
+                                        />
+                                      )}
+                                      {docVisuals.signatureSecondary?.url && (
+                                        <img
+                                          src={docVisuals.signatureSecondary.url}
+                                          alt="Signature 2"
+                                          className="h-8 object-contain"
+                                        />
+                                      )}
+                                    </div>
+                                  </div>
                                 )}
-                                {docVisuals.signatureSecondary?.url && (
-                                  <img
-                                    src={docVisuals.signatureSecondary.url}
-                                    alt="Signature 2"
-                                    className="h-8 object-contain"
-                                  />
-                                )}
-                                {docVisuals.cachet.url && (
-                                  <img
-                                    src={docVisuals.cachet.url}
-                                    alt="Cachet Officiel"
-                                    className="h-11 object-contain"
-                                  />
-                                )}
-                                {docVisuals.signature.url && (
-                                  <img
-                                    src={docVisuals.signature.url}
-                                    alt="Signature Officielle"
-                                    className="h-9 object-contain"
-                                  />
-                                )}
+                                <div className="text-right">
+                                  <span className="block text-[9px] font-bold text-slate-500 uppercase">
+                                    {docVisuals.primaryEntityName}
+                                  </span>
+                                  <div className="flex items-center gap-2 justify-end mt-0.5">
+                                    {docVisuals.cachet.url && (
+                                      <img
+                                        src={docVisuals.cachet.url}
+                                        alt="Cachet Officiel"
+                                        className="h-11 object-contain"
+                                      />
+                                    )}
+                                    {docVisuals.signature.url && (
+                                      <img
+                                        src={docVisuals.signature.url}
+                                        alt="Signature Officielle"
+                                        className="h-9 object-contain"
+                                      />
+                                    )}
+                                  </div>
+                                </div>
                               </div>
                             </div>
                           )}
@@ -5072,6 +5240,8 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
             layoutTemplates={layoutTemplates}
             kitDocLayouts={kitDocLayouts}
             onChangeKitDocLayout={handleChangeKitDocLayout}
+            kitDocHeaders={kitDocHeaders}
+            onChangeKitDocHeader={handleChangeKitDocHeader}
             kitDocVisualScopes={kitDocVisualScopes}
             onChangeKitDocVisualScope={handleChangeKitDocVisualScope}
             uploadedAssets={uploadedAssets}

@@ -2986,3 +2986,494 @@ function escapeXml(str: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+// ============================================================================
+// EXTRACTION RÉGIONALE OCR + STYLES TYPOGRAPHIQUES & GRAPHIQUES (ÉTAPE 5 CANVA)
+// ============================================================================
+
+export interface ExtractStyledTextResult {
+  textElement: ReplicaTextElement;
+  confidencePct: number;
+  ocrSucceeded: boolean;
+  styleSummary: string;
+}
+
+/**
+ * Analyse une zone sélectionnée dans Step 5 (image découpée, forme, tableau ou bloc texte)
+ * via OCR Tesseract + analyse pixel par pixel des caractéristiques typographiques & graphiques
+ * (police, taille en pt, gras, italique, souligné, couleur d'encre, fond, alignement, interligne),
+ * puis retourne un ReplicaTextElement prêt à remplacer l'élément sélectionné au même emplacement.
+ */
+export async function extractStyledTextBlockFromRegion(
+  project: ReplicaProject,
+  el: ReplicaElement
+): Promise<ExtractStyledTextResult> {
+  const newId = `txt_ocr_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const snapshotUrl = project.sourcePageSnapshots?.[el.pageIndex];
+  const linkedAsset =
+    el.kind === 'image' ? project.assets.find((a) => a.id === el.assetId) : undefined;
+
+  let rawCanvas: HTMLCanvasElement | null = null;
+  let snapshotHeightPx = 1122;
+
+  if (typeof document !== 'undefined') {
+    if (snapshotUrl) {
+      try {
+        const snapImg = await loadHtmlImage(snapshotUrl);
+        const fullW = snapImg.naturalWidth || 794;
+        const fullH = snapImg.naturalHeight || 1122;
+        snapshotHeightPx = fullH;
+        const sx = Math.max(0, Math.floor((el.xPct / 100) * fullW));
+        const sy = Math.max(0, Math.floor((el.yPct / 100) * fullH));
+        const sw = Math.max(16, Math.min(fullW - sx, Math.ceil((el.wPct / 100) * fullW)));
+        const sh = Math.max(12, Math.min(fullH - sy, Math.ceil((el.hPct / 100) * fullH)));
+        rawCanvas = document.createElement('canvas');
+        rawCanvas.width = sw;
+        rawCanvas.height = sh;
+        const rctx = rawCanvas.getContext('2d');
+        if (rctx) {
+          rctx.fillStyle = project.pageBgColor || '#FFFFFF';
+          rctx.fillRect(0, 0, sw, sh);
+          rctx.drawImage(snapImg, sx, sy, sw, sh, 0, 0, sw, sh);
+        }
+      } catch {
+        rawCanvas = null;
+      }
+    }
+
+    if (!rawCanvas && linkedAsset?.localDataUrl) {
+      try {
+        const assetImg = await loadHtmlImage(linkedAsset.localDataUrl);
+        const sw = Math.max(16, assetImg.naturalWidth || 240);
+        const sh = Math.max(12, assetImg.naturalHeight || 80);
+        snapshotHeightPx = Math.round((sh / Math.max(2, el.hPct)) * 100);
+        rawCanvas = document.createElement('canvas');
+        rawCanvas.width = sw;
+        rawCanvas.height = sh;
+        const rctx = rawCanvas.getContext('2d');
+        if (rctx) {
+          rctx.fillStyle = project.pageBgColor || '#FFFFFF';
+          rctx.fillRect(0, 0, sw, sh);
+          rctx.drawImage(assetImg, 0, 0, sw, sh);
+        }
+      } catch {
+        rawCanvas = null;
+      }
+    }
+  }
+
+  // Fallback structuré si aucun pixel source disponible (tableau / texte / forme sur maquette sans snapshot)
+  if (!rawCanvas) {
+    const fallbackText =
+      el.kind === 'text'
+        ? el.text
+        : el.kind === 'table'
+        ? el.rows.map((r) => r.map((c) => c.text.trim()).join('   |   ')).join('\n')
+        : 'Bloc texte extrait';
+    const fontSizePt = el.kind === 'text' ? el.fontSizePt : el.kind === 'table' ? el.fontSizePt : 11;
+    const textColor =
+      el.kind === 'text'
+        ? el.color
+        : el.kind === 'table'
+        ? el.rows[0]?.[0]?.textColor || project.palette.text || '#0F172A'
+        : project.palette.text || '#0F172A';
+    const bgColor =
+      el.kind === 'text'
+        ? el.backgroundColor
+        : el.kind === 'shape' && el.shapeType === 'rect' && el.fillColor !== 'transparent'
+        ? el.fillColor
+        : 'transparent';
+
+    const fallbackEl: ReplicaTextElement = {
+      id: newId,
+      kind: 'text',
+      name: `${fallbackText.split('\n')[0].trim().slice(0, 26) || el.name} (Texte)`,
+      pageIndex: el.pageIndex,
+      xPct: el.xPct,
+      yPct: el.yPct,
+      wPct: el.wPct,
+      hPct: el.hPct,
+      zIndex: Math.max(20, el.zIndex),
+      rotation: el.rotation,
+      opacity: el.opacity,
+      locked: false,
+      visible: true,
+      lockAspectRatio: false,
+      text: fallbackText,
+      fontFamily: el.kind === 'text' ? el.fontFamily : 'sans-serif',
+      fontSizePt,
+      fontWeight: el.kind === 'text' ? el.fontWeight : el.hPct > 6 ? '400' : '700',
+      fontStyle: el.kind === 'text' ? el.fontStyle : 'normal',
+      textDecoration: el.kind === 'text' ? el.textDecoration : 'none',
+      color: textColor,
+      backgroundColor: bgColor,
+      textAlign: el.kind === 'text' ? el.textAlign : 'left',
+      lineHeight: el.kind === 'text' ? el.lineHeight : 1.35,
+      letterSpacingEm: el.kind === 'text' ? el.letterSpacingEm : 0,
+      role: el.yPct < 14 ? 'header' : fontSizePt >= 14 ? 'title' : el.yPct > 86 ? 'footer' : 'body'
+    };
+    return {
+      textElement: fallbackEl,
+      confidencePct: 100,
+      ocrSucceeded: false,
+      styleSummary: `${fallbackEl.fontSizePt}pt · ${fallbackEl.color} · sans OCR pixel`
+    };
+  }
+
+  // 1. Analyse colorimétrique fidèle du fond et de l'encre sur rawCanvas
+  const rw = rawCanvas.width;
+  const rh = rawCanvas.height;
+  const rctx = rawCanvas.getContext('2d')!;
+  const rawImg = rctx.getImageData(0, 0, rw, rh);
+  const px = rawImg.data;
+
+  // Échantillonner le pourtour pour déterminer la couleur de fond réelle de la zone
+  const bgBuckets = new Map<string, { count: number; r: number; g: number; b: number }>();
+  const sampleEdgePixel = (x: number, y: number) => {
+    const idx = (y * rw + x) * 4;
+    const r = px[idx],
+      g = px[idx + 1],
+      b = px[idx + 2];
+    const key = `${Math.round(r / 16)}_${Math.round(g / 16)}_${Math.round(b / 16)}`;
+    const prev = bgBuckets.get(key);
+    if (prev) {
+      prev.count++;
+      prev.r += r;
+      prev.g += g;
+      prev.b += b;
+    } else {
+      bgBuckets.set(key, { count: 1, r, g, b });
+    }
+  };
+  for (let x = 0; x < rw; x += Math.max(1, Math.floor(rw / 60))) {
+    sampleEdgePixel(x, 0);
+    if (rh > 2) sampleEdgePixel(x, rh - 1);
+  }
+  for (let y = 0; y < rh; y += Math.max(1, Math.floor(rh / 40))) {
+    sampleEdgePixel(0, y);
+    if (rw > 2) sampleEdgePixel(rw - 1, y);
+  }
+  const topBgBucket = Array.from(bgBuckets.values()).sort((a, b) => b.count - a.count)[0];
+  const bgR = topBgBucket ? topBgBucket.r / topBgBucket.count : 255;
+  const bgG = topBgBucket ? topBgBucket.g / topBgBucket.count : 255;
+  const bgB = topBgBucket ? topBgBucket.b / topBgBucket.count : 255;
+  const regionBgHex = rgbToHex(bgR, bgG, bgB);
+  const [pageBgR, pageBgG, pageBgB] = hexToRgb(project.pageBgColor || '#FFFFFF');
+  const detectedBackgroundColor =
+    colorDist(bgR, bgG, bgB, pageBgR, pageBgG, pageBgB) <= 22 ? 'transparent' : regionBgHex;
+
+  // Trouver les pixels d'encre contrastant avec le fond de la région (supporte texte clair sur bandeau foncé!)
+  const inkBuckets = new Map<string, { count: number; r: number; g: number; b: number; contrast: number }>();
+  for (let y = 1; y < rh - 1; y++) {
+    for (let x = 1; x < rw - 1; x++) {
+      const idx = (y * rw + x) * 4;
+      const r = px[idx],
+        g = px[idx + 1],
+        b = px[idx + 2];
+      const d = colorDist(r, g, b, bgR, bgG, bgB);
+      if (d < 46) continue;
+      const key = `${Math.round(r / 24)}_${Math.round(g / 24)}_${Math.round(b / 24)}`;
+      const prev = inkBuckets.get(key);
+      if (prev) {
+        prev.count++;
+        prev.r += r;
+        prev.g += g;
+        prev.b += b;
+        prev.contrast += d;
+      } else {
+        inkBuckets.set(key, { count: 1, r, g, b, contrast: d });
+      }
+    }
+  }
+  const bestInk = Array.from(inkBuckets.values()).sort(
+    (a, b) => b.count * (b.contrast / b.count) - a.count * (a.contrast / a.count)
+  )[0];
+  const detectedInkColor = bestInk
+    ? rgbToHex(bestInk.r / bestInk.count, bestInk.g / bestInk.count, bestInk.b / bestInk.count)
+    : el.kind === 'text'
+    ? el.color
+    : project.palette.text || '#0F172A';
+
+  // 2. Préparation d'un canvas haute résolution upscalé (et inversé si fond sombre) pour OCR Tesseract ultra-précis
+  const bgLum = 0.299 * bgR + 0.587 * bgG + 0.114 * bgB;
+  const invertForOcr = bgLum < 130;
+  const scaleFactor = Math.min(3.5, Math.max(2.2, 420 / Math.max(40, rh)));
+  const pad = 16;
+  const ocrW = Math.round(rw * scaleFactor) + pad * 2;
+  const ocrH = Math.round(rh * scaleFactor) + pad * 2;
+  const ocrCanvas = document.createElement('canvas');
+  ocrCanvas.width = ocrW;
+  ocrCanvas.height = ocrH;
+  const octx = ocrCanvas.getContext('2d')!;
+  octx.fillStyle = invertForOcr ? '#FFFFFF' : regionBgHex;
+  octx.fillRect(0, 0, ocrW, ocrH);
+
+  // Canvas intermédiaire normalisé en contraste avant upscaling
+  const prepCanvas = document.createElement('canvas');
+  prepCanvas.width = rw;
+  prepCanvas.height = rh;
+  const pctx = prepCanvas.getContext('2d')!;
+  const prepImg = pctx.createImageData(rw, rh);
+  for (let i = 0; i < px.length; i += 4) {
+    const r = px[i],
+      g = px[i + 1],
+      b = px[i + 2];
+    const dist = colorDist(r, g, b, bgR, bgG, bgB);
+    if (invertForOcr) {
+      // Fond sombre -> papier blanc (#FFF), encre claire -> encre noire (#000)
+      const v = Math.max(0, Math.min(255, Math.round(255 - dist * 1.45)));
+      prepImg.data[i] = v;
+      prepImg.data[i + 1] = v;
+      prepImg.data[i + 2] = v;
+      prepImg.data[i + 3] = 255;
+    } else {
+      prepImg.data[i] = r;
+      prepImg.data[i + 1] = g;
+      prepImg.data[i + 2] = b;
+      prepImg.data[i + 3] = 255;
+    }
+  }
+  pctx.putImageData(prepImg, 0, 0);
+  octx.imageSmoothingEnabled = true;
+  octx.imageSmoothingQuality = 'high';
+  octx.drawImage(prepCanvas, 0, 0, rw, rh, pad, pad, Math.round(rw * scaleFactor), Math.round(rh * scaleFactor));
+
+  interface OcrLineBox {
+    text: string;
+    confidence: number;
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+  }
+  let ocrLines: OcrLineBox[] = [];
+  let rawFullText = '';
+  let meanConfidence = 0;
+
+  try {
+    const res = await Promise.race([
+      Tesseract.recognize(ocrCanvas, 'fra+eng'),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 15000))
+    ]);
+    if (res) {
+      const dataAny = res.data as unknown as {
+        text?: string;
+        confidence?: number;
+        lines?: Array<{
+          text?: string;
+          confidence?: number;
+          bbox?: { x0: number; y0: number; x1: number; y1: number };
+        }>;
+      };
+      rawFullText = (dataAny.text || '').trim();
+      meanConfidence = Math.round(dataAny.confidence || 0);
+      ocrLines = (dataAny.lines || [])
+        .filter((l) => l.text && l.text.trim().length > 0 && l.bbox)
+        .map((l) => ({
+          text: l.text!.replace(/\s+/g, ' ').trim(),
+          confidence: l.confidence ?? meanConfidence,
+          x0: Math.max(0, (l.bbox!.x0 - pad) / scaleFactor),
+          y0: Math.max(0, (l.bbox!.y0 - pad) / scaleFactor),
+          x1: Math.min(rw, (l.bbox!.x1 - pad) / scaleFactor),
+          y1: Math.min(rh, (l.bbox!.y1 - pad) / scaleFactor)
+        }))
+        .filter((l) => l.text.length > 0 && !(l.confidence < 25 && l.text.length < 3));
+    }
+  } catch {
+    ocrLines = [];
+  }
+
+  const extractedText =
+    ocrLines.length > 0
+      ? ocrLines.map((l) => l.text).join('\n')
+      : rawFullText ||
+        (el.kind === 'text'
+          ? el.text
+          : el.kind === 'table'
+          ? el.rows.map((r) => r.map((c) => c.text).join(' | ')).join('\n')
+          : 'Texte extrait (zone vide ou illisible)');
+
+  const ocrSucceeded = ocrLines.length > 0 || rawFullText.length > 0;
+
+  // 3. Extraction des caractéristiques typographiques depuis les boîtes OCR + pixels bruts
+  const lineHeightsPx = ocrLines
+    .map((l) => Math.max(6, l.y1 - l.y0))
+    .sort((a, b) => a - b);
+  const medianLineHeightPx =
+    lineHeightsPx.length > 0
+      ? lineHeightsPx[Math.floor(lineHeightsPx.length / 2)]
+      : Math.max(10, rh * 0.42);
+
+  // Conversion fidèle pixels -> points typographiques selon les dimensions réelles du document
+  const ptPerPixel = (project.heightMm / Math.max(200, snapshotHeightPx)) * 2.83465;
+  const rawFontPt = medianLineHeightPx * ptPerPixel * 0.78;
+  const fontSizePt = Math.max(7.5, Math.min(36, Math.round(rawFontPt * 2) / 2));
+
+  // Interligne moyen si multi-lignes
+  let lineHeight = 1.32;
+  if (ocrLines.length >= 2) {
+    const pitches: number[] = [];
+    for (let i = 1; i < ocrLines.length; i++) {
+      const gap = ocrLines[i].y0 - ocrLines[i - 1].y0;
+      if (gap > medianLineHeightPx * 0.7 && gap < medianLineHeightPx * 2.4) {
+        pitches.push(gap / medianLineHeightPx);
+      }
+    }
+    if (pitches.length > 0) {
+      const avgPitch = pitches.reduce((a, b) => a + b, 0) / pitches.length;
+      lineHeight = Math.max(1.12, Math.min(1.85, Math.round(avgPitch * 100) / 100));
+    }
+  }
+
+  // Alignement horizontal depuis marges gauche/droite des lignes OCR
+  let textAlign: ReplicaTextElement['textAlign'] = 'left';
+  if (ocrLines.length > 0) {
+    const leftMargins = ocrLines.map((l) => l.x0 / rw);
+    const rightMargins = ocrLines.map((l) => (rw - l.x1) / rw);
+    const avgLeft = leftMargins.reduce((a, b) => a + b, 0) / leftMargins.length;
+    const avgRight = rightMargins.reduce((a, b) => a + b, 0) / rightMargins.length;
+    const widthsFrac = ocrLines.map((l) => (l.x1 - l.x0) / rw);
+    const avgWidthFrac = widthsFrac.reduce((a, b) => a + b, 0) / widthsFrac.length;
+
+    if (ocrLines.length >= 3 && avgWidthFrac > 0.72 && avgLeft < 0.12 && avgRight < 0.14) {
+      textAlign = 'justify';
+    } else if (Math.abs(avgLeft - avgRight) <= 0.08 && avgLeft >= 0.06) {
+      textAlign = 'center';
+    } else if (avgRight <= 0.1 && avgLeft >= 0.22) {
+      textAlign = 'right';
+    } else {
+      textAlign = 'left';
+    }
+  }
+
+  // Détection Gras (densité d'encre à l'intérieur des boîtes de texte + casse/taille), Souligné & Italique
+  let inkHits = 0;
+  let boxSamples = 0;
+  let underlinedHits = 0;
+  let skewTopSum = 0;
+  let skewBotSum = 0;
+  let skewPairs = 0;
+
+  for (const ln of ocrLines.length > 0
+    ? ocrLines
+    : [{ text: extractedText, confidence: 50, x0: 2, y0: 2, x1: rw - 2, y1: rh - 2 }]) {
+    const xStart = Math.max(0, Math.floor(ln.x0));
+    const xEnd = Math.min(rw - 1, Math.ceil(ln.x1));
+    const yStart = Math.max(0, Math.floor(ln.y0));
+    const yEnd = Math.min(rh - 1, Math.ceil(ln.y1));
+    const yMid = Math.floor((yStart + yEnd) / 2);
+
+    let topXSum = 0,
+      topCnt = 0,
+      botXSum = 0,
+      botCnt = 0;
+
+    for (let y = yStart; y <= yEnd; y++) {
+      for (let x = xStart; x <= xEnd; x++) {
+        boxSamples++;
+        const idx = (y * rw + x) * 4;
+        const d = colorDist(px[idx], px[idx + 1], px[idx + 2], bgR, bgG, bgB);
+        if (d > 48) {
+          inkHits++;
+          if (y < yMid) {
+            topXSum += x;
+            topCnt++;
+          } else {
+            botXSum += x;
+            botCnt++;
+          }
+        }
+      }
+    }
+    if (topCnt > 5 && botCnt > 5) {
+      skewTopSum += topXSum / topCnt;
+      skewBotSum += botXSum / botCnt;
+      skewPairs++;
+    }
+
+    // Scan d'un éventuel filet de soulignement 1..4 px sous la ligne
+    const lineWidth = Math.max(1, xEnd - xStart);
+    for (let uy = yEnd; uy <= Math.min(rh - 1, yEnd + 4); uy++) {
+      let rowInk = 0;
+      for (let x = xStart; x <= xEnd; x++) {
+        const idx = (uy * rw + x) * 4;
+        if (colorDist(px[idx], px[idx + 1], px[idx + 2], bgR, bgG, bgB) > 48) rowInk++;
+      }
+      if (rowInk / lineWidth >= 0.52) {
+        underlinedHits++;
+        break;
+      }
+    }
+  }
+
+  const inkDensity = boxSamples > 0 ? inkHits / boxSamples : 0.2;
+  const isAllCapsHeading =
+    extractedText.length >= 4 &&
+    extractedText.length <= 90 &&
+    extractedText === extractedText.toUpperCase() &&
+    /[A-ZÀ-Ý]/.test(extractedText);
+  const fontWeight: ReplicaTextElement['fontWeight'] =
+    fontSizePt >= 13 || inkDensity > 0.29 || isAllCapsHeading ? '700' : '400';
+  const textDecoration: ReplicaTextElement['textDecoration'] =
+    underlinedHits > 0 && underlinedHits >= Math.ceil(Math.max(1, ocrLines.length) * 0.5)
+      ? 'underline'
+      : 'none';
+  const avgSkew = skewPairs > 0 ? (skewTopSum - skewBotSum) / skewPairs : 0;
+  const fontStyle: ReplicaTextElement['fontStyle'] =
+    avgSkew > Math.max(1.8, medianLineHeightPx * 0.14) ? 'italic' : 'normal';
+
+  const fontFamily: ReplicaTextElement['fontFamily'] =
+    el.kind === 'text' ? el.fontFamily : 'sans-serif';
+
+  const role: ReplicaTextElement['role'] =
+    el.yPct < 14 ? 'header' : fontSizePt >= 14 ? 'title' : el.yPct > 86 ? 'footer' : 'body';
+
+  const textElement: ReplicaTextElement = {
+    id: newId,
+    kind: 'text',
+    name: `${extractedText.split('\n')[0].trim().slice(0, 26) || 'Texte OCR'}`,
+    pageIndex: el.pageIndex,
+    xPct: el.xPct,
+    yPct: el.yPct,
+    wPct: Math.max(8, el.wPct),
+    hPct: Math.max(2.2, el.hPct),
+    zIndex: Math.max(20, el.zIndex),
+    rotation: el.rotation,
+    opacity: 100,
+    locked: false,
+    visible: true,
+    lockAspectRatio: false,
+    text: extractedText,
+    fontFamily,
+    fontSizePt,
+    fontWeight,
+    fontStyle,
+    textDecoration,
+    color: detectedInkColor,
+    backgroundColor: detectedBackgroundColor,
+    textAlign,
+    lineHeight,
+    letterSpacingEm: 0,
+    role
+  };
+
+  const styleBadges = [
+    `${fontSizePt}pt`,
+    fontWeight === '700' ? 'Gras' : 'Normal',
+    fontStyle === 'italic' ? 'Italique' : null,
+    textDecoration === 'underline' ? 'Souligné' : null,
+    `Texte ${detectedInkColor}`,
+    detectedBackgroundColor !== 'transparent' ? `Fond ${detectedBackgroundColor}` : 'Fond transp.',
+    `Align. ${textAlign}`
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  return {
+    textElement,
+    confidencePct: meanConfidence,
+    ocrSucceeded,
+    styleSummary: styleBadges
+  };
+}
+
