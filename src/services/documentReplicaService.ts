@@ -2786,7 +2786,7 @@ export async function exportReplicaProjectToDocx(
       ? AlignmentType.JUSTIFIED
       : AlignmentType.LEFT;
 
-  const usableWidthPx = Math.round(((project.widthMm - project.marginsMm.left - project.marginsMm.right) / 25.4) * 96);
+  const usableWidthPx = Math.round(((project.widthMm - (project.marginsMm?.left ?? 14) - (project.marginsMm?.right ?? 14)) / 25.4) * 96);
 
   const elementToDocxBlock = (el: ReplicaElement): Array<Paragraph | Table> => {
     if (el.kind === 'text') {
@@ -2962,10 +2962,10 @@ export async function exportReplicaProjectToDocx(
               project.orientation === 'landscape' ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT
           },
           margin: {
-            top: convertMillimetersToTwip(project.marginsMm.top),
-            right: convertMillimetersToTwip(project.marginsMm.right),
-            bottom: convertMillimetersToTwip(project.marginsMm.bottom),
-            left: convertMillimetersToTwip(project.marginsMm.left)
+            top: convertMillimetersToTwip(project.marginsMm?.top ?? 14),
+            right: convertMillimetersToTwip(project.marginsMm?.right ?? 14),
+            bottom: convertMillimetersToTwip(project.marginsMm?.bottom ?? 14),
+            left: convertMillimetersToTwip(project.marginsMm?.left ?? 14)
           }
         }
       },

@@ -908,10 +908,10 @@ export const InteractiveDocumentCanvas: React.FC<InteractiveCanvasProps> = ({
             minHeight: effectiveLayout?.orientation === 'landscape' ? '794px' : '1122px',
             backgroundColor: effectiveLayout?.pageBgColor || '#ffffff',
             color: effectiveLayout?.bodyTextColor || '#0f172a',
-            paddingTop: effectiveLayout ? `${Math.round(effectiveLayout.marginsMm.top * 2.8)}px` : '44px',
-            paddingRight: effectiveLayout ? `${Math.round(effectiveLayout.marginsMm.right * 2.8)}px` : '44px',
-            paddingBottom: effectiveLayout ? `${Math.round(effectiveLayout.marginsMm.bottom * 2.8)}px` : '44px',
-            paddingLeft: effectiveLayout ? `${Math.round(effectiveLayout.marginsMm.left * 2.8)}px` : '44px',
+            paddingTop: `${Math.round((effectiveLayout?.marginsMm?.top ?? 16) * 2.8)}px`,
+            paddingRight: `${Math.round((effectiveLayout?.marginsMm?.right ?? 16) * 2.8)}px`,
+            paddingBottom: `${Math.round((effectiveLayout?.marginsMm?.bottom ?? 16) * 2.8)}px`,
+            paddingLeft: `${Math.round((effectiveLayout?.marginsMm?.left ?? 16) * 2.8)}px`,
             border:
               effectiveLayout?.borderStyle === 'double'
                 ? `4px double ${effectiveLayout.borderColor || '#0B2545'}`

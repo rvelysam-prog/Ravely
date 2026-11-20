@@ -28,7 +28,9 @@ import {
   resolveLayoutTemplateForDocEsModel,
   preloadDocEsModelVisuals,
   generateKitDocEsCompiledPdf,
-  generateKitDocEsIndividualPdfsAsync
+  generateKitDocEsIndividualPdfsAsync,
+  computeAdaptivePageFitMetrics,
+  DocEsResolvedActorVisuals
 } from './fichesEtDocEsService';
 
 export type RecrutementCasType = 'direct' | 'agence';
@@ -546,7 +548,8 @@ export async function generatePostulantKitPdf(
         mergedLayoutTemplates,
         kitOptions?.kitDocLayouts,
         layoutTemplate || mergedLayoutTemplates.doc_es,
-        kitOptions?.kitDocHeaders
+        kitOptions?.kitDocHeaders,
+        effectiveDocEsData.customModelLayouts
       );
       perModelImages[m.id] = await preloadDocEsModelVisuals(
         m.id,
@@ -691,7 +694,8 @@ export function buildKitCandidatWordHtml(
         kitOptions?.layoutTemplates,
         kitOptions?.kitDocLayouts,
         kitOptions?.layoutTemplates?.doc_es,
-        kitOptions?.kitDocHeaders
+        kitOptions?.kitDocHeaders,
+        d.customModelLayouts
       );
       const actorReq = getDocEsActorRequirement(m.id);
       const visuals = resolveActorAssetsForDocEsModel(
@@ -708,6 +712,12 @@ export function buildKitCandidatWordHtml(
         .replace(/^[=\-_]{4,}\s*$/gm, '')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
+      const fit = computeAdaptivePageFitMetrics(cleanBody, docTpl, {
+        hasSignatures: Boolean(visuals.signature.url || visuals.cachet.url),
+        hasSubtitle: Boolean(rendered.subtitle),
+        hasRefPill: docTpl?.spatialBlueprint?.hasRefPill
+      });
+      const wordFontSizePt = Math.max(8.5, Math.min(11.5, Math.round((fit.fontSizePt + 0.8) * 10) / 10));
       const headerHtml =
         headerMode === 'filled_banner'
           ? `<div style="background:${docTpl?.headerBgColor || primaryColor}; color:#ffffff; padding:12px 14px; border-bottom:3px solid ${accentColor}; margin-bottom:12px;">
@@ -729,7 +739,7 @@ export function buildKitCandidatWordHtml(
           <p style="font-size: 9pt; font-weight: bold; color: ${accentColor}; margin: 0 0 4px 0;">${m.number} · ${m.categoryLabel}</p>
           <h2 style="font-size: 14pt; color: ${primaryColor}; margin: 0 0 4px 0;">${rendered.title}</h2>
           <p style="font-size: 9.5pt; color: #475569; margin: 0 0 12px 0;">${rendered.subtitle}</p>
-          <div style="white-space: pre-wrap; font-family: Calibri, Arial, sans-serif; font-size: 10.5pt; line-height: 1.5; color: #1e293b;">${cleanBody}</div>
+          <div style="white-space: pre-wrap; font-family: Calibri, Arial, sans-serif; font-size: ${wordFontSizePt}pt; line-height: ${fit.lineHeight}; color: #1e293b;">${cleanBody}</div>
         </div>
       `;
     })
@@ -749,4 +759,146 @@ export function buildKitCandidatWordHtml(
       ${sectionsHtml}
     </div>
   `;
+}
+
+/**
+ * Construit un HTML Email (tables imbriquées + CSS inline compatibles Gmail / Outlook / Kit)
+ * pour un document individuel "Fiches et DOC ES" du Kit Candidat.
+ */
+export function buildSingleDocEsEmailHtml(
+  modelId: number,
+  p: PostulantInfo,
+  d: FichesDocEsData,
+  settings: SiteSettings,
+  docTpl: ReferenceLayoutTemplate,
+  visuals: DocEsResolvedActorVisuals,
+  customText?: string
+): string {
+  const rendered = renderDocEsPlainText(modelId, p, d, settings);
+  const actorReq = getDocEsActorRequirement(modelId);
+  const rawContent = customText && customText.trim() ? customText : rendered.content;
+  const cleanBody = rawContent
+    .replace(/^[=\-_]{4,}\s*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  const fit = computeAdaptivePageFitMetrics(cleanBody, docTpl, {
+    hasSignatures: Boolean(visuals.signature.url || visuals.cachet.url),
+    hasSubtitle: Boolean(rendered.subtitle),
+    hasRefPill: docTpl?.spatialBlueprint?.hasRefPill
+  });
+
+  const primary = docTpl.primaryColor || '#0B2545';
+  const accent = docTpl.accentColor || '#0066B3';
+  const headerBg = docTpl.headerBgColor || primary;
+  const pageBg = docTpl.pageBgColor || '#FFFFFF';
+  const bp = docTpl.spatialBlueprint;
+  const headerMode = bp?.headerLayout || 'split_lr';
+  const fontStack =
+    docTpl.fontFamily === 'times'
+      ? 'Georgia, "Times New Roman", serif'
+      : docTpl.fontFamily === 'courier'
+      ? '"Courier New", Courier, monospace'
+      : 'Arial, Helvetica, sans-serif';
+
+  const esc = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const bodyHtml = cleanBody
+    .split(/\n{2,}/)
+    .map((block) => {
+      const lines = block.split('\n').map((l) => esc(l)).join('<br />');
+      return `<p style="margin: 0 0 ${Math.max(8, Math.round(fit.paragraphSpacingMm * 3.5))}px 0; font-size: ${Math.max(12, Math.round(fit.webFontPx + 1))}px; line-height: ${fit.lineHeight}; color: ${docTpl.bodyTextColor || '#1E293B'};">${lines}</p>`;
+    })
+    .join('');
+
+  const headerBlock =
+    headerMode === 'filled_banner'
+      ? `<tr>
+          <td style="background-color: ${headerBg}; padding: 20px 26px; border-bottom: 3px solid ${accent};">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td valign="middle">
+                  ${visuals.logo.url ? `<img src="${visuals.logo.url}" alt="${esc(visuals.primaryEntityName)}" style="max-height: 44px; max-width: 140px; background: #ffffff; padding: 4px; border-radius: 4px; display: inline-block; vertical-align: middle; margin-right: 10px;" border="0" />` : ''}
+                  <span style="font-size: 15px; font-weight: bold; color: #FFFFFF;">${esc(visuals.primaryEntityName)}</span><br />
+                  <span style="font-size: 11px; color: #E2E8F0;">${esc(visuals.primarySubLine)} · ${esc(actorReq.badgeLabel)}</span>
+                </td>
+                <td align="right" valign="middle" style="font-size: 11px; color: #F8FAFC;">
+                  <strong>Réf. : ${esc(d.referenceDossier)}</strong><br />
+                  <span>Date : ${esc(p.dateEffet)}</span>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>`
+      : `<tr>
+          <td style="background-color: ${pageBg}; padding: 20px 26px; border-bottom: 2px solid ${accent};">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td align="${headerMode === 'centered_stack' ? 'center' : 'left'}" valign="middle">
+                  ${visuals.logo.url ? `<img src="${visuals.logo.url}" alt="${esc(visuals.primaryEntityName)}" style="max-height: 44px; max-width: 140px; display: inline-block; margin-bottom: 6px;" border="0" /><br />` : ''}
+                  <span style="font-size: 15px; font-weight: bold; color: ${primary};">${esc(visuals.primaryEntityName)}</span><br />
+                  <span style="font-size: 11px; color: #64748B;">${esc(visuals.primarySubLine)} · Réf. ${esc(d.referenceDossier)}</span>
+                </td>
+                ${headerMode !== 'centered_stack' && visuals.logoSecondary?.url ? `<td align="right" valign="middle"><img src="${visuals.logoSecondary.url}" alt="${esc(visuals.secondaryEntityName || '')}" style="max-height: 40px; max-width: 120px; display: inline-block;" border="0" /></td>` : ''}
+              </tr>
+            </table>
+          </td>
+        </tr>`;
+
+  return `<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${esc(rendered.title)}</title>
+</head>
+<body style="margin: 0; padding: 20px 0; background-color: #F1F5F9; font-family: ${fontStack};">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" style="width: 640px; max-width: 100%; background-color: ${pageBg}; border: 1px solid #CBD5E1; border-top: 4px solid ${primary}; border-collapse: collapse;">
+          ${headerBlock}
+          <tr>
+            <td style="padding: 22px 26px 10px 26px; text-align: ${bp?.titleAlign || 'center'};">
+              <div style="font-size: 16px; font-weight: bold; color: ${primary};">${esc(bp?.titleUppercase ? rendered.title.toUpperCase() : rendered.title)}</div>
+              ${rendered.subtitle ? `<div style="font-size: 11px; color: #64748B; margin-top: 4px;">${esc(rendered.subtitle)}</div>` : ''}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 12px 26px 20px 26px;">
+              ${bodyHtml}
+            </td>
+          </tr>
+          ${
+            visuals.signature.url || visuals.cachet.url || visuals.qrcode.url || visuals.barcode.url
+              ? `<tr>
+                  <td style="padding: 16px 26px; border-top: 1px solid #E2E8F0; background-color: #F8FAFC;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td valign="bottom">
+                          ${visuals.barcode.url ? `<img src="${visuals.barcode.url}" alt="Code-Barres" style="max-height: 30px; display: inline-block; margin-right: 10px;" border="0" />` : ''}
+                          ${visuals.qrcode.url ? `<img src="${visuals.qrcode.url}" alt="QR Code" style="width: 44px; height: 44px; display: inline-block; border: 1px solid #CBD5E1;" border="0" />` : ''}
+                        </td>
+                        <td align="right" valign="bottom">
+                          ${visuals.cachet.url ? `<img src="${visuals.cachet.url}" alt="Cachet" style="max-height: 52px; display: inline-block; margin-right: 10px;" border="0" />` : ''}
+                          ${visuals.signature.url ? `<img src="${visuals.signature.url}" alt="Signature" style="max-height: 44px; display: inline-block;" border="0" />` : ''}
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>`
+              : ''
+          }
+          <tr>
+            <td style="padding: 12px 26px; background-color: #0F172A; color: #94A3B8; font-size: 10.5px; text-align: center;">
+              ${esc(visuals.primaryEntityName)} · Réf. ${esc(p.codeIdCandidature)} · Candidat : ${esc(p.nomComplet)}
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
 }

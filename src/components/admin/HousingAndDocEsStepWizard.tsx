@@ -732,11 +732,13 @@ export const HousingAndDocEsStepWizard: React.FC<HousingAndDocEsStepWizardProps>
                             type="number"
                             min={6}
                             max={40}
-                            value={activeTemplate.marginsMm.left}
+                            value={activeTemplate.marginsMm?.left ?? 16}
                             onChange={(e) =>
                               handleUpdateTemplateField({
                                 marginsMm: {
-                                  ...activeTemplate.marginsMm,
+                                  top: activeTemplate.marginsMm?.top ?? 16,
+                                  right: activeTemplate.marginsMm?.right ?? 16,
+                                  bottom: activeTemplate.marginsMm?.bottom ?? 16,
                                   left: Number(e.target.value) || 15
                                 }
                               })
@@ -748,11 +750,13 @@ export const HousingAndDocEsStepWizard: React.FC<HousingAndDocEsStepWizardProps>
                             type="number"
                             min={6}
                             max={40}
-                            value={activeTemplate.marginsMm.right}
+                            value={activeTemplate.marginsMm?.right ?? 16}
                             onChange={(e) =>
                               handleUpdateTemplateField({
                                 marginsMm: {
-                                  ...activeTemplate.marginsMm,
+                                  top: activeTemplate.marginsMm?.top ?? 16,
+                                  bottom: activeTemplate.marginsMm?.bottom ?? 16,
+                                  left: activeTemplate.marginsMm?.left ?? 16,
                                   right: Number(e.target.value) || 15
                                 }
                               })
@@ -764,11 +768,13 @@ export const HousingAndDocEsStepWizard: React.FC<HousingAndDocEsStepWizardProps>
                             type="number"
                             min={6}
                             max={40}
-                            value={activeTemplate.marginsMm.top}
+                            value={activeTemplate.marginsMm?.top ?? 16}
                             onChange={(e) =>
                               handleUpdateTemplateField({
                                 marginsMm: {
-                                  ...activeTemplate.marginsMm,
+                                  right: activeTemplate.marginsMm?.right ?? 16,
+                                  bottom: activeTemplate.marginsMm?.bottom ?? 16,
+                                  left: activeTemplate.marginsMm?.left ?? 16,
                                   top: Number(e.target.value) || 15
                                 }
                               })

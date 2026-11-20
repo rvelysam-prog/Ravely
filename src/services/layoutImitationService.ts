@@ -124,6 +124,10 @@ export interface ReferenceLayoutTemplate {
   signatureZoneStyle?: 'two_col_fait_a_right_sig' | 'three_col_footer';
   hasBottomLegalFooter?: boolean;
   singlePageFit?: boolean;
+  fontSizePt?: number;
+  lineHeight?: number;
+  paragraphSpacingMm?: number;
+  autoFitToPage?: boolean;
   hasTablesDetected: boolean;
   spatialBlueprint?: SpatialBlueprint;
   detectedElements: DetectedRefElement[];
@@ -246,8 +250,19 @@ export function resolveEffectiveLayout(
     ? { ...buildBlueprintFromLegacyTemplate(tpl), ...tpl.spatialBlueprint }
     : buildBlueprintFromLegacyTemplate({ ...tpl, layoutArchetype: archetype });
 
+  const rawMargins = tpl.marginsMm;
+  const safeMargins = {
+    top: typeof rawMargins?.top === 'number' && Number.isFinite(rawMargins.top) ? rawMargins.top : 16,
+    right: typeof rawMargins?.right === 'number' && Number.isFinite(rawMargins.right) ? rawMargins.right : 16,
+    bottom: typeof rawMargins?.bottom === 'number' && Number.isFinite(rawMargins.bottom) ? rawMargins.bottom : 16,
+    left: typeof rawMargins?.left === 'number' && Number.isFinite(rawMargins.left) ? rawMargins.left : 16
+  };
+
   return {
     ...tpl,
+    marginsMm: safeMargins,
+    detectedElements: Array.isArray(tpl.detectedElements) ? tpl.detectedElements : [],
+    ignoredMissingElements: Array.isArray(tpl.ignoredMissingElements) ? tpl.ignoredMissingElements : [],
     layoutArchetype: archetype,
     highlightTintColor: tpl.highlightTintColor || mixHexWithWhite(tpl.primaryColor || '#0B2545', 0.87),
     hasTwoColumnMeta: tpl.hasTwoColumnMeta ?? spatialBlueprint.metaLayout.startsWith('two_col'),
@@ -260,6 +275,7 @@ export function resolveEffectiveLayout(
         : 'two_col_fait_a_right_sig'),
     hasBottomLegalFooter: tpl.hasBottomLegalFooter ?? spatialBlueprint.footerLayout !== 'none',
     singlePageFit: tpl.singlePageFit ?? true,
+    autoFitToPage: tpl.autoFitToPage ?? true,
     spatialBlueprint
   };
 }
@@ -1733,7 +1749,7 @@ export function buildInteractiveHtmlTemplate(tpl: ReferenceLayoutTemplate): stri
     .sheet {
       position: relative; width: ${wMm}mm; min-height: ${hMm}mm; margin: 0 auto;
       background: var(--page-bg); box-shadow: 0 18px 42px rgba(15,23,42,0.18);
-      padding: ${tpl.marginsMm.top}mm ${tpl.marginsMm.right}mm ${tpl.marginsMm.bottom}mm ${tpl.marginsMm.left}mm;
+      padding: ${tpl.marginsMm?.top ?? 16}mm ${tpl.marginsMm?.right ?? 16}mm ${tpl.marginsMm?.bottom ?? 16}mm ${tpl.marginsMm?.left ?? 16}mm;
       overflow: hidden; ${outerBorderCss}
     }
     ${headerBarCss}

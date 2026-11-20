@@ -46,7 +46,8 @@ import {
   generatePostulantEmailTemplate,
   generatePostulantKitPdf,
   generateKitCandidatZipPackage,
-  buildKitCandidatWordHtml
+  buildKitCandidatWordHtml,
+  buildSingleDocEsEmailHtml
 } from '../../services/postulantDossierService';
 import {
   CricContractVariables,
@@ -149,6 +150,7 @@ import {
   generateSingleDocEsPdfAsync,
   getDocEsModelsForCasType,
   renderDocEsPlainText,
+  computeAdaptivePageFitMetrics,
   generateKitDocEsIndividualPdfsAsync
 } from '../../services/fichesEtDocEsService';
 import {
@@ -167,12 +169,15 @@ import {
   buildStructuredHousingDocument
 } from '../../services/housingDocsService';
 import { HousingAndDocEsStepWizard } from './HousingAndDocEsStepWizard';
+import { KitDocModelInspectorPanel } from './KitDocModelInspectorPanel';
 import {
   LayoutTargetDocKey,
   LayoutTemplatesMap,
+  ReferenceLayoutTemplate,
   getSavedLayoutTemplatesLocal,
   loadAllLayoutTemplatesFromFirestore,
-  resolveEffectiveLayout
+  resolveEffectiveLayout,
+  saveLayoutTemplateToFirestore
 } from '../../services/layoutImitationService';
 
 interface PostulantNouveauMasterModuleProps {
@@ -407,6 +412,8 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
   const [isUniversalVisualModalOpen, setIsUniversalVisualModalOpen] = useState(false);
   const [visualGeneratorTargetKey, setVisualGeneratorTargetKey] = useState<ImportedAssetKey>('logo');
   const [selectedHousingVisual, setSelectedHousingVisual] = useState<string | null>(null);
+  const [selectedKitDocId, setSelectedKitDocId] = useState<number | 'compiled'>('compiled');
+  const [selectedKitVisualKey, setSelectedKitVisualKey] = useState<string | null>(null);
   const tabsContainerRef = useRef<HTMLDivElement>(null);
 
   const [copiedNotification, setCopiedNotification] = useState<string | null>(null);
@@ -952,6 +959,21 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
       return next;
     });
     triggerToast(`Source visuelle (6 Parties) mise à jour pour le Modèle ${modelId}.`);
+  };
+
+  useEffect(() => {
+    if (typeof selectedKitDocId === 'number') {
+      const allowedIds = getDocEsModelsForCasType(postulant.casType).map((m) => m.id);
+      if (!allowedIds.includes(selectedKitDocId)) {
+        setSelectedKitDocId('compiled');
+      }
+    }
+  }, [postulant.casType, selectedKitDocId]);
+
+  const handleSaveDocEsData = (updated: FichesDocEsData, toastMsg?: string) => {
+    setDocEsData(updated);
+    void saveFichesDocEsData(postulant.id, updated);
+    if (toastMsg) triggerToast(toastMsg);
   };
 
   const handleNewBlankPostulant = () => {
@@ -3970,7 +3992,8 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                       layoutTemplates,
                       kitDocLayouts,
                       layoutTemplates.doc_es,
-                      kitDocHeaders
+                      kitDocHeaders,
+                      docEsData.customModelLayouts
                     );
                     const actorReq = getDocEsActorRequirement(m.id);
                     const docVisuals = resolveActorAssetsForDocEsModel(
@@ -3983,6 +4006,10 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                     const activePresetKey = kitDocLayouts[m.id] || 'auto_doc';
                     const activeHeaderKey = kitDocHeaders[m.id] || 'auto_header';
                     const activeScopeKey = kitDocVisualScopes[m.id] || 'auto';
+                    const isActiveSingleDoc = selectedKitDocId === m.id;
+                    const isDocEdited = Boolean(
+                      docEsData.customModelTexts?.[String(m.id)] || docEsData.customModelLayouts?.[String(m.id)]
+                    );
                     const visualsCount = [
                       docVisuals.logo.url,
                       docVisuals.signature.url,
@@ -3999,9 +4026,11 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                     return (
                       <div
                         key={m.id}
-                        className="p-3 rounded-xl border bg-slate-50/70 flex flex-col justify-between gap-2.5 text-xs"
+                        className={`p-3 rounded-xl border flex flex-col justify-between gap-2.5 text-xs transition-all ${
+                          isActiveSingleDoc ? 'bg-blue-50/70 ring-2 ring-[#0066B3]' : 'bg-slate-50/70'
+                        }`}
                         style={{
-                          borderColor: docLayout.accentColor || '#cbd5e1',
+                          borderColor: isActiveSingleDoc ? '#0066B3' : docLayout.accentColor || '#cbd5e1',
                           borderTopWidth: '4px',
                           borderTopColor: docLayout.primaryColor || '#0B2545'
                         }}
@@ -4012,7 +4041,7 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                               className="font-mono font-bold text-[10px]"
                               style={{ color: docLayout.primaryColor || '#0066B3' }}
                             >
-                              {m.number}
+                              {m.number}{isDocEdited ? ' · Édité' : ''}
                             </span>
                             <span
                               className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
@@ -4126,12 +4155,18 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                           <button
                             type="button"
                             onClick={() => {
-                              const el = document.getElementById(`kit-doc-es-${m.id}`);
-                              el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                              setSelectedKitDocId(m.id);
+                              setSelectedKitVisualKey(null);
+                              setTimeout(() => {
+                                document
+                                  .getElementById('kit-candidat-preview-area')
+                                  ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                              }, 50);
                             }}
-                            className="text-[11px] font-semibold text-slate-600 hover:text-[#0066B3] cursor-pointer"
+                            className="px-2 py-1 rounded bg-[#0066B3] hover:bg-[#005291] text-white text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer transition-colors"
                           >
-                            Voir ci-dessous
+                            <Edit3 className="w-3 h-3" />
+                            <span>Éditer ce doc</span>
                           </button>
                           <button
                             type="button"
@@ -4166,402 +4201,1127 @@ export const PostulantNouveauMasterModule: React.FC<PostulantNouveauMasterModule
                 </div>
               </div>
 
-              <InteractiveDocumentCanvas
-                title={`Kit Candidat (${isAgenceKit ? 'Via Agence · 7 PDF DOC ES' : 'Direct · 8 PDF DOC ES'}) : ${postulant.nomComplet}`}
-                documentTypeLabel={`Onglet 01 · Kit Candidat (${isAgenceKit ? 'Agence CRIC' : 'Employeur Direct'})`}
-                assetsConfig={assetsConfig}
-                onChangeAssetsConfig={handleUpdateAssetsConfig}
-                uploadedAssetUrls={uploadedAssets}
-                layoutTemplate={layoutTemplates.doc_es}
-                preferCustomPdfDownloadWhenUnedited={true}
-                exclusiveVisualSet={{
-                  logo: isAgenceKit
-                    ? uploadedAssets.logoPrestataire || postulant.logoAgenceUrl
-                    : effectiveEmployerLogo,
-                  signature: isAgenceKit
-                    ? uploadedAssets.signaturePrestataire
-                    : uploadedAssets.signature || postulant.signatureUrl,
-                  cachet: isAgenceKit
-                    ? uploadedAssets.cachetPrestataire
-                    : uploadedAssets.cachet || postulant.cachetUrl,
-                  filigrane: isAgenceKit
-                    ? uploadedAssets.filigranePrestataire
-                    : uploadedAssets.filigrane || postulant.filigraneUrl,
-                  arrierePlan: isAgenceKit
-                    ? uploadedAssets.arrierePlanPrestataire
-                    : uploadedAssets.arrierePlan,
-                  barcode: isAgenceKit
-                    ? uploadedAssets.barcodePrestataire
-                    : effectiveBarcode,
-                  qrcode: isAgenceKit
-                    ? uploadedAssets.qrcodePrestataire
-                    : effectiveQrCode
-                }}
-                htmlEmailContent={emailModel.html}
-                onDownloadPdf={handleDownloadKitPdf}
-                onDownloadWord={() => {
-                  downloadWordDocument(
-                    `Kit_Candidat_${isAgenceKit ? 'Agence' : 'Direct'}_${postulant.codeIdCandidature}`,
-                    `Kit Candidat Officiel - ${postulant.nomComplet}`,
-                    kitWordHtml
-                  );
-                  triggerToast('Kit Candidat complet exporté au format Word (.docx).');
-                }}
-                onDownloadHtml={(html) => downloadHtmlFile(`Kit_Candidat_${postulant.codeIdCandidature}.html`, html)}
-                onOpenInWebmail={onOpenInWebmail}
-                onExportSuccess={triggerToast}
-                onTextEdited={(text) => setCustomVisualText((prev) => ({ ...prev, dossier_kit: text }))}
-                hasCustomText={Boolean(customVisualText['dossier_kit'])}
-                onResetText={() =>
-                  setCustomVisualText((prev) => {
-                    const copy = { ...prev };
-                    delete copy['dossier_kit'];
-                    return copy;
-                  })
-                }
-              >
-                <div
-                  contentEditable
-                  suppressContentEditableWarning
-                  className="space-y-6 font-sans text-sm text-slate-800 leading-relaxed outline-none p-2 rounded-lg cursor-text"
-                >
-                  {/* Couverture & Sommaire du Kit */}
-                  <div className="border-b-2 border-[#0B2545] pb-4 space-y-2">
-                    <div className="flex items-center justify-between flex-wrap gap-2">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-[#0066B3]">
-                        {isAgenceKit
-                          ? 'PARCOURS AVEC AGENCE DE PLACEMENT · PARTIE 2 FICHES & DOC ES'
-                          : 'PARCOURS CANDIDATURE DIRECTE · PARTIE 1 FICHES & DOC ES'}
-                      </span>
-                      <span className="text-[11px] font-mono font-bold text-slate-600">
-                        Réf. {postulant.codeIdCandidature}
-                      </span>
-                    </div>
-                    <h2 className="text-lg font-black text-[#0B2545]">
-                      {isAgenceKit
-                        ? 'KIT CANDIDAT OFFICIEL — VIA AGENCE DE PLACEMENT (7 DOCUMENTS PDF)'
-                        : 'KIT CANDIDAT OFFICIEL — CANDIDATURE EN DIRECT (8 DOCUMENTS PDF)'}
-                    </h2>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs bg-slate-50 border border-slate-200 rounded-lg p-3">
-                      <div>
-                        <strong>Postulant :</strong> {postulant.civilite} {postulant.nomComplet} ({postulant.nationalite})
-                      </div>
-                      <div>
-                        <strong>Poste :</strong> {postulant.intitulePoste} (CNP {postulant.codeCnp})
-                      </div>
-                      <div>
-                        <strong>Employeur :</strong> {postulant.nomEntreprise}
-                      </div>
-                      <div>
-                        {isAgenceKit ? (
-                          <>
-                            <strong>Agence mandataire :</strong> {postulant.nomAgence} (CNESST {postulant.permisCnesst})
-                          </>
-                        ) : (
-                          <>
-                            <strong>Entretien :</strong> {postulant.dateEntretien} à {postulant.heureEntretien}
-                          </>
+              {/* ZONE APERÇU & ÉDITION INTERACTIVE DU KIT (VUE COMPILÉE OU DOCUMENT INDIVIDUEL) */}
+              <div id="kit-candidat-preview-area" className="space-y-4">
+                {/* Barre sélecteur de document au-dessus de l'aperçu (identique au confort d'édition des onglets 9-12) */}
+                <div className="bg-white border border-slate-200 rounded-xl p-2.5 flex flex-wrap items-center gap-1.5 shadow-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedKitDocId('compiled');
+                      setSelectedKitVisualKey(null);
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition-colors ${
+                      selectedKitDocId === 'compiled'
+                        ? 'bg-[#0B2545] text-white'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
+                  >
+                    <Layers className="w-3.5 h-3.5 text-amber-300" />
+                    <span>Vue Compilée (Tous : {activeKitModels.length} PDF)</span>
+                  </button>
+
+                  {activeKitModels.map((m, idx) => {
+                    const isSel = selectedKitDocId === m.id;
+                    const isEdited = Boolean(
+                      docEsData.customModelTexts?.[String(m.id)] ||
+                        docEsData.customModelLayouts?.[String(m.id)]
+                    );
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedKitDocId(m.id);
+                          setSelectedKitVisualKey(null);
+                        }}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors border ${
+                          isSel
+                            ? 'bg-[#0066B3] text-white border-[#0066B3]'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                        }`}
+                        title={m.title}
+                      >
+                        <span className="font-mono text-[10px] opacity-85">#{idx + 1}</span>
+                        <span className="max-w-[140px] truncate">{m.title}</span>
+                        {isEdited && (
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                              isSel ? 'bg-amber-300' : 'bg-emerald-500'
+                            }`}
+                          />
                         )}
-                      </div>
-                    </div>
+                      </button>
+                    );
+                  })}
+                </div>
 
-                    <div className="pt-2">
-                      <p className="text-xs font-bold text-[#0B2545] uppercase mb-1.5">
-                        Sommaire des documents « Fiches et DOC ES » inclus :
-                      </p>
-                      <ol className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-xs text-slate-700 list-decimal pl-4">
-                        {activeKitModels.map((m) => (
-                          <li key={m.id}>
-                            <strong>{m.number}</strong> : {m.title}
-                          </li>
-                        ))}
-                      </ol>
-                    </div>
-                  </div>
+                {typeof selectedKitDocId === 'number' ? (
+                  (() => {
+                    const activeModel =
+                      activeKitModels.find((m) => m.id === selectedKitDocId) || activeKitModels[0];
+                    const rendered = renderDocEsPlainText(activeModel.id, postulant, docEsData, settings);
+                    const resolvedRaw = resolveLayoutTemplateForDocEsModel(
+                      activeModel.id,
+                      layoutTemplates,
+                      kitDocLayouts,
+                      layoutTemplates.doc_es,
+                      kitDocHeaders,
+                      docEsData.customModelLayouts
+                    );
+                    const effectiveDocLayout = resolveEffectiveLayout(resolvedRaw) || resolvedRaw;
+                    const bp = effectiveDocLayout.spatialBlueprint!;
+                    const actorReq = getDocEsActorRequirement(activeModel.id);
+                    const docVisuals = resolveActorAssetsForDocEsModel(
+                      activeModel.id,
+                      postulant,
+                      uploadedAssets,
+                      assetsConfig,
+                      kitDocVisualScopes[activeModel.id]
+                    );
+                    const cleanBody = rendered.content
+                      .replace(/^[=\-_]{4,}\s*$/gm, '')
+                      .replace(/\n{3,}/g, '\n\n')
+                      .trim();
+                    const adaptiveFit = computeAdaptivePageFitMetrics(cleanBody, resolvedRaw, {
+                      hasSignatures: Boolean(docVisuals.signature.url || docVisuals.cachet.url),
+                      hasSubtitle: Boolean(rendered.subtitle),
+                      hasRefPill: bp?.hasRefPill
+                    });
+                    const singleEmailHtml = buildSingleDocEsEmailHtml(
+                      activeModel.id,
+                      postulant,
+                      docEsData,
+                      settings,
+                      resolvedRaw,
+                      docVisuals
+                    );
 
-                  {customVisualText['dossier_kit'] && (
-                    <div className="p-3 rounded-lg bg-amber-50 border border-amber-300 text-xs whitespace-pre-wrap">
-                      {customVisualText['dossier_kit']}
-                    </div>
-                  )}
+                    const primaryCol = effectiveDocLayout.primaryColor || '#0B2545';
+                    const accentCol = effectiveDocLayout.accentColor || '#0066B3';
+                    const pageBg = effectiveDocLayout.pageBgColor || '#FFFFFF';
+                    const headerMode = bp?.headerLayout || 'split_lr';
+                    const fontCss =
+                      effectiveDocLayout.fontFamily === 'times'
+                        ? 'Georgia, "Times New Roman", serif'
+                        : effectiveDocLayout.fontFamily === 'courier'
+                        ? '"Courier New", monospace'
+                        : 'system-ui, -apple-system, sans-serif';
 
-                  {/* Rendu complet de chaque document Fiches et DOC ES avec sa mise en page, son en-tête & ses visuels stricts 6 Parties */}
-                  <div className="space-y-6">
-                    {activeKitModels.map((m, idx) => {
-                      const rendered = renderDocEsPlainText(m.id, postulant, docEsData, settings);
-                      const resolvedRaw = resolveLayoutTemplateForDocEsModel(
-                        m.id,
-                        layoutTemplates,
-                        kitDocLayouts,
-                        layoutTemplates.doc_es,
-                        kitDocHeaders
-                      );
-                      const docLayout = resolveEffectiveLayout(resolvedRaw);
-                      const bp = docLayout?.spatialBlueprint;
-                      const actorReq = getDocEsActorRequirement(m.id);
-                      const docVisuals = resolveActorAssetsForDocEsModel(
-                        m.id,
-                        postulant,
-                        uploadedAssets,
-                        assetsConfig,
-                        kitDocVisualScopes[m.id]
-                      );
-                      const primaryCol = docLayout?.primaryColor || '#0B2545';
-                      const accentCol = docLayout?.accentColor || '#0066B3';
-                      const pageBg = docLayout?.pageBgColor || '#ffffff';
-                      const fontCss =
-                        docLayout?.fontFamily === 'times'
-                          ? 'Georgia, "Times New Roman", serif'
-                          : docLayout?.fontFamily === 'courier'
-                          ? '"Courier New", monospace'
-                          : 'system-ui, -apple-system, sans-serif';
-                      const cleanBody = rendered.content
-                        .replace(/^[=\-_]{4,}\s*$/gm, '')
-                        .replace(/\n{3,}/g, '\n\n')
-                        .trim();
-                      const headerMode = bp?.headerLayout || 'split_lr';
+                    const activeAssetKeyMap: Partial<
+                      Record<
+                        'logo' | 'signature' | 'cachet' | 'filigrane' | 'arrierePlan' | 'barcode' | 'qrcode',
+                        ImportedAssetKey
+                      >
+                    > = {
+                      logo: docVisuals.logo.key,
+                      signature: docVisuals.signature.key,
+                      cachet: docVisuals.cachet.key,
+                      filigrane: docVisuals.filigrane.key,
+                      arrierePlan: docVisuals.arrierePlan.key,
+                      barcode: docVisuals.barcode.key,
+                      qrcode: docVisuals.qrcode.key
+                    };
 
-                      return (
-                        <section
-                          key={m.id}
-                          id={`kit-doc-es-${m.id}`}
-                          className="rounded-xl p-4 sm:p-5 shadow-xs space-y-3 relative overflow-hidden"
-                          style={{
-                            backgroundColor: pageBg,
-                            fontFamily: fontCss,
-                            borderTop:
-                              docLayout?.borderStyle === 'double'
-                                ? `4px double ${docLayout.borderColor || primaryCol}`
-                                : `1.5px solid ${docLayout?.borderColor || '#cbd5e1'}`,
-                            borderRight:
-                              docLayout?.borderStyle === 'double'
-                                ? `4px double ${docLayout.borderColor || primaryCol}`
-                                : `1.5px solid ${docLayout?.borderColor || '#cbd5e1'}`,
-                            borderBottom:
-                              docLayout?.borderStyle === 'double'
-                                ? `4px double ${docLayout.borderColor || primaryCol}`
-                                : `1.5px solid ${docLayout?.borderColor || '#cbd5e1'}`,
-                            borderLeft: bp?.hasLeftAccentStripe
-                              ? `6px solid ${primaryCol}`
-                              : docLayout?.borderStyle === 'double'
-                              ? `4px double ${docLayout.borderColor || primaryCol}`
-                              : `1.5px solid ${docLayout?.borderColor || '#cbd5e1'}`
+                    const updateVisualItem = (key: ImportedAssetKey, patch: Partial<PdfAssetItemSettings>) => {
+                      const current =
+                        assetsConfig[key] || DEFAULT_PDF_ASSETS_CONFIG[key] || DEFAULT_PDF_ASSETS_CONFIG.logo;
+                      handleUpdateAssetsConfig({
+                        ...assetsConfig,
+                        [key]: { ...current, ...patch }
+                      });
+                    };
+
+                    const resetVisualItem = (key: ImportedAssetKey) => {
+                      const def = DEFAULT_PDF_ASSETS_CONFIG[key] || DEFAULT_PDF_ASSETS_CONFIG.logo;
+                      handleUpdateAssetsConfig({
+                        ...assetsConfig,
+                        [key]: { ...def }
+                      });
+                    };
+
+                    const bodyBlocks = cleanBody.split(/\n{2,}/).filter((b) => b.trim().length > 0);
+                    const modelKey = String(activeModel.id);
+                    const hasCustomText = Boolean(docEsData.customModelTexts?.[modelKey]?.trim());
+
+                    return (
+                      <div className="space-y-4">
+                        <KitDocModelInspectorPanel
+                          model={activeModel}
+                          postulant={postulant}
+                          settings={settings}
+                          docEsData={docEsData}
+                          onSaveDocEsData={handleSaveDocEsData}
+                          resolvedLayout={resolvedRaw}
+                          adaptiveFit={adaptiveFit}
+                          layoutTemplates={layoutTemplates}
+                          kitDocLayouts={kitDocLayouts}
+                          onChangeKitDocLayout={handleChangeKitDocLayout}
+                          kitDocHeaders={kitDocHeaders}
+                          onChangeKitDocHeader={handleChangeKitDocHeader}
+                          kitDocVisualScopes={kitDocVisualScopes}
+                          onChangeKitDocVisualScope={handleChangeKitDocVisualScope}
+                          uploadedAssets={uploadedAssets}
+                          assetsConfig={assetsConfig}
+                          onChangeAssetsConfig={handleUpdateAssetsConfig}
+                          onUploadAsset={(k, dataUrl) => handleUploadAsset(k, dataUrl)}
+                          onOpenStampGenerator={(k) => {
+                            setStampTargetKey(k);
+                            setIsStampModalOpen(true);
+                          }}
+                          onOpenVisualGenerator={(k) => {
+                            setVisualGeneratorTargetKey(k);
+                            setIsUniversalVisualModalOpen(true);
+                          }}
+                          onOpenInWebmail={onOpenInWebmail}
+                          onUpdateDocEsTemplate={(patch) => {
+                            setLayoutTemplates((prev) => {
+                              const cur = prev.doc_es;
+                              if (!cur) return prev;
+                              const nextTpl = { ...cur, ...patch };
+                              void saveLayoutTemplateToFirestore('doc_es', nextTpl);
+                              return { ...prev, doc_es: nextTpl };
+                            });
+                          }}
+                          onToast={triggerToast}
+                        />
+
+                        <InteractiveDocumentCanvas
+                          key={`kit_single_${activeModel.id}_${postulant.id}`}
+                          title={`${activeModel.number} — ${activeModel.title}`}
+                          documentTypeLabel={`01. Kit Candidat · ${actorReq.badgeLabel}`}
+                          assetsConfig={assetsConfig}
+                          onChangeAssetsConfig={handleUpdateAssetsConfig}
+                          uploadedAssetUrls={uploadedAssets}
+                          activeAssetKeyMap={activeAssetKeyMap}
+                          layoutTemplate={effectiveDocLayout}
+                          hideGenericChrome={true}
+                          preferCustomPdfDownloadWhenUnedited={true}
+                          onClearExternalSelection={() => setSelectedKitVisualKey(null)}
+                          onExportSuccess={triggerToast}
+                          exclusiveVisualSet={{
+                            logo: docVisuals.logo.url,
+                            signature: docVisuals.signature.url,
+                            cachet: docVisuals.cachet.url,
+                            filigrane: docVisuals.filigrane.url,
+                            arrierePlan: docVisuals.arrierePlan.url,
+                            barcode: docVisuals.barcode.url,
+                            qrcode: docVisuals.qrcode.url
+                          }}
+                          htmlEmailContent={singleEmailHtml}
+                          onDownloadPdf={async () => {
+                            const { doc, filename } = await generateSingleDocEsPdfAsync(
+                              activeModel.id,
+                              postulant,
+                              docEsData,
+                              settings,
+                              layoutTemplates,
+                              kitDocLayouts,
+                              uploadedAssets,
+                              assetsConfig,
+                              kitDocVisualScopes,
+                              kitDocHeaders
+                            );
+                            doc.save(filename);
+                            triggerToast(
+                              `PDF ${activeModel.number} téléchargé avec mise en page et équilibre de page vérifiés.`
+                            );
+                          }}
+                          onDownloadWord={() => {
+                            const wordFontPt = Math.max(8.5, Math.min(11.5, Math.round((adaptiveFit.fontSizePt + 0.8) * 10) / 10));
+                            downloadWordDocument(
+                              `Kit_${activeModel.number.replace(/\s+/g, '_')}_${postulant.codeIdCandidature}`,
+                              `${activeModel.number} - ${activeModel.title}`,
+                              `<div style="font-family:${fontCss}; color:${effectiveDocLayout.bodyTextColor || '#1e293b'};">
+                                <p style="font-weight:bold; color:${primaryCol}; margin-bottom:2px;">${docVisuals.primaryEntityName}</p>
+                                <p style="font-size:9pt; color:#475569; margin:0 0 10px 0;">${docVisuals.primarySubLine} · Réf. ${docEsData.referenceDossier}</p>
+                                <h1 style="text-align:${bp?.titleAlign || 'center'}; color:${primaryCol}; font-size:15pt;">${bp?.titleUppercase ? rendered.title.toUpperCase() : rendered.title}</h1>
+                                <div style="white-space:pre-wrap; font-size:${wordFontPt}pt; line-height:${adaptiveFit.lineHeight};">${cleanBody}</div>
+                              </div>`
+                            );
+                            triggerToast(`${activeModel.number} exporté au format Word (.docx).`);
+                          }}
+                          onDownloadHtml={(html) =>
+                            downloadHtmlFile(
+                              `${activeModel.number.replace(/\s+/g, '_')}_${postulant.codeIdCandidature}.html`,
+                              html
+                            )
+                          }
+                          onOpenInWebmail={onOpenInWebmail}
+                          onTextEdited={(editedText) => {
+                            handleSaveDocEsData({
+                              ...docEsData,
+                              customModelTexts: {
+                                ...(docEsData.customModelTexts || {}),
+                                [modelKey]: editedText
+                              }
+                            });
+                          }}
+                          hasCustomText={hasCustomText}
+                          onResetText={() => {
+                            const prevTexts = { ...(docEsData.customModelTexts || {}) };
+                            delete prevTexts[modelKey];
+                            handleSaveDocEsData(
+                              {
+                                ...docEsData,
+                                customModelTexts: prevTexts
+                              },
+                              `Texte de ${activeModel.number} réinitialisé.`
+                            );
                           }}
                         >
-                          {docVisuals.arrierePlan.url && (
-                            <img
-                              src={docVisuals.arrierePlan.url}
-                              alt=""
-                              className="pointer-events-none select-none absolute inset-0 w-full h-full object-cover opacity-15"
-                            />
-                          )}
-                          {docVisuals.filigrane.url && (
-                            <img
-                              src={docVisuals.filigrane.url}
-                              alt=""
-                              className="pointer-events-none select-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 max-h-44 opacity-10 object-contain"
-                            />
-                          )}
+                          <div
+                            onClick={(e) => {
+                              if (e.target === e.currentTarget) setSelectedKitVisualKey(null);
+                            }}
+                            className="flex-1 flex flex-col justify-between outline-none relative"
+                            style={{
+                              minHeight: `${Math.max(880, adaptiveFit.minPaperHeightPx - 80)}px`,
+                              backgroundColor: pageBg,
+                              fontFamily: fontCss,
+                              color: effectiveDocLayout.bodyTextColor || '#1e293b',
+                              fontSize: `${adaptiveFit.webFontPx}px`,
+                              lineHeight: adaptiveFit.webLineHeight,
+                              borderLeft: bp?.hasLeftAccentStripe ? `6px solid ${primaryCol}` : undefined,
+                              paddingLeft: bp?.hasLeftAccentStripe ? '14px' : undefined
+                            }}
+                          >
+                            {headerMode === 'top_accent_bar' && (
+                              <div
+                                className="-mx-4 -mt-4 mb-3 h-2"
+                                style={{ backgroundColor: primaryCol }}
+                              />
+                            )}
 
-                          {headerMode === 'top_accent_bar' && (
-                            <div
-                              className="-mx-5 -mt-5 mb-2 h-2 relative z-10"
-                              style={{ backgroundColor: primaryCol }}
-                            />
-                          )}
-
-                          {/* En-tête stylisé selon le modèle d'en-tête & l'acteur strict */}
-                          {headerMode === 'centered_stack' ? (
-                            <div
-                              className="relative z-10 text-center pb-3 space-y-1 border-b-2"
-                              style={{ borderBottomColor: primaryCol }}
-                            >
-                              {docVisuals.logo.url && (
-                                <img
-                                  src={docVisuals.logo.url}
-                                  alt={docVisuals.primaryEntityName}
-                                  className="h-9 max-w-[120px] object-contain mx-auto"
-                                />
-                              )}
-                              <div className="text-xs font-extrabold uppercase tracking-wide" style={{ color: primaryCol }}>
-                                {docVisuals.primaryEntityName}
-                              </div>
-                              <div className="text-[10px] text-slate-500">
-                                {docVisuals.primarySubLine} · {actorReq.badgeLabel} · Réf. {postulant.codeIdCandidature}
-                              </div>
-                              <h3 className="text-sm sm:text-base font-extrabold pt-1" style={{ color: primaryCol }}>
-                                {rendered.title}
-                              </h3>
-                              {rendered.subtitle && <p className="text-[11px] text-slate-500">{rendered.subtitle}</p>}
-                            </div>
-                          ) : (
-                            <div
-                              className={`relative z-10 flex flex-wrap items-center justify-between gap-2 pb-2.5 ${
-                                headerMode === 'filled_banner' ? 'p-3 rounded-lg text-white -mx-1' : 'border-b'
-                              }`}
-                              style={{
-                                backgroundColor:
-                                  headerMode === 'filled_banner'
-                                    ? docLayout?.headerBgColor || primaryCol
-                                    : undefined,
-                                borderBottomColor: accentCol
-                              }}
-                            >
-                              <div className="flex items-center gap-3">
-                                {docVisuals.logo.url && (
-                                  <img
-                                    src={docVisuals.logo.url}
-                                    alt={docVisuals.primaryEntityName}
-                                    className={`h-9 max-w-[96px] object-contain ${
-                                      headerMode === 'filled_banner' ? 'bg-white p-1 rounded' : ''
-                                    }`}
-                                  />
-                                )}
-                                <div>
-                                  <div className="flex flex-wrap items-center gap-1.5">
-                                    <span
-                                      className="px-2 py-0.5 rounded text-[10px] font-bold"
-                                      style={{
-                                        backgroundColor:
-                                          headerMode === 'filled_banner' ? 'rgba(255,255,255,0.18)' : primaryCol,
-                                        color: '#FDE047'
-                                      }}
-                                    >
-                                      DOCUMENT {idx + 1}/{activeKitModels.length} · {m.number}
-                                    </span>
-                                    <span
-                                      className={`text-[10px] font-bold ${
-                                        headerMode === 'filled_banner' ? 'text-amber-200' : 'text-slate-600'
-                                      }`}
-                                    >
-                                      {docVisuals.primaryEntityName} · {actorReq.badgeLabel}
-                                    </span>
+                            <div className="space-y-3">
+                              {/* ZONE 1 : En-tête fidèle avec EditableDocumentVisual */}
+                              {headerMode === 'filled_banner' ? (
+                                <div
+                                  className="p-4 rounded-sm flex flex-wrap items-center justify-between gap-3 text-white"
+                                  style={{
+                                    backgroundColor: effectiveDocLayout.headerBgColor || primaryCol,
+                                    borderBottom: `3px solid ${accentCol}`
+                                  }}
+                                >
+                                  <div className="flex items-center gap-3">
+                                    {docVisuals.logo.url ? (
+                                      <div className="bg-white p-1.5 rounded-sm">
+                                        <EditableDocumentVisual
+                                          src={docVisuals.logo.url}
+                                          alt={docVisuals.primaryEntityName}
+                                          label="Logo"
+                                          settings={docVisuals.logo.cfg}
+                                          isSelected={selectedKitVisualKey === `${activeModel.id}_logo`}
+                                          onSelect={() => setSelectedKitVisualKey(`${activeModel.id}_logo`)}
+                                          onDeselect={() => setSelectedKitVisualKey(null)}
+                                          onUpdateSettings={(patch) => updateVisualItem(docVisuals.logo.key, patch)}
+                                          onReset={() => resetVisualItem(docVisuals.logo.key)}
+                                          defaultWidthPx={140}
+                                          defaultHeightPx={46}
+                                        />
+                                      </div>
+                                    ) : (
+                                      <div className="font-extrabold text-base">{docVisuals.primaryEntityName}</div>
+                                    )}
+                                    <div>
+                                      <div className="font-bold text-sm">{docVisuals.primaryEntityName}</div>
+                                      <div className="text-[10.5px] opacity-85">
+                                        {docVisuals.primarySubLine} · {actorReq.badgeLabel}
+                                      </div>
+                                    </div>
                                   </div>
-                                  <h3
-                                    className="text-sm sm:text-base font-extrabold mt-1"
+                                  <div className="flex items-center gap-3">
+                                    <div className="text-right text-[10.5px]">
+                                      <div className="font-bold">Réf. {docEsData.referenceDossier}</div>
+                                      <div className="opacity-85">Date : {postulant.dateEffet}</div>
+                                    </div>
+                                    {docVisuals.logoSecondary?.url && (
+                                      <div className="bg-white p-1 rounded-sm">
+                                        <EditableDocumentVisual
+                                          src={docVisuals.logoSecondary.url}
+                                          alt={docVisuals.secondaryEntityName || 'Logo 2'}
+                                          label="Logo 2"
+                                          settings={docVisuals.logoSecondary.cfg}
+                                          isSelected={selectedKitVisualKey === `${activeModel.id}_logo2`}
+                                          onSelect={() => setSelectedKitVisualKey(`${activeModel.id}_logo2`)}
+                                          onDeselect={() => setSelectedKitVisualKey(null)}
+                                          onUpdateSettings={(patch) =>
+                                            updateVisualItem(docVisuals.logoSecondary!.key, patch)
+                                          }
+                                          onReset={() => resetVisualItem(docVisuals.logoSecondary!.key)}
+                                          defaultWidthPx={100}
+                                          defaultHeightPx={38}
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              ) : headerMode === 'centered_stack' ? (
+                                <div
+                                  className="flex flex-col items-center text-center gap-1.5 pb-3"
+                                  style={{
+                                    borderBottom: bp?.headerHasDivider ? `2px solid ${primaryCol}` : undefined
+                                  }}
+                                >
+                                  {docVisuals.logo.url && (
+                                    <EditableDocumentVisual
+                                      src={docVisuals.logo.url}
+                                      alt={docVisuals.primaryEntityName}
+                                      label="Logo"
+                                      settings={docVisuals.logo.cfg}
+                                      isSelected={selectedKitVisualKey === `${activeModel.id}_logo`}
+                                      onSelect={() => setSelectedKitVisualKey(`${activeModel.id}_logo`)}
+                                      onDeselect={() => setSelectedKitVisualKey(null)}
+                                      onUpdateSettings={(patch) => updateVisualItem(docVisuals.logo.key, patch)}
+                                      onReset={() => resetVisualItem(docVisuals.logo.key)}
+                                      defaultWidthPx={155}
+                                      defaultHeightPx={50}
+                                    />
+                                  )}
+                                  <div className="font-extrabold text-base tracking-tight" style={{ color: primaryCol }}>
+                                    {docVisuals.primaryEntityName}
+                                  </div>
+                                  <div className="text-[10.5px] text-slate-600">
+                                    {docVisuals.primarySubLine} · Réf. {docEsData.referenceDossier}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div
+                                  className="flex flex-wrap items-start justify-between gap-3 pb-2.5"
+                                  style={{
+                                    borderBottom: bp?.headerHasDivider ? `2px solid ${accentCol}` : undefined
+                                  }}
+                                >
+                                  <div className="flex items-center gap-3">
+                                    {docVisuals.logo.url && (
+                                      <EditableDocumentVisual
+                                        src={docVisuals.logo.url}
+                                        alt={docVisuals.primaryEntityName}
+                                        label="Logo"
+                                        settings={docVisuals.logo.cfg}
+                                        isSelected={selectedKitVisualKey === `${activeModel.id}_logo`}
+                                        onSelect={() => setSelectedKitVisualKey(`${activeModel.id}_logo`)}
+                                        onDeselect={() => setSelectedKitVisualKey(null)}
+                                        onUpdateSettings={(patch) => updateVisualItem(docVisuals.logo.key, patch)}
+                                        onReset={() => resetVisualItem(docVisuals.logo.key)}
+                                        defaultWidthPx={150}
+                                        defaultHeightPx={48}
+                                      />
+                                    )}
+                                    <div>
+                                      <div className="font-extrabold text-sm sm:text-base" style={{ color: primaryCol }}>
+                                        {docVisuals.primaryEntityName}
+                                      </div>
+                                      <div className="text-[10.5px] text-slate-600">{docVisuals.primarySubLine}</div>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    <div className="text-right text-[10.5px] text-slate-600">
+                                      <div className="font-bold" style={{ color: primaryCol }}>
+                                        {docVisuals.secondaryEntityName || activeModel.number}
+                                      </div>
+                                      <div>Réf. {docEsData.referenceDossier} · {postulant.dateEffet}</div>
+                                    </div>
+                                    {docVisuals.logoSecondary?.url && (
+                                      <EditableDocumentVisual
+                                        src={docVisuals.logoSecondary.url}
+                                        alt={docVisuals.secondaryEntityName || 'Logo 2'}
+                                        label="Logo 2"
+                                        settings={docVisuals.logoSecondary.cfg}
+                                        isSelected={selectedKitVisualKey === `${activeModel.id}_logo2`}
+                                        onSelect={() => setSelectedKitVisualKey(`${activeModel.id}_logo2`)}
+                                        onDeselect={() => setSelectedKitVisualKey(null)}
+                                        onUpdateSettings={(patch) =>
+                                          updateVisualItem(docVisuals.logoSecondary!.key, patch)
+                                        }
+                                        onReset={() => resetVisualItem(docVisuals.logoSecondary!.key)}
+                                        defaultWidthPx={100}
+                                        defaultHeightPx={38}
+                                      />
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* ZONE 2 : Pastille référence si active */}
+                              {bp?.hasRefPill && (
+                                <div className="text-[10.5px] space-y-0.5">
+                                  <span
+                                    className="inline-block px-2 py-0.5 rounded-sm font-bold"
                                     style={{
-                                      color: headerMode === 'filled_banner' ? '#ffffff' : primaryCol
+                                      backgroundColor: effectiveDocLayout.highlightTintColor || '#D8F3EB',
+                                      color: primaryCol
                                     }}
                                   >
-                                    {rendered.title}
-                                  </h3>
-                                  {rendered.subtitle && (
-                                    <p
-                                      className={`text-[11px] ${
-                                        headerMode === 'filled_banner' ? 'text-blue-100' : 'text-slate-500'
-                                      }`}
+                                    {activeModel.number} · {actorReq.badgeLabel}
+                                  </span>
+                                  <div className="text-slate-600">
+                                    Dossier : <strong className="text-slate-900">{docEsData.referenceDossier}</strong> · Candidat :{' '}
+                                    <strong className="text-slate-900">{postulant.nomComplet}</strong>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* ZONE 3 : Titre principal */}
+                              <div
+                                className={bp?.titleHasBox ? 'py-2.5 px-4 rounded-sm my-1' : 'pt-2 pb-1'}
+                                style={{
+                                  textAlign: bp?.titleAlign || 'center',
+                                  backgroundColor: bp?.titleHasBox
+                                    ? effectiveDocLayout.highlightTintColor || '#f1f5f9'
+                                    : 'transparent',
+                                  borderTop: bp?.titleHasBox ? `1.5px solid ${primaryCol}` : undefined,
+                                  borderRight: bp?.titleHasBox ? `1.5px solid ${primaryCol}` : undefined,
+                                  borderLeft: bp?.titleHasBox ? `1.5px solid ${primaryCol}` : undefined,
+                                  borderBottom: bp?.titleHasUnderline
+                                    ? `2px solid ${accentCol}`
+                                    : bp?.titleHasBox
+                                    ? `1.5px solid ${primaryCol}`
+                                    : undefined
+                                }}
+                              >
+                                <h2
+                                  className={`text-[15px] font-bold leading-snug ${bp?.titleUppercase ? 'uppercase' : ''}`}
+                                  style={{ color: bp?.titleHasBox ? primaryCol : '#0f172a' }}
+                                >
+                                  {rendered.title}
+                                </h2>
+                                {rendered.subtitle && (bp ? bp.titleHasSubtitle : true) && (
+                                  <p className="text-[10.5px] text-slate-500 mt-0.5">{rendered.subtitle}</p>
+                                )}
+                              </div>
+
+                              {/* ZONE 4 : Corps de texte directement éditable avec espacement & interligne adaptatifs */}
+                              <div
+                                contentEditable
+                                suppressContentEditableWarning
+                                className="outline-none cursor-text rounded hover:bg-amber-50/20 p-1"
+                                style={{
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: `${adaptiveFit.webParagraphGapPx}px`,
+                                  fontSize: `${adaptiveFit.webFontPx}px`,
+                                  lineHeight: adaptiveFit.webLineHeight,
+                                  color: effectiveDocLayout.bodyTextColor || '#1e293b'
+                                }}
+                              >
+                                {bodyBlocks.map((block, bIdx) => {
+                                  const isCardMode = bp?.bodyLayout === 'cards';
+                                  return (
+                                    <div
+                                      key={bIdx}
+                                      className={
+                                        isCardMode
+                                          ? 'whitespace-pre-wrap p-2.5 rounded border border-slate-200 bg-slate-50/70'
+                                          : bp?.hasSectionDividers && bIdx < bodyBlocks.length - 1
+                                          ? 'whitespace-pre-wrap pb-2 border-b border-dashed border-slate-200'
+                                          : 'whitespace-pre-wrap'
+                                      }
+                                      style={{
+                                        borderLeft: isCardMode ? `3px solid ${primaryCol}` : undefined
+                                      }}
                                     >
-                                      {rendered.subtitle}
-                                    </p>
+                                      {block}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            {/* ZONE 5 : Signatures, Cachets & Codes d'authentification éditables */}
+                            <div className="pt-4 mt-4 border-t border-slate-200 space-y-3">
+                              <div className="flex flex-wrap items-end justify-between gap-4">
+                                <div className="flex items-center gap-2">
+                                  {docVisuals.barcode.url && (
+                                    <EditableDocumentVisual
+                                      src={docVisuals.barcode.url}
+                                      alt="Code-Barres"
+                                      label="Code-Barres"
+                                      settings={docVisuals.barcode.cfg}
+                                      isSelected={selectedKitVisualKey === `${activeModel.id}_bc`}
+                                      onSelect={() => setSelectedKitVisualKey(`${activeModel.id}_bc`)}
+                                      onDeselect={() => setSelectedKitVisualKey(null)}
+                                      onUpdateSettings={(patch) => updateVisualItem(docVisuals.barcode.key, patch)}
+                                      onReset={() => resetVisualItem(docVisuals.barcode.key)}
+                                      defaultWidthPx={85}
+                                      defaultHeightPx={28}
+                                    />
                                   )}
+                                  {docVisuals.qrcode.url && (
+                                    <EditableDocumentVisual
+                                      src={docVisuals.qrcode.url}
+                                      alt="QR Code"
+                                      label="QR Code"
+                                      settings={docVisuals.qrcode.cfg}
+                                      isSelected={selectedKitVisualKey === `${activeModel.id}_qr`}
+                                      onSelect={() => setSelectedKitVisualKey(`${activeModel.id}_qr`)}
+                                      onDeselect={() => setSelectedKitVisualKey(null)}
+                                      onUpdateSettings={(patch) => updateVisualItem(docVisuals.qrcode.key, patch)}
+                                      onReset={() => resetVisualItem(docVisuals.qrcode.key)}
+                                      defaultWidthPx={44}
+                                      defaultHeightPx={44}
+                                    />
+                                  )}
+                                </div>
+
+                                <div className="flex flex-wrap items-end gap-5">
+                                  {(docVisuals.cachetSecondary?.url || docVisuals.signatureSecondary?.url) && (
+                                    <div className="text-right space-y-1">
+                                      <span className="block text-[9.5px] font-bold text-slate-600 uppercase">
+                                        {docVisuals.secondaryEntityName || 'Seconde Partie'}
+                                      </span>
+                                      <div className="flex items-center justify-end gap-2">
+                                        {docVisuals.cachetSecondary?.url && (
+                                          <EditableDocumentVisual
+                                            src={docVisuals.cachetSecondary.url}
+                                            alt="Cachet 2"
+                                            label="Cachet 2"
+                                            settings={docVisuals.cachetSecondary.cfg}
+                                            isSelected={selectedKitVisualKey === `${activeModel.id}_cachet2`}
+                                            onSelect={() => setSelectedKitVisualKey(`${activeModel.id}_cachet2`)}
+                                            onDeselect={() => setSelectedKitVisualKey(null)}
+                                            onUpdateSettings={(patch) =>
+                                              updateVisualItem(docVisuals.cachetSecondary!.key, patch)
+                                            }
+                                            onReset={() => resetVisualItem(docVisuals.cachetSecondary!.key)}
+                                            defaultWidthPx={70}
+                                            defaultHeightPx={50}
+                                          />
+                                        )}
+                                        {docVisuals.signatureSecondary?.url && (
+                                          <EditableDocumentVisual
+                                            src={docVisuals.signatureSecondary.url}
+                                            alt="Signature 2"
+                                            label="Signature 2"
+                                            settings={docVisuals.signatureSecondary.cfg}
+                                            isSelected={selectedKitVisualKey === `${activeModel.id}_sig2`}
+                                            onSelect={() => setSelectedKitVisualKey(`${activeModel.id}_sig2`)}
+                                            onDeselect={() => setSelectedKitVisualKey(null)}
+                                            onUpdateSettings={(patch) =>
+                                              updateVisualItem(docVisuals.signatureSecondary!.key, patch)
+                                            }
+                                            onReset={() => resetVisualItem(docVisuals.signatureSecondary!.key)}
+                                            defaultWidthPx={110}
+                                            defaultHeightPx={42}
+                                          />
+                                        )}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  <div className="text-right space-y-1">
+                                    <span className="block text-[9.5px] font-bold text-slate-600 uppercase">
+                                      {docVisuals.primaryEntityName}
+                                    </span>
+                                    <div className="flex items-center justify-end gap-2">
+                                      {docVisuals.cachet.url && (
+                                        <EditableDocumentVisual
+                                          src={docVisuals.cachet.url}
+                                          alt="Cachet Officiel"
+                                          label="Cachet"
+                                          settings={docVisuals.cachet.cfg}
+                                          isSelected={selectedKitVisualKey === `${activeModel.id}_cachet`}
+                                          onSelect={() => setSelectedKitVisualKey(`${activeModel.id}_cachet`)}
+                                          onDeselect={() => setSelectedKitVisualKey(null)}
+                                          onUpdateSettings={(patch) => updateVisualItem(docVisuals.cachet.key, patch)}
+                                          onReset={() => resetVisualItem(docVisuals.cachet.key)}
+                                          defaultWidthPx={78}
+                                          defaultHeightPx={54}
+                                        />
+                                      )}
+                                      {docVisuals.signature.url && (
+                                        <EditableDocumentVisual
+                                          src={docVisuals.signature.url}
+                                          alt="Signature Officielle"
+                                          label="Signature"
+                                          settings={docVisuals.signature.cfg}
+                                          isSelected={selectedKitVisualKey === `${activeModel.id}_sig`}
+                                          onSelect={() => setSelectedKitVisualKey(`${activeModel.id}_sig`)}
+                                          onDeselect={() => setSelectedKitVisualKey(null)}
+                                          onUpdateSettings={(patch) => updateVisualItem(docVisuals.signature.key, patch)}
+                                          onReset={() => resetVisualItem(docVisuals.signature.key)}
+                                          defaultWidthPx={125}
+                                          defaultHeightPx={46}
+                                        />
+                                      )}
+                                    </div>
+                                  </div>
                                 </div>
                               </div>
 
-                              <div className="flex items-center gap-2">
-                                {docVisuals.secondaryEntityName && (
-                                  <span
-                                    className={`text-[10px] font-bold text-right ${
-                                      headerMode === 'filled_banner' ? 'text-blue-100' : 'text-slate-600'
-                                    }`}
-                                  >
-                                    {docVisuals.secondaryEntityName}
-                                  </span>
-                                )}
-                                {docVisuals.logoSecondary?.url && (
-                                  <img
-                                    src={docVisuals.logoSecondary.url}
-                                    alt={docVisuals.secondaryEntityName || 'Logo Secondaire'}
-                                    className={`h-8 max-w-[84px] object-contain ${
-                                      headerMode === 'filled_banner' ? 'bg-white p-1 rounded' : ''
-                                    }`}
-                                  />
-                                )}
-                              </div>
-                            </div>
-                          )}
-
-                          <div className="relative z-10 text-xs whitespace-pre-wrap leading-relaxed text-slate-800">
-                            {cleanBody}
-                          </div>
-
-                          {/* Pied visuels authentification strictement liés aux acteurs du document */}
-                          {(docVisuals.signature.url ||
-                            docVisuals.cachet.url ||
-                            docVisuals.signatureSecondary?.url ||
-                            docVisuals.cachetSecondary?.url ||
-                            docVisuals.barcode.url ||
-                            docVisuals.qrcode.url) && (
-                            <div className="relative z-10 pt-3 mt-2 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-3">
-                              <div className="flex items-center gap-2">
-                                {docVisuals.barcode.url && (
-                                  <img
-                                    src={docVisuals.barcode.url}
-                                    alt="Code-Barres"
-                                    className="h-7 object-contain"
-                                  />
-                                )}
-                                {docVisuals.qrcode.url && (
-                                  <img
-                                    src={docVisuals.qrcode.url}
-                                    alt="QR Code"
-                                    className="w-10 h-10 object-contain border border-slate-200 rounded bg-white p-0.5"
-                                  />
-                                )}
-                              </div>
-                              <div className="flex flex-wrap items-center gap-4">
-                                {(docVisuals.cachetSecondary?.url || docVisuals.signatureSecondary?.url) && (
-                                  <div className="text-right">
-                                    <span className="block text-[9px] font-bold text-slate-500 uppercase">
-                                      {docVisuals.secondaryEntityName || 'Seconde Partie'}
+                              {(!bp || bp.footerLayout !== 'none') && (
+                                <div
+                                  className={`pt-2 flex items-center text-[9.5px] text-slate-500 ${
+                                    bp?.footerLayout === 'centered_legal' ? 'justify-center text-center' : 'justify-between'
+                                  }`}
+                                  style={{
+                                    borderTop: !bp || bp.hasFooterDivider ? '1px solid #e2e8f0' : undefined
+                                  }}
+                                >
+                                  {bp?.footerLayout !== 'minimal_page' && (
+                                    <span>
+                                      {docVisuals.primaryEntityName} · {docVisuals.primarySubLine}
                                     </span>
-                                    <div className="flex items-center gap-2 justify-end mt-0.5">
-                                      {docVisuals.cachetSecondary?.url && (
+                                  )}
+                                  {bp?.footerLayout !== 'centered_legal' && (
+                                    <span className="font-bold text-slate-600">
+                                      1/{adaptiveFit.estimatedPages}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </InteractiveDocumentCanvas>
+                      </div>
+                    );
+                  })()
+                ) : (
+                  <InteractiveDocumentCanvas
+                    title={`Kit Candidat (${isAgenceKit ? 'Via Agence · 7 PDF DOC ES' : 'Direct · 8 PDF DOC ES'}) : ${postulant.nomComplet}`}
+                    documentTypeLabel={`Onglet 01 · Kit Candidat (${isAgenceKit ? 'Agence CRIC' : 'Employeur Direct'})`}
+                    assetsConfig={assetsConfig}
+                    onChangeAssetsConfig={handleUpdateAssetsConfig}
+                    uploadedAssetUrls={uploadedAssets}
+                    layoutTemplate={layoutTemplates.doc_es}
+                    preferCustomPdfDownloadWhenUnedited={true}
+                    exclusiveVisualSet={{
+                      logo: isAgenceKit
+                        ? uploadedAssets.logoPrestataire || postulant.logoAgenceUrl
+                        : effectiveEmployerLogo,
+                      signature: isAgenceKit
+                        ? uploadedAssets.signaturePrestataire
+                        : uploadedAssets.signature || postulant.signatureUrl,
+                      cachet: isAgenceKit
+                        ? uploadedAssets.cachetPrestataire
+                        : uploadedAssets.cachet || postulant.cachetUrl,
+                      filigrane: isAgenceKit
+                        ? uploadedAssets.filigranePrestataire
+                        : uploadedAssets.filigrane || postulant.filigraneUrl,
+                      arrierePlan: isAgenceKit
+                        ? uploadedAssets.arrierePlanPrestataire
+                        : uploadedAssets.arrierePlan,
+                      barcode: isAgenceKit
+                        ? uploadedAssets.barcodePrestataire
+                        : effectiveBarcode,
+                      qrcode: isAgenceKit
+                        ? uploadedAssets.qrcodePrestataire
+                        : effectiveQrCode
+                    }}
+                    htmlEmailContent={emailModel.html}
+                    onDownloadPdf={handleDownloadKitPdf}
+                    onDownloadWord={() => {
+                      downloadWordDocument(
+                        `Kit_Candidat_${isAgenceKit ? 'Agence' : 'Direct'}_${postulant.codeIdCandidature}`,
+                        `Kit Candidat Officiel - ${postulant.nomComplet}`,
+                        kitWordHtml
+                      );
+                      triggerToast('Kit Candidat complet exporté au format Word (.docx).');
+                    }}
+                    onDownloadHtml={(html) => downloadHtmlFile(`Kit_Candidat_${postulant.codeIdCandidature}.html`, html)}
+                    onOpenInWebmail={onOpenInWebmail}
+                    onExportSuccess={triggerToast}
+                    onTextEdited={(text) => setCustomVisualText((prev) => ({ ...prev, dossier_kit: text }))}
+                    hasCustomText={Boolean(customVisualText['dossier_kit'])}
+                    onResetText={() =>
+                      setCustomVisualText((prev) => {
+                        const copy = { ...prev };
+                        delete copy['dossier_kit'];
+                        return copy;
+                      })
+                    }
+                  >
+                    <div
+                      contentEditable
+                      suppressContentEditableWarning
+                      className="space-y-6 font-sans text-sm text-slate-800 leading-relaxed outline-none p-2 rounded-lg cursor-text"
+                    >
+                      {/* Couverture & Sommaire du Kit */}
+                      <div className="border-b-2 border-[#0B2545] pb-4 space-y-2">
+                        <div className="flex items-center justify-between flex-wrap gap-2">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-[#0066B3]">
+                            {isAgenceKit
+                              ? 'PARCOURS AVEC AGENCE DE PLACEMENT · PARTIE 2 FICHES & DOC ES'
+                              : 'PARCOURS CANDIDATURE DIRECTE · PARTIE 1 FICHES & DOC ES'}
+                          </span>
+                          <span className="text-[11px] font-mono font-bold text-slate-600">
+                            Réf. {postulant.codeIdCandidature}
+                          </span>
+                        </div>
+                        <h2 className="text-lg font-black text-[#0B2545]">
+                          {isAgenceKit
+                            ? 'KIT CANDIDAT OFFICIEL — VIA AGENCE DE PLACEMENT (7 DOCUMENTS PDF)'
+                            : 'KIT CANDIDAT OFFICIEL — CANDIDATURE EN DIRECT (8 DOCUMENTS PDF)'}
+                        </h2>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs bg-slate-50 border border-slate-200 rounded-lg p-3">
+                          <div>
+                            <strong>Postulant :</strong> {postulant.civilite} {postulant.nomComplet} ({postulant.nationalite})
+                          </div>
+                          <div>
+                            <strong>Poste :</strong> {postulant.intitulePoste} (CNP {postulant.codeCnp})
+                          </div>
+                          <div>
+                            <strong>Employeur :</strong> {postulant.nomEntreprise}
+                          </div>
+                          <div>
+                            {isAgenceKit ? (
+                              <>
+                                <strong>Agence mandataire :</strong> {postulant.nomAgence} (CNESST {postulant.permisCnesst})
+                              </>
+                            ) : (
+                              <>
+                                <strong>Entretien :</strong> {postulant.dateEntretien} à {postulant.heureEntretien}
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="pt-2">
+                          <p className="text-xs font-bold text-[#0B2545] uppercase mb-1.5">
+                            Sommaire des documents « Fiches et DOC ES » inclus :
+                          </p>
+                          <ol className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-xs text-slate-700 list-decimal pl-4">
+                            {activeKitModels.map((m) => (
+                              <li key={m.id}>
+                                <strong>{m.number}</strong> : {m.title}
+                              </li>
+                            ))}
+                          </ol>
+                        </div>
+                      </div>
+
+                      {customVisualText['dossier_kit'] && (
+                        <div className="p-3 rounded-lg bg-amber-50 border border-amber-300 text-xs whitespace-pre-wrap">
+                          {customVisualText['dossier_kit']}
+                        </div>
+                      )}
+
+                      {/* Rendu complet de chaque document Fiches et DOC ES avec vérification d'équilibre & édition directe */}
+                      <div className="space-y-6">
+                        {activeKitModels.map((m, idx) => {
+                          const rendered = renderDocEsPlainText(m.id, postulant, docEsData, settings);
+                          const resolvedRaw = resolveLayoutTemplateForDocEsModel(
+                            m.id,
+                            layoutTemplates,
+                            kitDocLayouts,
+                            layoutTemplates.doc_es,
+                            kitDocHeaders,
+                            docEsData.customModelLayouts
+                          );
+                          const docLayout = resolveEffectiveLayout(resolvedRaw);
+                          const bp = docLayout?.spatialBlueprint;
+                          const actorReq = getDocEsActorRequirement(m.id);
+                          const docVisuals = resolveActorAssetsForDocEsModel(
+                            m.id,
+                            postulant,
+                            uploadedAssets,
+                            assetsConfig,
+                            kitDocVisualScopes[m.id]
+                          );
+                          const primaryCol = docLayout?.primaryColor || '#0B2545';
+                          const accentCol = docLayout?.accentColor || '#0066B3';
+                          const pageBg = docLayout?.pageBgColor || '#ffffff';
+                          const fontCss =
+                            docLayout?.fontFamily === 'times'
+                              ? 'Georgia, "Times New Roman", serif'
+                              : docLayout?.fontFamily === 'courier'
+                              ? '"Courier New", monospace'
+                              : 'system-ui, -apple-system, sans-serif';
+                          const cleanBody = rendered.content
+                            .replace(/^[=\-_]{4,}\s*$/gm, '')
+                            .replace(/\n{3,}/g, '\n\n')
+                            .trim();
+                          const headerMode = bp?.headerLayout || 'split_lr';
+                          const fit = computeAdaptivePageFitMetrics(cleanBody, resolvedRaw, {
+                            hasSignatures: Boolean(docVisuals.signature.url || docVisuals.cachet.url),
+                            hasSubtitle: Boolean(rendered.subtitle),
+                            hasRefPill: bp?.hasRefPill
+                          });
+
+                          return (
+                            <section
+                              key={m.id}
+                              id={`kit-doc-es-${m.id}`}
+                              className="rounded-xl shadow-xs flex flex-col justify-between relative overflow-hidden"
+                              style={{
+                                backgroundColor: pageBg,
+                                fontFamily: fontCss,
+                                minHeight: `${Math.min(920, Math.max(580, Math.round(fit.minPaperHeightPx * 0.65)))}px`,
+                                paddingTop: `${Math.max(16, Math.round(fit.padTopPx * 0.55))}px`,
+                                paddingRight: `${Math.max(16, Math.round(fit.padRightPx * 0.55))}px`,
+                                paddingBottom: `${Math.max(16, Math.round(fit.padBottomPx * 0.55))}px`,
+                                paddingLeft: `${Math.max(16, Math.round(fit.padLeftPx * 0.55))}px`,
+                                borderTop:
+                                  docLayout?.borderStyle === 'double'
+                                    ? `4px double ${docLayout.borderColor || primaryCol}`
+                                    : `1.5px solid ${docLayout?.borderColor || '#cbd5e1'}`,
+                                borderRight:
+                                  docLayout?.borderStyle === 'double'
+                                    ? `4px double ${docLayout.borderColor || primaryCol}`
+                                    : `1.5px solid ${docLayout?.borderColor || '#cbd5e1'}`,
+                                borderBottom:
+                                  docLayout?.borderStyle === 'double'
+                                    ? `4px double ${docLayout.borderColor || primaryCol}`
+                                    : `1.5px solid ${docLayout?.borderColor || '#cbd5e1'}`,
+                                borderLeft: bp?.hasLeftAccentStripe
+                                  ? `6px solid ${primaryCol}`
+                                  : docLayout?.borderStyle === 'double'
+                                  ? `4px double ${docLayout.borderColor || primaryCol}`
+                                  : `1.5px solid ${docLayout?.borderColor || '#cbd5e1'}`
+                              }}
+                            >
+                              {docVisuals.arrierePlan.url && (
+                                <img
+                                  src={docVisuals.arrierePlan.url}
+                                  alt=""
+                                  className="pointer-events-none select-none absolute inset-0 w-full h-full object-cover opacity-15"
+                                />
+                              )}
+                              {docVisuals.filigrane.url && (
+                                <img
+                                  src={docVisuals.filigrane.url}
+                                  alt=""
+                                  className="pointer-events-none select-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 max-h-44 opacity-10 object-contain"
+                                />
+                              )}
+
+                              <div className="relative z-10 space-y-3">
+                                {/* Barre d'action directe & diagnostic équilibre page */}
+                                <div
+                                  contentEditable={false}
+                                  data-html2canvas-ignore="true"
+                                  className="print:hidden flex flex-wrap items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-slate-100/90 border border-slate-200 text-[11px]"
+                                >
+                                  <span className="text-slate-600 font-medium">
+                                    Équilibre page : <strong className="text-slate-900">{fit.fillPct}%</strong> · Interligne{' '}
+                                    <strong className="text-slate-900">{fit.lineHeight}</strong> · Police{' '}
+                                    <strong className="text-slate-900">{fit.fontSizePt}pt</strong>
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedKitDocId(m.id);
+                                      setSelectedKitVisualKey(null);
+                                      document
+                                        .getElementById('kit-candidat-preview-area')
+                                        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                    }}
+                                    className="px-2.5 py-1 rounded bg-[#0066B3] hover:bg-[#005291] text-white font-bold inline-flex items-center gap-1 cursor-pointer"
+                                  >
+                                    <Edit3 className="w-3 h-3" />
+                                    <span>Éditer ce document (Canevas, Champs &amp; Canva)</span>
+                                  </button>
+                                </div>
+
+                                {headerMode === 'top_accent_bar' && (
+                                  <div
+                                    className="-mx-5 -mt-2 mb-2 h-2"
+                                    style={{ backgroundColor: primaryCol }}
+                                  />
+                                )}
+
+                                {/* En-tête stylisé selon le modèle d'en-tête & l'acteur strict */}
+                                {headerMode === 'centered_stack' ? (
+                                  <div
+                                    className="text-center pb-3 space-y-1 border-b-2"
+                                    style={{ borderBottomColor: primaryCol }}
+                                  >
+                                    {docVisuals.logo.url && (
+                                      <img
+                                        src={docVisuals.logo.url}
+                                        alt={docVisuals.primaryEntityName}
+                                        className="h-9 max-w-[120px] object-contain mx-auto"
+                                      />
+                                    )}
+                                    <div className="text-xs font-extrabold uppercase tracking-wide" style={{ color: primaryCol }}>
+                                      {docVisuals.primaryEntityName}
+                                    </div>
+                                    <div className="text-[10px] text-slate-500">
+                                      {docVisuals.primarySubLine} · {actorReq.badgeLabel} · Réf. {postulant.codeIdCandidature}
+                                    </div>
+                                    <h3 className="text-sm sm:text-base font-extrabold pt-1" style={{ color: primaryCol }}>
+                                      {rendered.title}
+                                    </h3>
+                                    {rendered.subtitle && <p className="text-[11px] text-slate-500">{rendered.subtitle}</p>}
+                                  </div>
+                                ) : (
+                                  <div
+                                    className={`flex flex-wrap items-center justify-between gap-2 pb-2.5 ${
+                                      headerMode === 'filled_banner' ? 'p-3 rounded-lg text-white -mx-1' : 'border-b'
+                                    }`}
+                                    style={{
+                                      backgroundColor:
+                                        headerMode === 'filled_banner'
+                                          ? docLayout?.headerBgColor || primaryCol
+                                          : undefined,
+                                      borderBottomColor: accentCol
+                                    }}
+                                  >
+                                    <div className="flex items-center gap-3">
+                                      {docVisuals.logo.url && (
                                         <img
-                                          src={docVisuals.cachetSecondary.url}
-                                          alt="Cachet 2"
-                                          className="h-10 object-contain"
+                                          src={docVisuals.logo.url}
+                                          alt={docVisuals.primaryEntityName}
+                                          className={`h-9 max-w-[96px] object-contain ${
+                                            headerMode === 'filled_banner' ? 'bg-white p-1 rounded' : ''
+                                          }`}
                                         />
                                       )}
-                                      {docVisuals.signatureSecondary?.url && (
+                                      <div>
+                                        <div className="flex flex-wrap items-center gap-1.5">
+                                          <span
+                                            className="px-2 py-0.5 rounded text-[10px] font-bold"
+                                            style={{
+                                              backgroundColor:
+                                                headerMode === 'filled_banner' ? 'rgba(255,255,255,0.18)' : primaryCol,
+                                              color: '#FDE047'
+                                            }}
+                                          >
+                                            DOCUMENT {idx + 1}/{activeKitModels.length} · {m.number}
+                                          </span>
+                                          <span
+                                            className={`text-[10px] font-bold ${
+                                              headerMode === 'filled_banner' ? 'text-amber-200' : 'text-slate-600'
+                                            }`}
+                                          >
+                                            {docVisuals.primaryEntityName} · {actorReq.badgeLabel}
+                                          </span>
+                                        </div>
+                                        <h3
+                                          className="text-sm sm:text-base font-extrabold mt-1"
+                                          style={{
+                                            color: headerMode === 'filled_banner' ? '#ffffff' : primaryCol
+                                          }}
+                                        >
+                                          {rendered.title}
+                                        </h3>
+                                        {rendered.subtitle && (
+                                          <p
+                                            className={`text-[11px] ${
+                                              headerMode === 'filled_banner' ? 'text-blue-100' : 'text-slate-500'
+                                            }`}
+                                          >
+                                            {rendered.subtitle}
+                                          </p>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-2">
+                                      {docVisuals.secondaryEntityName && (
+                                        <span
+                                          className={`text-[10px] font-bold text-right ${
+                                            headerMode === 'filled_banner' ? 'text-blue-100' : 'text-slate-600'
+                                          }`}
+                                        >
+                                          {docVisuals.secondaryEntityName}
+                                        </span>
+                                      )}
+                                      {docVisuals.logoSecondary?.url && (
                                         <img
-                                          src={docVisuals.signatureSecondary.url}
-                                          alt="Signature 2"
-                                          className="h-8 object-contain"
+                                          src={docVisuals.logoSecondary.url}
+                                          alt={docVisuals.secondaryEntityName || 'Logo Secondaire'}
+                                          className={`h-8 max-w-[84px] object-contain ${
+                                            headerMode === 'filled_banner' ? 'bg-white p-1 rounded' : ''
+                                          }`}
                                         />
                                       )}
                                     </div>
                                   </div>
                                 )}
-                                <div className="text-right">
-                                  <span className="block text-[9px] font-bold text-slate-500 uppercase">
-                                    {docVisuals.primaryEntityName}
-                                  </span>
-                                  <div className="flex items-center gap-2 justify-end mt-0.5">
-                                    {docVisuals.cachet.url && (
+
+                                <div
+                                  className="whitespace-pre-wrap text-slate-800"
+                                  style={{
+                                    fontSize: `${fit.webFontPx}px`,
+                                    lineHeight: fit.webLineHeight,
+                                    color: docLayout?.bodyTextColor || '#1e293b'
+                                  }}
+                                >
+                                  {cleanBody}
+                                </div>
+                              </div>
+
+                              {/* Pied visuels authentification strictement liés aux acteurs du document */}
+                              {(docVisuals.signature.url ||
+                                docVisuals.cachet.url ||
+                                docVisuals.signatureSecondary?.url ||
+                                docVisuals.cachetSecondary?.url ||
+                                docVisuals.barcode.url ||
+                                docVisuals.qrcode.url) && (
+                                <div className="relative z-10 pt-3 mt-3 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-3">
+                                  <div className="flex items-center gap-2">
+                                    {docVisuals.barcode.url && (
                                       <img
-                                        src={docVisuals.cachet.url}
-                                        alt="Cachet Officiel"
-                                        className="h-11 object-contain"
+                                        src={docVisuals.barcode.url}
+                                        alt="Code-Barres"
+                                        className="h-7 object-contain"
                                       />
                                     )}
-                                    {docVisuals.signature.url && (
+                                    {docVisuals.qrcode.url && (
                                       <img
-                                        src={docVisuals.signature.url}
-                                        alt="Signature Officielle"
-                                        className="h-9 object-contain"
+                                        src={docVisuals.qrcode.url}
+                                        alt="QR Code"
+                                        className="w-10 h-10 object-contain border border-slate-200 rounded bg-white p-0.5"
                                       />
                                     )}
                                   </div>
+                                  <div className="flex flex-wrap items-center gap-4">
+                                    {(docVisuals.cachetSecondary?.url || docVisuals.signatureSecondary?.url) && (
+                                      <div className="text-right">
+                                        <span className="block text-[9px] font-bold text-slate-500 uppercase">
+                                          {docVisuals.secondaryEntityName || 'Seconde Partie'}
+                                        </span>
+                                        <div className="flex items-center gap-2 justify-end mt-0.5">
+                                          {docVisuals.cachetSecondary?.url && (
+                                            <img
+                                              src={docVisuals.cachetSecondary.url}
+                                              alt="Cachet 2"
+                                              className="h-10 object-contain"
+                                            />
+                                          )}
+                                          {docVisuals.signatureSecondary?.url && (
+                                            <img
+                                              src={docVisuals.signatureSecondary.url}
+                                              alt="Signature 2"
+                                              className="h-8 object-contain"
+                                            />
+                                          )}
+                                        </div>
+                                      </div>
+                                    )}
+                                    <div className="text-right">
+                                      <span className="block text-[9px] font-bold text-slate-500 uppercase">
+                                        {docVisuals.primaryEntityName}
+                                      </span>
+                                      <div className="flex items-center gap-2 justify-end mt-0.5">
+                                        {docVisuals.cachet.url && (
+                                          <img
+                                            src={docVisuals.cachet.url}
+                                            alt="Cachet Officiel"
+                                            className="h-11 object-contain"
+                                          />
+                                        )}
+                                        {docVisuals.signature.url && (
+                                          <img
+                                            src={docVisuals.signature.url}
+                                            alt="Signature Officielle"
+                                            className="h-9 object-contain"
+                                          />
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
                                 </div>
-                              </div>
-                            </div>
-                          )}
-                        </section>
-                      );
-                    })}
-                  </div>
-                </div>
-              </InteractiveDocumentCanvas>
+                              )}
+                            </section>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </InteractiveDocumentCanvas>
+                )}
+              </div>
             </div>
           );
         })()}

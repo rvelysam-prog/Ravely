@@ -318,6 +318,10 @@ export interface FichesDocEsData {
   // --- Modèle 15 : Fiche de liaison tripartite ---
   consultantAgenceNom: string;
   reconnaissanceAnterioriteValidee: boolean;
+
+  // --- Éditions individuelles sauvegardées par document dans 01. Kit Candidat & DOC ES ---
+  customModelTexts?: Record<string, string>;
+  customModelLayouts?: Record<string, Partial<ReferenceLayoutTemplate>>;
 }
 
 export const LOCAL_STORAGE_FICHES_DOC_ES_KEY = 'atlantic_fiches_doc_es_v1';
@@ -503,7 +507,9 @@ export function buildDefaultFichesDocEsData(
     conseilsPosture: 'Soyez transparent, posez des questions sur le matériel de flotte et manifestez votre enthousiasme pour les valeurs de l’entreprise.',
 
     consultantAgenceNom: postulant.representantAgenceNom || 'Maître Thierry Marchand',
-    reconnaissanceAnterioriteValidee: true
+    reconnaissanceAnterioriteValidee: true,
+    customModelTexts: {},
+    customModelLayouts: {}
   };
 }
 
@@ -577,9 +583,11 @@ export function renderDocEsPlainText(
   modelId: number,
   p: PostulantInfo,
   d: FichesDocEsData,
-  settings: SiteSettings
-): { title: string; subtitle: string; content: string; isInteractive: boolean; roleTarget: 'interne' | 'externe' } {
-  switch (modelId) {
+  settings: SiteSettings,
+  options?: { ignoreCustomOverride?: boolean }
+): { title: string; subtitle: string; content: string; isInteractive: boolean; roleTarget: 'interne' | 'externe'; isCustomEdited?: boolean } {
+  const baseResult = ((): { title: string; subtitle: string; content: string; isInteractive: boolean; roleTarget: 'interne' | 'externe' } => {
+    switch (modelId) {
     case 1:
       return {
         title: 'FICHE DE SYNTHÈSE CANDIDAT (PROFIL ATS)',
@@ -1081,6 +1089,17 @@ ${d.consultantAgenceNom}         ${p.representantEmployeurNom}         ${p.nomCo
         content: ''
       };
   }
+  })();
+
+  const customOverride = !options?.ignoreCustomOverride ? d.customModelTexts?.[String(modelId)] : undefined;
+  if (customOverride && customOverride.trim()) {
+    return {
+      ...baseResult,
+      content: customOverride,
+      isCustomEdited: true
+    };
+  }
+  return { ...baseResult, isCustomEdited: false };
 }
 
 export interface DocEsAssetSlotResolved {
@@ -1796,7 +1815,8 @@ export function resolveLayoutTemplateForDocEsModel(
   layoutTemplates?: LayoutTemplatesMap,
   kitDocLayouts?: KitDocLayoutMap,
   fallbackDocEsTemplate?: ReferenceLayoutTemplate,
-  kitDocHeaders?: KitDocHeaderMap
+  kitDocHeaders?: KitDocHeaderMap,
+  customModelLayouts?: Record<string, Partial<ReferenceLayoutTemplate>>
 ): ReferenceLayoutTemplate & { _headerPresetId?: string; _forceDualHeader?: boolean } {
   const chosenKey = kitDocLayouts?.[modelId] || 'auto_doc';
   let resolved: ReferenceLayoutTemplate;
@@ -1832,7 +1852,305 @@ export function resolveLayoutTemplateForDocEsModel(
       buildPresetReferenceLayout(getRecommendedPresetForModel(modelId), modelId);
   }
 
-  return applyHeaderPresetToLayout(resolved, kitDocHeaders?.[modelId], modelId);
+  const withHeader = applyHeaderPresetToLayout(resolved, kitDocHeaders?.[modelId], modelId);
+  const perModelPatch = customModelLayouts?.[String(modelId)];
+  if (!perModelPatch) return withHeader;
+
+  const baseMargins = withHeader.marginsMm || { top: 16, right: 16, bottom: 16, left: 16 };
+  const mergedMargins = perModelPatch.marginsMm
+    ? { ...baseMargins, ...perModelPatch.marginsMm }
+    : baseMargins;
+  const mergedBp = perModelPatch.spatialBlueprint
+    ? { ...(withHeader.spatialBlueprint || resolveEffectiveLayout(withHeader)!.spatialBlueprint), ...perModelPatch.spatialBlueprint }
+    : withHeader.spatialBlueprint;
+
+  return {
+    ...withHeader,
+    ...perModelPatch,
+    marginsMm: mergedMargins,
+    spatialBlueprint: mergedBp
+  };
+}
+
+export interface AdaptivePageFitMetrics {
+  pageWidthMm: number;
+  pageHeightMm: number;
+  contentWidthMm: number;
+  usableBodyHeightMm: number;
+  marginsMm: { top: number; right: number; bottom: number; left: number };
+  fontSizePt: number;
+  lineHeight: number;
+  lineStepMm: number;
+  paragraphSpacingMm: number;
+  headingSpacingMm: number;
+  estimatedPages: number;
+  fillPct: number;
+  status: 'balanced' | 'expanded_empty' | 'compacted_overflow' | 'multi_page' | 'manual';
+  statusLabel: string;
+  warnings: string[];
+  webFontPx: number;
+  webLineHeight: number;
+  webParagraphGapPx: number;
+  webSectionGapPx: number;
+  paperWidthPx: number;
+  minPaperHeightPx: number;
+  padTopPx: number;
+  padRightPx: number;
+  padBottomPx: number;
+  padLeftPx: number;
+}
+
+/**
+ * Vérifie l'occupation du texte selon le format de page (A4/Letter, Portrait/Paysage),
+ * les marges, l'en-tête et les signatures, puis adapte typographie, interligne et espacements
+ * afin d'éviter un excès de vide ou tout mélange / chevauchement de lignes.
+ */
+export function computeAdaptivePageFitMetrics(
+  rawBodyText: string,
+  layoutTemplate?: ReferenceLayoutTemplate,
+  options?: {
+    hasSignatures?: boolean;
+    hasSubtitle?: boolean;
+    hasRefPill?: boolean;
+  }
+): AdaptivePageFitMetrics {
+  const effective = resolveEffectiveLayout(layoutTemplate);
+  const bp = effective?.spatialBlueprint;
+  const isLandscape = effective?.orientation === 'landscape';
+  const isLetter = effective?.pageFormat === 'letter';
+
+  const pageWidthMm = isLandscape ? (isLetter ? 279.4 : 297) : isLetter ? 215.9 : 210;
+  const pageHeightMm = isLandscape ? (isLetter ? 215.9 : 210) : isLetter ? 279.4 : 297;
+
+  const baseMargins = {
+    top: Math.max(10, Math.min(35, effective?.marginsMm?.top ?? 15)),
+    right: Math.max(10, Math.min(35, effective?.marginsMm?.right ?? 16)),
+    bottom: Math.max(10, Math.min(35, effective?.marginsMm?.bottom ?? 16)),
+    left: Math.max(10, Math.min(35, effective?.marginsMm?.left ?? 16))
+  };
+
+  const spacingMode = effective?.blockSpacing || 'standard';
+  const autoFit = effective?.autoFitToPage !== false;
+  const hasSig = options?.hasSignatures ?? true;
+
+  const baseFontPt =
+    typeof effective?.fontSizePt === 'number' && effective.fontSizePt >= 7 && effective.fontSizePt <= 13
+      ? effective.fontSizePt
+      : spacingMode === 'compact'
+      ? 8.3
+      : spacingMode === 'airy'
+      ? 9.3
+      : 8.8;
+
+  const baseLineHeight =
+    typeof effective?.lineHeight === 'number' && effective.lineHeight >= 1.1 && effective.lineHeight <= 2.2
+      ? effective.lineHeight
+      : spacingMode === 'compact'
+      ? 1.32
+      : spacingMode === 'airy'
+      ? 1.56
+      : 1.44;
+
+  const baseParaGapMm =
+    typeof effective?.paragraphSpacingMm === 'number' &&
+    effective.paragraphSpacingMm >= 0.8 &&
+    effective.paragraphSpacingMm <= 10
+      ? effective.paragraphSpacingMm
+      : spacingMode === 'compact'
+      ? 1.6
+      : spacingMode === 'airy'
+      ? 3.2
+      : 2.4;
+
+  const headerReserveMm =
+    (bp?.headerLayout === 'filled_banner' ? 28 : bp?.headerLayout === 'centered_stack' ? 30 : 22) +
+    (bp?.metaLayout && bp.metaLayout !== 'none' ? 14 : 4) +
+    (options?.hasRefPill ?? bp?.hasRefPill ? 16 : 0) +
+    (options?.hasSubtitle ? 18 : 13);
+
+  const footerAndSigReserveMm = (hasSig ? 42 : 16) + Math.max(0, baseMargins.bottom - 12);
+
+  const sanitized = (rawBodyText || '')
+    .replace(/^[=\-_]{4,}\s*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  const rawLines = sanitized.split('\n');
+
+  const measureBodyMm = (
+    fontPt: number,
+    lineHeightRatio: number,
+    paraGapMm: number,
+    contentW: number
+  ): { totalMm: number; headingsCount: number; nonEmptyLines: number; stepMm: number } => {
+    const avgCharWidthMm = fontPt * 0.3527 * 0.51;
+    const charsPerLine = Math.max(32, Math.floor((contentW - (bp?.bodyLayout === 'cards' ? 4 : 0)) / avgCharWidthMm));
+    const stepMm = Math.max(fontPt * 0.3527 * lineHeightRatio, fontPt * 0.3527 * 1.18);
+    const headingExtraMm = Math.max(1.4, paraGapMm * 0.72);
+
+    let totalMm = 0;
+    let headingsCount = 0;
+    let nonEmptyLines = 0;
+
+    for (let i = 0; i < rawLines.length; i++) {
+      const ln = rawLines[i].trim();
+      if (!ln) {
+        totalMm += paraGapMm;
+        continue;
+      }
+      nonEmptyLines++;
+      const isHeading =
+        Boolean(ln.match(/^[0-9]+\./)) ||
+        ln.startsWith('CANDIDAT :') ||
+        ln.startsWith('RÉFÉRENCE') ||
+        ln.startsWith('VOLET');
+      const wrappedCount = Math.max(1, Math.ceil(ln.length / charsPerLine));
+      if (isHeading) {
+        headingsCount++;
+        totalMm += headingExtraMm;
+      }
+      totalMm += wrappedCount * stepMm;
+    }
+    return { totalMm: Math.max(stepMm * 2, totalMm), headingsCount, nonEmptyLines, stepMm };
+  };
+
+  let fontSizePt = baseFontPt;
+  let lineHeight = baseLineHeight;
+  let paragraphSpacingMm = baseParaGapMm;
+  const margins = { ...baseMargins };
+
+  let contentWidthMm = pageWidthMm - margins.left - margins.right;
+  let usableBodyHeightMm = Math.max(70, pageHeightMm - margins.top - headerReserveMm - footerAndSigReserveMm);
+  let measured = measureBodyMm(fontSizePt, lineHeight, paragraphSpacingMm, contentWidthMm);
+  let fillRatio = measured.totalMm / usableBodyHeightMm;
+
+  const warnings: string[] = [];
+  let status: AdaptivePageFitMetrics['status'] = autoFit ? 'balanced' : 'manual';
+  let statusLabel = autoFit ? 'Équilibré (1 page)' : 'Réglage manuel';
+
+  if (!autoFit) {
+    if (lineHeight < 1.2) {
+      warnings.push('Interligne serré (< 1.2) : risque de tassement des lignes.');
+    }
+    if (fillRatio < 0.56) {
+      warnings.push(`Beaucoup de vide détecté sur la page (${Math.round(fillRatio * 100)}% occupé).`);
+    } else if (fillRatio > 1.0 && fillRatio <= 1.22) {
+      warnings.push('Débordement léger sur la page suivante : quelques lignes risquent d’être isolées.');
+    }
+  } else {
+    // 1. Cas trop de vide (< 68% sur 1 page) -> aérer progressivement
+    if (fillRatio < 0.68) {
+      let guard = 0;
+      while (fillRatio < 0.74 && guard < 18) {
+        guard++;
+        const nextFont = Math.min(10.5, Math.round((fontSizePt + 0.15) * 100) / 100);
+        const nextLh = Math.min(1.68, Math.round((lineHeight + 0.03) * 100) / 100);
+        const nextPara = Math.min(5.2, Math.round((paragraphSpacingMm + 0.25) * 100) / 100);
+        const candidate = measureBodyMm(nextFont, nextLh, nextPara, contentWidthMm);
+        if (candidate.totalMm / usableBodyHeightMm > 0.91) break;
+        if (nextFont === fontSizePt && nextLh === lineHeight && nextPara === paragraphSpacingMm) break;
+        fontSizePt = nextFont;
+        lineHeight = nextLh;
+        paragraphSpacingMm = nextPara;
+        measured = candidate;
+        fillRatio = measured.totalMm / usableBodyHeightMm;
+      }
+      status = 'expanded_empty';
+      statusLabel = 'Adapté (espace équilibré sans vide excessif)';
+    }
+    // 2. Cas léger débordement (100% à 124%) -> resserrer proprement pour tenir sur 1 page sans chevauchement
+    else if (fillRatio > 0.96 && fillRatio <= 1.24) {
+      margins.top = Math.max(12, margins.top - 2);
+      margins.bottom = Math.max(12, margins.bottom - 2);
+      margins.left = Math.max(13, margins.left - 1.5);
+      margins.right = Math.max(13, margins.right - 1.5);
+      contentWidthMm = pageWidthMm - margins.left - margins.right;
+      usableBodyHeightMm = Math.max(75, pageHeightMm - margins.top - (headerReserveMm - 3) - (hasSig ? 40 : 14));
+
+      let guard = 0;
+      while (fillRatio > 0.95 && guard < 16) {
+        guard++;
+        const nextFont = Math.max(7.8, Math.round((fontSizePt - 0.15) * 100) / 100);
+        const nextLh = Math.max(1.26, Math.round((lineHeight - 0.025) * 100) / 100);
+        const nextPara = Math.max(1.3, Math.round((paragraphSpacingMm - 0.18) * 100) / 100);
+        if (nextFont === fontSizePt && nextLh === lineHeight && nextPara === paragraphSpacingMm) break;
+        fontSizePt = nextFont;
+        lineHeight = nextLh;
+        paragraphSpacingMm = nextPara;
+        measured = measureBodyMm(fontSizePt, lineHeight, paragraphSpacingMm, contentWidthMm);
+        fillRatio = measured.totalMm / usableBodyHeightMm;
+      }
+      status = 'compacted_overflow';
+      statusLabel = 'Adapté (tenue sur 1 page sans débordement)';
+    }
+    // 3. Multi-pages (> 124%) -> équilibrer la dernière page pour éviter une queue orpheline
+    else if (fillRatio > 1.24) {
+      const multiUsablePerPageMm = pageHeightMm - margins.top - margins.bottom - 20;
+      const estimatedTotalMm = measured.totalMm + headerReserveMm + (hasSig ? 38 : 12);
+      const exactPages = estimatedTotalMm / Math.max(100, multiUsablePerPageMm);
+      const frac = exactPages - Math.floor(exactPages);
+      if (frac > 0 && frac < 0.25 && fontSizePt > 8.1) {
+        fontSizePt = Math.max(8.0, Math.round((fontSizePt - 0.35) * 100) / 100);
+        lineHeight = Math.max(1.3, Math.round((lineHeight - 0.06) * 100) / 100);
+        paragraphSpacingMm = Math.max(1.5, Math.round((paragraphSpacingMm - 0.35) * 100) / 100);
+        measured = measureBodyMm(fontSizePt, lineHeight, paragraphSpacingMm, contentWidthMm);
+      }
+      status = 'multi_page';
+      statusLabel = 'Multi-pages équilibré (sans ligne orpheline)';
+    }
+  }
+
+  const lineStepMm = Math.max(fontSizePt * 0.3527 * lineHeight, fontSizePt * 0.3527 * 1.2);
+  const headingSpacingMm = Math.max(1.5, Math.round(paragraphSpacingMm * 0.78 * 10) / 10);
+
+  const estimatedPages =
+    fillRatio <= 1.0
+      ? 1
+      : Math.max(
+          2,
+          Math.ceil(
+            (measured.totalMm + headerReserveMm + (hasSig ? 38 : 12)) /
+              Math.max(110, pageHeightMm - margins.top - margins.bottom - 18)
+          )
+        );
+  const lastPagePct =
+    estimatedPages === 1
+      ? Math.min(99, Math.max(18, Math.round(fillRatio * 100)))
+      : Math.min(99, Math.max(25, Math.round((fillRatio % 1 || 0.75) * 100)));
+
+  // Conversions fidèles vers la feuille Aperçu Web (794px = 210mm -> ~3.78 px/mm)
+  const pxPerMm = 794 / 210;
+  const paperWidthPx = Math.round(pageWidthMm * pxPerMm);
+  const minPaperHeightPx = Math.round(pageHeightMm * pxPerMm);
+  const webFontPx = Math.round(fontSizePt * 1.333 * 10) / 10;
+
+  return {
+    pageWidthMm,
+    pageHeightMm,
+    contentWidthMm,
+    usableBodyHeightMm,
+    marginsMm: margins,
+    fontSizePt: Math.round(fontSizePt * 10) / 10,
+    lineHeight: Math.round(lineHeight * 100) / 100,
+    lineStepMm: Math.round(lineStepMm * 100) / 100,
+    paragraphSpacingMm: Math.round(paragraphSpacingMm * 10) / 10,
+    headingSpacingMm,
+    estimatedPages,
+    fillPct: estimatedPages === 1 ? lastPagePct : Math.min(98, Math.round(Math.min(1, fillRatio / estimatedPages) * 100)),
+    status,
+    statusLabel,
+    warnings,
+    webFontPx,
+    webLineHeight: Math.round(lineHeight * 100) / 100,
+    webParagraphGapPx: Math.max(4, Math.round(paragraphSpacingMm * 2.5)),
+    webSectionGapPx: Math.max(6, Math.round(paragraphSpacingMm * 3.1)),
+    paperWidthPx,
+    minPaperHeightPx,
+    padTopPx: Math.round(margins.top * 2.7),
+    padRightPx: Math.round(margins.right * 2.7),
+    padBottomPx: Math.round(margins.bottom * 2.7),
+    padLeftPx: Math.round(margins.left * 2.7)
+  };
 }
 
 /**
@@ -2183,12 +2501,26 @@ export function renderDocEsModelIntoPdf(
   const effective = resolveEffectiveLayout(layoutTemplate);
   const bp: SpatialBlueprint | undefined = effective?.spatialBlueprint;
   const pdfFont = effective?.fontFamily || 'helvetica';
-  const lineStep =
-    effective?.blockSpacing === 'compact'
-      ? 3.85
-      : effective?.blockSpacing === 'airy'
-      ? 5.0
-      : 4.35;
+
+  const rendered = renderDocEsPlainText(modelId, p, d, settings);
+  const imgs = options?.images;
+  const hasAnySignatureBlock = Boolean(
+    imgs &&
+      (imgs.cachet ||
+        imgs.signature ||
+        imgs.signatureSecondary ||
+        imgs.cachetSecondary ||
+        imgs.barcode ||
+        imgs.qrcode)
+  );
+
+  const adaptiveFit = computeAdaptivePageFitMetrics(rendered.content, layoutTemplate, {
+    hasSignatures: hasAnySignatureBlock,
+    hasSubtitle: Boolean(rendered.subtitle),
+    hasRefPill: bp?.hasRefPill
+  });
+
+  const lineStep = adaptiveFit.lineStepMm;
 
   const primaryRgb = effective?.primaryColor ? hexToRgbTuple(effective.primaryColor) : ([11, 37, 69] as [number, number, number]);
   const headerRgb = effective?.headerBgColor ? hexToRgbTuple(effective.headerBgColor) : primaryRgb;
@@ -2204,13 +2536,10 @@ export function renderDocEsModelIntoPdf(
 
   const PAGE_WIDTH = doc.internal.pageSize.getWidth();
   const PAGE_HEIGHT = doc.internal.pageSize.getHeight();
-  const MARGIN_LEFT = effective?.marginsMm?.left ?? 18;
-  const MARGIN_RIGHT = effective?.marginsMm?.right ?? 18;
-  const MARGIN_TOP = effective?.marginsMm?.top ?? 15;
+  const MARGIN_LEFT = adaptiveFit.marginsMm.left;
+  const MARGIN_RIGHT = adaptiveFit.marginsMm.right;
+  const MARGIN_TOP = adaptiveFit.marginsMm.top;
   const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT;
-
-  const rendered = renderDocEsPlainText(modelId, p, d, settings);
-  const imgs = options?.images;
 
   const drawPageBackgroundAndFrame = () => {
     if (effective?.pageBgColor && effective.pageBgColor.toUpperCase() !== '#FFFFFF') {
@@ -2264,7 +2593,7 @@ export function renderDocEsModelIntoPdf(
   let y = Math.max(15, MARGIN_TOP);
 
   const drawHeaderLogos = (inFilledBanner: boolean, bannerY: number, bannerH: number) => {
-    const logoBox = pxCfgToMm(imgs?.cfgs?.logo, 32, 12, 44, 16);
+    const logoBox = pxCfgToMm(imgs?.cfgs?.logo, 32, 12, 42, 15);
     if (imgs?.logoEmp) {
       try {
         const lx =
@@ -2283,7 +2612,7 @@ export function renderDocEsModelIntoPdf(
     }
     if (imgs?.logoAgence && imgs.logoAgence !== imgs.logoEmp) {
       try {
-        const secBox = pxCfgToMm(imgs?.cfgs?.logoSecondary, 28, 11, 38, 14);
+        const secBox = pxCfgToMm(imgs?.cfgs?.logoSecondary, 28, 11, 36, 13);
         const sx =
           effective?.logoPlacement === 'top_right'
             ? MARGIN_LEFT
@@ -2313,14 +2642,24 @@ export function renderDocEsModelIntoPdf(
   const isDualHeader = Boolean(headerMetaExtras?._forceDualHeader || imgs?.logoAgence || imgs?.secondaryEntityName);
 
   if (bp) {
-    // 1. En-tête piloté strictement par le SpatialBlueprint & le modèle d'en-tête choisi
+    // 1. En-tête piloté par SpatialBlueprint avec calcul dynamique anti-chevauchement
     if (bp.headerLayout === 'top_accent_bar') {
       doc.setFillColor(...primaryRgb);
       doc.rect(0, 0, PAGE_WIDTH, 5, 'F');
     }
 
     if (bp.headerLayout === 'filled_banner') {
-      const bannerH = Math.max(18, Math.min(30, bp.headerBannerHeightMm || 22));
+      const textStartX =
+        imgs?.logoEmp && effective?.logoPlacement !== 'top_right' && effective?.logoPlacement !== 'top_center'
+          ? MARGIN_LEFT + 36
+          : MARGIN_LEFT;
+      const maxHeaderW = isDualHeader ? 72 : Math.max(76, PAGE_WIDTH - textStartX - MARGIN_RIGHT - 42);
+      doc.setFont(pdfFont, 'bold');
+      doc.setFontSize(10);
+      const entityLines: string[] = doc.splitTextToSize(primaryEntityLabel, maxHeaderW);
+      const subLines: string[] = doc.splitTextToSize(primarySubLabel, maxHeaderW);
+      const neededBannerH = 8 + entityLines.length * 4.2 + subLines.length * 3.4;
+      const bannerH = Math.max(bp.headerBannerHeightMm || 22, neededBannerH);
       const bx = effective?.borderStyle !== 'none' ? 14 : 0;
       const bw = effective?.borderStyle !== 'none' ? PAGE_WIDTH - 28 : PAGE_WIDTH;
       doc.setFillColor(...headerRgb);
@@ -2336,24 +2675,21 @@ export function renderDocEsModelIntoPdf(
       const headerTextRgb = effective?.headerTextColor
         ? hexToRgbTuple(effective.headerTextColor)
         : ([255, 255, 255] as [number, number, number]);
-      const textStartX =
-        imgs?.logoEmp && effective?.logoPlacement !== 'top_right' && effective?.logoPlacement !== 'top_center'
-          ? MARGIN_LEFT + 36
-          : MARGIN_LEFT;
       doc.setFont(pdfFont, 'bold');
-      doc.setFontSize(10.5);
+      doc.setFontSize(10);
       doc.setTextColor(...headerTextRgb);
-      doc.text(primaryEntityLabel, textStartX, y + 6.5, { maxWidth: isDualHeader ? 72 : 108 });
+      doc.text(entityLines, textStartX, y + 5.5);
+      const subY = y + 5.5 + entityLines.length * 4.2 + 0.8;
       doc.setFont(pdfFont, 'normal');
-      doc.setFontSize(7.6);
+      doc.setFontSize(7.4);
       doc.setTextColor(...accentRgb);
-      doc.text(primarySubLabel, textStartX, y + 12.5, { maxWidth: isDualHeader ? 74 : 112 });
+      doc.text(subLines, textStartX, subY);
 
       if (!imgs?.logoAgence || imgs.logoAgence === imgs.logoEmp || effective?.logoPlacement === 'top_right') {
-        doc.setFontSize(8);
+        doc.setFontSize(7.8);
         doc.setTextColor(...headerTextRgb);
-        doc.text(`Réf. Dossier : ${d.referenceDossier}`, PAGE_WIDTH - MARGIN_RIGHT - 2, y + 6.5, { align: 'right' });
-        doc.text(`Date : ${p.dateEffet}`, PAGE_WIDTH - MARGIN_RIGHT - 2, y + 12.5, { align: 'right' });
+        doc.text(`Réf. Dossier : ${d.referenceDossier}`, PAGE_WIDTH - MARGIN_RIGHT - 2, y + 6, { align: 'right' });
+        doc.text(`Date : ${p.dateEffet}`, PAGE_WIDTH - MARGIN_RIGHT - 2, y + 11.5, { align: 'right' });
       }
       y += bannerH + 4;
     } else if (bp.headerLayout === 'centered_stack') {
@@ -2362,16 +2698,18 @@ export function renderDocEsModelIntoPdf(
         y += 14.5;
       }
       doc.setFont(pdfFont, 'bold');
-      doc.setFontSize(12.5);
+      doc.setFontSize(12);
       doc.setTextColor(...primaryRgb);
-      doc.text(primaryEntityLabel, PAGE_WIDTH / 2, y + 3.5, { align: 'center', maxWidth: CONTENT_WIDTH - 10 });
+      const entityLines: string[] = doc.splitTextToSize(primaryEntityLabel, CONTENT_WIDTH - 10);
+      doc.text(entityLines, PAGE_WIDTH / 2, y + 3.5, { align: 'center' });
+      y += entityLines.length * 4.6 + 2;
       doc.setFont(pdfFont, 'normal');
       doc.setFontSize(8);
       doc.setTextColor(71, 85, 105);
-      doc.text(`${primarySubLabel} · RÉF : ${d.referenceDossier}`, PAGE_WIDTH / 2, y + 8.5, {
+      doc.text(`${primarySubLabel} · RÉF : ${d.referenceDossier}`, PAGE_WIDTH / 2, y + 2, {
         align: 'center'
       });
-      y += 12;
+      y += 6.5;
       if (bp.headerHasDivider) {
         doc.setDrawColor(...primaryRgb);
         doc.setLineWidth(0.5);
@@ -2383,32 +2721,40 @@ export function renderDocEsModelIntoPdf(
         drawHeaderLogos(false, y - 1, 13);
       }
       const leftTextX = imgs?.logoEmp && effective?.logoPlacement !== 'top_right' ? MARGIN_LEFT + 35 : MARGIN_LEFT;
+      const leftW = isDualHeader ? 62 : Math.max(76, PAGE_WIDTH - leftTextX - MARGIN_RIGHT - 44);
       doc.setFont(pdfFont, 'bold');
-      doc.setFontSize(10.5);
+      doc.setFontSize(10);
       doc.setTextColor(...primaryRgb);
-      doc.text(primaryEntityLabel, leftTextX, y + 4.2, { maxWidth: isDualHeader ? 68 : 96 });
+      const entityLines: string[] = doc.splitTextToSize(primaryEntityLabel, leftW);
+      doc.text(entityLines, leftTextX, y + 4);
+      const leftSubY = y + 4 + entityLines.length * 4.0 + 0.6;
       doc.setFont(pdfFont, 'normal');
-      doc.setFontSize(7.5);
+      doc.setFontSize(7.4);
       doc.setTextColor(71, 85, 105);
-      doc.text(primarySubLabel, leftTextX, y + 8.6, { maxWidth: isDualHeader ? 68 : 96 });
+      const subLines: string[] = doc.splitTextToSize(primarySubLabel, leftW);
+      doc.text(subLines, leftTextX, leftSubY);
 
       const rightTextX = imgs?.logoAgence && imgs.logoAgence !== imgs.logoEmp
         ? PAGE_WIDTH - MARGIN_RIGHT - 32
         : PAGE_WIDTH - MARGIN_RIGHT;
+      let rightH = 10;
       if (isDualHeader && imgs?.secondaryEntityName) {
         doc.setFont(pdfFont, 'bold');
-        doc.setFontSize(8.2);
+        doc.setFontSize(8);
         doc.setTextColor(...primaryRgb);
-        doc.text(imgs.secondaryEntityName.toUpperCase(), rightTextX, y + 4.2, { align: 'right', maxWidth: 60 });
+        const secLines: string[] = doc.splitTextToSize(imgs.secondaryEntityName.toUpperCase(), 56);
+        doc.text(secLines, rightTextX, y + 4, { align: 'right' });
         doc.setFont(pdfFont, 'normal');
-        doc.setFontSize(7.3);
+        doc.setFontSize(7.2);
         doc.setTextColor(71, 85, 105);
-        doc.text(`Réf. ${d.referenceDossier}`, rightTextX, y + 8.6, { align: 'right' });
+        doc.text(`Réf. ${d.referenceDossier}`, rightTextX, y + 4 + secLines.length * 3.6 + 0.8, { align: 'right' });
+        rightH = secLines.length * 3.6 + 7;
       } else if (!imgs?.logoAgence || imgs.logoAgence === imgs.logoEmp) {
         doc.text(`Modèle ${modelId} · ${actorMeta.badgeLabel}`, PAGE_WIDTH - MARGIN_RIGHT, y + 3.5, { align: 'right' });
         doc.text(`Dossier : ${d.referenceDossier}`, PAGE_WIDTH - MARGIN_RIGHT, y + 8, { align: 'right' });
       }
-      y += imgs?.logoEmp || imgs?.logoAgence ? 15 : 11;
+      const leftH = entityLines.length * 4.0 + subLines.length * 3.3 + 5;
+      y += Math.max(imgs?.logoEmp || imgs?.logoAgence ? 15 : 11, leftH, rightH);
       if (bp.headerHasDivider) {
         doc.setDrawColor(...accentRgb);
         doc.setLineWidth(0.5);
@@ -2421,14 +2767,21 @@ export function renderDocEsModelIntoPdf(
         drawHeaderLogos(false, y, 13);
       }
       const leftTextX = imgs?.logoEmp && effective?.logoPlacement !== 'top_right' ? MARGIN_LEFT + 36 : MARGIN_LEFT;
+      const maxCleanW = Math.max(78, PAGE_WIDTH - leftTextX - MARGIN_RIGHT - 10);
       doc.setFont(pdfFont, 'bold');
-      doc.setFontSize(12);
+      doc.setFontSize(11.5);
       doc.setTextColor(...primaryRgb);
-      doc.text(primaryEntityLabel, leftTextX, y + 5, { maxWidth: 112 });
+      const entityLines: string[] = doc.splitTextToSize(primaryEntityLabel, maxCleanW);
+      doc.text(entityLines, leftTextX, y + 4.8);
       doc.setFont(pdfFont, 'normal');
-      doc.setFontSize(7.6);
+      doc.setFontSize(7.5);
       doc.setTextColor(71, 85, 105);
-      doc.text(`${primarySubLabel} · Dossier ${d.referenceDossier}`, leftTextX, y + 9.8, { maxWidth: 112 });
+      doc.text(
+        `${primarySubLabel} · Dossier ${d.referenceDossier}`,
+        leftTextX,
+        y + 4.8 + entityLines.length * 4.4 + 0.8,
+        { maxWidth: maxCleanW }
+      );
       if (bp.hasTopRightMarker) {
         doc.setDrawColor(180, 190, 200);
         doc.setLineWidth(0.2);
@@ -2436,7 +2789,7 @@ export function renderDocEsModelIntoPdf(
         doc.setFillColor(20, 25, 35);
         doc.rect(PAGE_WIDTH - MARGIN_RIGHT - 2.1, y + 0.9, 1.2, 1.2, 'F');
       }
-      y += imgs?.logoEmp ? 15 : 12;
+      y += Math.max(imgs?.logoEmp ? 15 : 12, entityLines.length * 4.4 + 9);
       if (bp.headerHasDivider) {
         doc.setDrawColor(...primaryRgb);
         doc.setLineWidth(0.35);
@@ -2462,16 +2815,19 @@ export function renderDocEsModelIntoPdf(
       doc.setFont(pdfFont, 'normal');
       doc.setFontSize(8.2);
       doc.setTextColor(71, 85, 105);
-      doc.text(p.adresseEntreprise || 'Canada', MARGIN_LEFT, y);
-      doc.text(`Système ATS · ${p.intitulePoste}`, MARGIN_LEFT, y + 4);
+      doc.text(p.adresseEntreprise || 'Canada', MARGIN_LEFT, y, { maxWidth: (CONTENT_WIDTH - metaRightPad) * 0.48 });
+      doc.text(`Système ATS · ${p.intitulePoste}`, MARGIN_LEFT, y + 4.2, { maxWidth: (CONTENT_WIDTH - metaRightPad) * 0.48 });
 
       doc.setFont(pdfFont, 'bold');
       doc.setTextColor(15, 23, 42);
-      doc.text(`CANDIDAT : ${p.nomComplet.toUpperCase()}`, PAGE_WIDTH - MARGIN_RIGHT - metaRightPad, y + rightOffset, { align: 'right' });
+      doc.text(`CANDIDAT : ${p.nomComplet.toUpperCase()}`, PAGE_WIDTH - MARGIN_RIGHT - metaRightPad, y + rightOffset, {
+        align: 'right',
+        maxWidth: (CONTENT_WIDTH - metaRightPad) * 0.48
+      });
       doc.setFont(pdfFont, 'normal');
       doc.setTextColor(71, 85, 105);
-      doc.text(`Code ID : ${p.codeIdCandidature}`, PAGE_WIDTH - MARGIN_RIGHT - metaRightPad, y + rightOffset + 4, { align: 'right' });
-      y += Math.max(rightOffset + 9, metaRightPad > 0 ? 24 : 0);
+      doc.text(`Code ID : ${p.codeIdCandidature}`, PAGE_WIDTH - MARGIN_RIGHT - metaRightPad, y + rightOffset + 4.2, { align: 'right' });
+      y += Math.max(rightOffset + 9.5, metaRightPad > 0 ? 24 : 0);
     } else if (bp.metaLayout === 'boxed_grid') {
       const boxW = CONTENT_WIDTH - metaRightPad;
       doc.setDrawColor(203, 213, 225);
@@ -2481,19 +2837,21 @@ export function renderDocEsModelIntoPdf(
       doc.setFont(pdfFont, 'bold');
       doc.setFontSize(8);
       doc.setTextColor(15, 23, 42);
-      doc.text(p.nomEntreprise, MARGIN_LEFT + 3, y + 4.8);
-      doc.text(`CANDIDAT : ${p.nomComplet}`, MARGIN_LEFT + boxW / 2 + 3, y + 4.8);
+      doc.text(p.nomEntreprise, MARGIN_LEFT + 3, y + 4.8, { maxWidth: boxW / 2 - 6 });
+      doc.text(`CANDIDAT : ${p.nomComplet}`, MARGIN_LEFT + boxW / 2 + 3, y + 4.8, { maxWidth: boxW / 2 - 6 });
       doc.setFont(pdfFont, 'normal');
       doc.setTextColor(71, 85, 105);
-      doc.text(p.adresseEntreprise || 'Canada', MARGIN_LEFT + 3, y + 9.5);
-      doc.text(`Dossier : ${d.referenceDossier}`, MARGIN_LEFT + boxW / 2 + 3, y + 9.5);
+      doc.text(p.adresseEntreprise || 'Canada', MARGIN_LEFT + 3, y + 9.5, { maxWidth: boxW / 2 - 6 });
+      doc.text(`Dossier : ${d.referenceDossier}`, MARGIN_LEFT + boxW / 2 + 3, y + 9.5, { maxWidth: boxW / 2 - 6 });
       y += Math.max(17, metaRightPad > 0 ? 25 : 0);
     } else if (bp.metaLayout === 'single_col_left') {
       doc.setFont(pdfFont, 'normal');
       doc.setFontSize(8.2);
       doc.setTextColor(71, 85, 105);
-      doc.text(`${p.adresseEntreprise || 'Canada'} · Candidat : ${p.nomComplet} (${p.codeIdCandidature})`, MARGIN_LEFT, y);
-      y += Math.max(7, metaRightPad > 0 ? 24 : 0);
+      doc.text(`${p.adresseEntreprise || 'Canada'} · Candidat : ${p.nomComplet} (${p.codeIdCandidature})`, MARGIN_LEFT, y, {
+        maxWidth: CONTENT_WIDTH - metaRightPad
+      });
+      y += Math.max(7.5, metaRightPad > 0 ? 24 : 0);
     }
 
     // 3. Pastille de références uniquement si détectée sur le modèle
@@ -2521,42 +2879,48 @@ export function renderDocEsModelIntoPdf(
       doc.setFont(pdfFont, 'bold');
       doc.setTextColor(15, 23, 42);
       doc.text(`: ${p.dateEffet} · Modèle ${modelId}`, MARGIN_LEFT + 34, y);
-      y += 7.5;
+      y += 7;
     }
 
-    // 4. Titre piloté par titleAlign / titleHasBox / titleHasUnderline / titleUppercase
+    // 4. Titre avec retour à la ligne contrôlé (anti-chevauchement avec sous-titre & bordures)
     const titleStr = bp.titleUppercase ? rendered.title.toUpperCase() : rendered.title;
     const alignTitle = bp.titleAlign === 'left' ? 'left' : bp.titleAlign === 'right' ? 'right' : 'center';
     const titleX = alignTitle === 'center' ? PAGE_WIDTH / 2 : alignTitle === 'right' ? PAGE_WIDTH - MARGIN_RIGHT : MARGIN_LEFT;
+
+    doc.setFont(pdfFont, 'bold');
+    doc.setFontSize(12.5);
+    const wrappedTitleLines: string[] = doc.splitTextToSize(titleStr, CONTENT_WIDTH - 4);
+    const titleBlockHeight = wrappedTitleLines.length * 5.0;
+    const subtitleBlockHeight = bp.titleHasSubtitle && rendered.subtitle ? 5.0 : 0;
 
     if (bp.titleHasBox) {
       doc.setFillColor(...tintRgb);
       doc.setDrawColor(...primaryRgb);
       doc.setLineWidth(0.5);
-      doc.rect(MARGIN_LEFT, y - 3.5, CONTENT_WIDTH, bp.titleHasSubtitle && rendered.subtitle ? 13 : 9, 'FD');
+      doc.rect(MARGIN_LEFT, y - 3.5, CONTENT_WIDTH, titleBlockHeight + subtitleBlockHeight + 4.5, 'FD');
       y += 1.5;
     }
 
-    doc.setFont(pdfFont, 'bold');
-    doc.setFontSize(13);
     doc.setTextColor(...(bp.titleHasBox ? primaryRgb : ([15, 23, 42] as [number, number, number])));
-    doc.text(titleStr, titleX, y, { align: alignTitle });
+    doc.text(wrappedTitleLines, titleX, y, { align: alignTitle });
+    y += Math.max(5.0, (wrappedTitleLines.length - 1) * 5.0 + 4.5);
 
     if (bp.titleHasSubtitle && rendered.subtitle) {
-      y += 5;
       doc.setFont(pdfFont, 'normal');
-      doc.setFontSize(8.5);
+      doc.setFontSize(8.4);
       doc.setTextColor(71, 85, 105);
-      doc.text(rendered.subtitle, titleX, y, { align: alignTitle });
+      doc.text(rendered.subtitle, titleX, y, { align: alignTitle, maxWidth: CONTENT_WIDTH - 4 });
+      y += 4.2;
     }
 
     if (bp.titleHasUnderline) {
-      y += 3.5;
       doc.setDrawColor(...accentRgb);
       doc.setLineWidth(0.5);
       doc.line(MARGIN_LEFT, y, PAGE_WIDTH - MARGIN_RIGHT, y);
+      y += 4.5;
+    } else {
+      y += 3;
     }
-    y += 7;
   } else {
     // Fallback classique sans modèle importé
     doc.setFillColor(...headerRgb);
@@ -2564,13 +2928,13 @@ export function renderDocEsModelIntoPdf(
     drawHeaderLogos(true, 15, 22);
     const textStartX = imgs?.logoEmp ? MARGIN_LEFT + 36 : MARGIN_LEFT;
     doc.setFont(pdfFont, 'bold');
-    doc.setFontSize(12);
+    doc.setFontSize(11.5);
     doc.setTextColor(255, 255, 255);
-    doc.text(p.nomEntreprise.toUpperCase(), textStartX, 24);
+    doc.text(primaryEntityLabel, textStartX, 24, { maxWidth: 105 });
     doc.setFont(pdfFont, 'normal');
-    doc.setFontSize(8.5);
+    doc.setFontSize(8.2);
     doc.setTextColor(...accentRgb);
-    doc.text(`MODULE FICHES ET DOC ES · MODÈLE ${modelId}`, textStartX, 31);
+    doc.text(primarySubLabel, textStartX, 31, { maxWidth: 108 });
     doc.setFontSize(8);
     doc.setTextColor(220, 230, 242);
     doc.text(`Réf. Dossier : ${d.referenceDossier}`, PAGE_WIDTH - MARGIN_RIGHT - 2, 24, { align: 'right' });
@@ -2578,79 +2942,108 @@ export function renderDocEsModelIntoPdf(
     y = Math.max(46, MARGIN_TOP + 28);
 
     doc.setFont(pdfFont, 'bold');
-    doc.setFontSize(13);
+    doc.setFontSize(12.5);
     doc.setTextColor(...primaryRgb);
-    doc.text(rendered.title, PAGE_WIDTH / 2, y, { align: 'center' });
+    const wrappedFallbackTitle: string[] = doc.splitTextToSize(rendered.title, CONTENT_WIDTH - 4);
+    doc.text(wrappedFallbackTitle, PAGE_WIDTH / 2, y, { align: 'center' });
+    y += wrappedFallbackTitle.length * 5.0;
     if (rendered.subtitle) {
-      y += 5;
       doc.setFont(pdfFont, 'italic');
       doc.setFontSize(8.5);
       doc.setTextColor(71, 85, 105);
-      doc.text(rendered.subtitle, PAGE_WIDTH / 2, y, { align: 'center' });
+      doc.text(rendered.subtitle, PAGE_WIDTH / 2, y, { align: 'center', maxWidth: CONTENT_WIDTH - 4 });
+      y += 4.5;
     }
-    y += 7;
     doc.setDrawColor(...accentRgb);
     doc.setLineWidth(0.5);
     doc.line(MARGIN_LEFT, y, PAGE_WIDTH - MARGIN_RIGHT, y);
-    y += 6.5;
+    y += 5.5;
   }
 
-  // Corps du texte nettoyé
+  // Corps du texte nettoyé et rendu paragraphe par paragraphe avec vérification anti-chevauchement
   const sanitizedContent = rendered.content
     .replace(/^[=\-_]{4,}\s*$/gm, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
   doc.setFont(pdfFont, 'normal');
-  doc.setFontSize(8.5);
+  doc.setFontSize(adaptiveFit.fontSizePt);
   doc.setTextColor(...bodyRgb);
 
-  const lines = doc.splitTextToSize(sanitizedContent, CONTENT_WIDTH - (bp?.bodyLayout === 'cards' ? 4 : 0));
-  for (let i = 0; i < lines.length; i++) {
-    if (y > PAGE_HEIGHT - 24) {
+  const bodyMaxWidth = CONTENT_WIDTH - (bp?.bodyLayout === 'cards' ? 4 : 0);
+  const rawParagraphLines = sanitizedContent.split('\n');
+  const sigPageReserve = hasAnySignatureBlock ? 46 : 20;
+
+  for (let i = 0; i < rawParagraphLines.length; i++) {
+    const rawLine = rawParagraphLines[i].trimEnd();
+    if (/^[=\-_]{3,}$/.test(rawLine.trim())) {
+      continue;
+    }
+    if (!rawLine.trim()) {
+      y += adaptiveFit.paragraphSpacingMm;
+      continue;
+    }
+
+    const isHeading =
+      Boolean(rawLine.trim().match(/^[0-9]+\./)) ||
+      rawLine.trim().startsWith('CANDIDAT :') ||
+      rawLine.trim().startsWith('RÉFÉRENCE') ||
+      rawLine.trim().startsWith('VOLET');
+
+    doc.setFont(pdfFont, isHeading ? 'bold' : 'normal');
+    doc.setFontSize(isHeading ? Math.min(11.5, adaptiveFit.fontSizePt + 0.5) : adaptiveFit.fontSizePt);
+
+    const wrapped: string[] = doc.splitTextToSize(rawLine, bodyMaxWidth);
+    const blockHeight = wrapped.length * lineStep + (isHeading ? adaptiveFit.headingSpacingMm : 0);
+    const keepWithNextExtra = isHeading ? lineStep * 2 : 0;
+
+    if (y + blockHeight + keepWithNextExtra > PAGE_HEIGHT - 22) {
       doc.addPage();
       drawPageBackgroundAndFrame();
       y = Math.max(20, MARGIN_TOP);
     }
-    const line = lines[i];
-    if (/^[=\-_]{3,}/.test(line.trim())) {
-      continue;
-    }
-    const isHeading =
-      Boolean(line.match(/^[0-9]\./)) ||
-      line.startsWith('CANDIDAT :') ||
-      line.startsWith('RÉFÉRENCE') ||
-      line.startsWith('VOLET');
 
     if (isHeading) {
+      if (i > 0) {
+        y += Math.max(1.0, adaptiveFit.headingSpacingMm * 0.55);
+      }
       if (bp?.hasSectionDividers && i > 0) {
         doc.setDrawColor(226, 232, 240);
         doc.setLineWidth(0.25);
-        doc.line(MARGIN_LEFT, y - 1, PAGE_WIDTH - MARGIN_RIGHT, y - 1);
+        doc.line(MARGIN_LEFT, y - 2.2, PAGE_WIDTH - MARGIN_RIGHT, y - 2.2);
       }
       if (bp?.bodyLayout === 'cards') {
         doc.setFillColor(...tintRgb);
-        doc.rect(MARGIN_LEFT, y - 3, CONTENT_WIDTH, 4.8, 'F');
+        doc.rect(MARGIN_LEFT, y - 3.0, CONTENT_WIDTH, wrapped.length * lineStep + 1.4, 'F');
       }
-      doc.setFont(pdfFont, 'bold');
       doc.setTextColor(...primaryRgb);
-      y += 1.2;
     } else {
-      doc.setFont(pdfFont, 'normal');
       doc.setTextColor(...bodyRgb);
     }
-    doc.text(line, bp?.bodyLayout === 'cards' ? MARGIN_LEFT + 2 : MARGIN_LEFT, y);
-    y += lineStep;
+
+    const drawX = bp?.bodyLayout === 'cards' ? MARGIN_LEFT + 2 : MARGIN_LEFT;
+    for (let wIdx = 0; wIdx < wrapped.length; wIdx++) {
+      if (y > PAGE_HEIGHT - 22) {
+        doc.addPage();
+        drawPageBackgroundAndFrame();
+        y = Math.max(20, MARGIN_TOP);
+      }
+      doc.text(wrapped[wIdx], drawX, y);
+      y += lineStep;
+    }
+    if (isHeading) {
+      y += Math.max(0.8, adaptiveFit.headingSpacingMm * 0.35);
+    }
   }
 
   // Signatures, tampons & codes d'authentification issus des 6 Parties
-  if (imgs && (imgs.cachet || imgs.signature || imgs.signatureSecondary || imgs.cachetSecondary || imgs.barcode || imgs.qrcode)) {
-    if (y > PAGE_HEIGHT - 46) {
+  if (hasAnySignatureBlock && imgs) {
+    if (y > PAGE_HEIGHT - sigPageReserve) {
       doc.addPage();
       drawPageBackgroundAndFrame();
       y = Math.max(20, MARGIN_TOP);
     }
-    const sigBlockY = Math.max(y + 4, PAGE_HEIGHT - 44);
+    const sigBlockY = Math.max(y + 5, PAGE_HEIGHT - 44);
     doc.setDrawColor(203, 213, 225);
     doc.setLineWidth(0.25);
     doc.line(MARGIN_LEFT, sigBlockY - 2, PAGE_WIDTH - MARGIN_RIGHT, sigBlockY - 2);
@@ -2821,7 +3214,8 @@ export async function generateSingleDocEsPdfAsync(
     layoutTemplates,
     kitDocLayouts,
     layoutTemplates?.doc_es,
-    kitDocHeaders
+    kitDocHeaders,
+    d.customModelLayouts
   );
   const preloadedImages = await preloadDocEsModelVisuals(
     modelId,

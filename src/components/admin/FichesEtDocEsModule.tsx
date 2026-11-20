@@ -18,7 +18,9 @@ import {
   Save,
   Check,
   Building,
-  Users
+  Users,
+  Wand2,
+  AlertTriangle
 } from 'lucide-react';
 import { PostulantInfo } from '../../services/postulantDossierService';
 import { SiteSettings } from '../../types';
@@ -35,6 +37,7 @@ import {
   renderDocEsPlainText,
   generateSingleDocEsPdfAsync,
   resolveLayoutTemplateForDocEsModel,
+  computeAdaptivePageFitMetrics,
   saveFichesDocEsData
 } from '../../services/fichesEtDocEsService';
 import {
@@ -143,7 +146,8 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
     layoutTemplates,
     kitDocLayouts,
     layoutTemplate,
-    kitDocHeaders
+    kitDocHeaders,
+    docEsData.customModelLayouts
   );
   const effectiveLayout = resolveEffectiveLayout(resolvedModelLayout);
   const bp: SpatialBlueprint | undefined = effectiveLayout?.spatialBlueprint;
@@ -152,6 +156,33 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
     .replace(/^[=\-_]{4,}\s*$/gm, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+  const adaptiveFit = computeAdaptivePageFitMetrics(cleanPreviewContent, resolvedModelLayout, {
+    hasSignatures: Boolean(resolvedActorVisuals.signature.url || resolvedActorVisuals.cachet.url),
+    hasSubtitle: Boolean(renderedContent.subtitle),
+    hasRefPill: bp?.hasRefPill
+  });
+
+  const handleApplyBalancedLayout = async () => {
+    const modelKey = String(selectedModelId);
+    const prevAll = docEsData.customModelLayouts || {};
+    const updated: FichesDocEsData = {
+      ...docEsData,
+      customModelLayouts: {
+        ...prevAll,
+        [modelKey]: {
+          ...(prevAll[modelKey] || {}),
+          autoFitToPage: true,
+          fontSizePt: adaptiveFit.fontSizePt,
+          lineHeight: adaptiveFit.lineHeight,
+          paragraphSpacingMm: adaptiveFit.paragraphSpacingMm,
+          marginsMm: { ...adaptiveFit.marginsMm }
+        }
+      }
+    };
+    onChangeDocEsData(updated);
+    await saveFichesDocEsData(postulant.id, updated);
+    onToast(`Mise en page vérifiée et équilibrée pour ${activeModel.number} (${adaptiveFit.fillPct}% · interligne ${adaptiveFit.lineHeight}).`);
+  };
 
   // Téléchargement PDF (avec mise en page, en-tête du document & visuels stricts des 6 Parties)
   const handleDownloadPdf = async () => {
@@ -196,7 +227,7 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
         ${refPillHtml}
         <h1 style="text-align:${titleAlign}; color:#0f172a; font-size:16pt; margin:14px 0 4px 0;">${title}</h1>
         <p style="text-align:${titleAlign}; color:#475569; font-size:10pt; margin:0 0 14px 0;">${renderedContent.subtitle}</p>
-        <div style="white-space: pre-wrap; font-family: ${fontCss}; font-size: 10.5pt; line-height: 1.55;">${cleanPreviewContent}</div>
+        <div style="white-space: pre-wrap; font-family: ${fontCss}; font-size: ${Math.max(9, Math.round((adaptiveFit.fontSizePt + 0.8) * 10) / 10)}pt; line-height: ${adaptiveFit.lineHeight};">${cleanPreviewContent}</div>
       </div>`
     );
     onToast(`Document Word (.docx) exporté !`);
@@ -509,13 +540,44 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
           </div>
 
           {/* ========================================================================= */}
-          {/* VUE 1 : APERÇU STRUCTURÉ (READ-ONLY PROPRE & FLUIDE)                     */}
+          {/* VUE 1 : APERÇU STRUCTURÉ (VÉRIFIÉ ANTI-VIDE & ANTI-MÉLANGE)               */}
           {/* ========================================================================= */}
           {viewMode === 'preview' && (
+            <div className="space-y-3">
+              <div className="px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="space-y-0.5">
+                  <div className="flex flex-wrap items-center gap-2 text-slate-700">
+                    <span className="inline-flex items-center gap-1 font-bold text-emerald-700">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      {adaptiveFit.statusLabel}
+                    </span>
+                    <span className="text-slate-300">·</span>
+                    <span>Occupation : <strong>{adaptiveFit.fillPct}%</strong> ({adaptiveFit.estimatedPages} p.)</span>
+                    <span className="text-slate-300">·</span>
+                    <span>Police <strong>{adaptiveFit.fontSizePt}pt</strong> · Interligne <strong>{adaptiveFit.lineHeight}</strong></span>
+                  </div>
+                  {adaptiveFit.warnings.length > 0 && (
+                    <div className="flex items-center gap-1.5 text-[11px] text-amber-800">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <span>{adaptiveFit.warnings.join(' · ')}</span>
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={handleApplyBalancedLayout}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Wand2 className="w-3.5 h-3.5" />
+                  <span>Vérifier &amp; Adapter à la page</span>
+                </button>
+              </div>
+
             <div
-              className="rounded-sm shadow-sm space-y-4 transition-all relative overflow-hidden"
+              className="rounded-sm shadow-sm flex flex-col justify-between transition-all relative overflow-hidden"
               style={{
                 backgroundColor: effectiveLayout?.pageBgColor || '#ffffff',
+                minHeight: `${Math.min(1060, Math.max(680, Math.round(adaptiveFit.minPaperHeightPx * 0.72)))}px`,
                 borderTop:
                   effectiveLayout?.borderStyle === 'double'
                     ? `4px double ${effectiveLayout.borderColor || '#0B2545'}`
@@ -541,12 +603,10 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
                   : effectiveLayout?.borderStyle === 'simple'
                   ? `2px solid ${effectiveLayout.borderColor || '#0B2545'}`
                   : '1px solid #e2e8f0',
-                padding:
-                  effectiveLayout?.blockSpacing === 'compact'
-                    ? '24px'
-                    : effectiveLayout?.blockSpacing === 'airy'
-                    ? '36px'
-                    : '28px',
+                paddingTop: `${Math.max(20, Math.round(adaptiveFit.padTopPx * 0.65))}px`,
+                paddingRight: `${Math.max(20, Math.round(adaptiveFit.padRightPx * 0.65))}px`,
+                paddingBottom: `${Math.max(20, Math.round(adaptiveFit.padBottomPx * 0.65))}px`,
+                paddingLeft: `${Math.max(20, Math.round(adaptiveFit.padLeftPx * 0.65))}px`,
                 fontFamily:
                   effectiveLayout?.fontFamily === 'times'
                     ? 'Georgia, "Times New Roman", serif'
@@ -822,15 +882,17 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
                 )}
               </div>
 
-              {/* Contenu formaté propre sans lignes ===== */}
+              {/* Contenu formaté propre sans lignes =====, avec interligne adaptatif */}
               <div
                 className={
                   bp?.bodyLayout === 'cards'
-                    ? 'text-xs whitespace-pre-wrap leading-relaxed bg-slate-50/70 p-4 rounded-lg border border-slate-200 overflow-x-auto'
-                    : 'text-xs whitespace-pre-wrap leading-relaxed'
+                    ? 'whitespace-pre-wrap bg-slate-50/70 p-4 rounded-lg border border-slate-200 overflow-x-auto flex-1'
+                    : 'whitespace-pre-wrap flex-1 py-2'
                 }
                 style={{
                   color: effectiveLayout?.bodyTextColor || '#1e293b',
+                  fontSize: `${adaptiveFit.webFontPx}px`,
+                  lineHeight: adaptiveFit.webLineHeight,
                   fontFamily:
                     effectiveLayout?.fontFamily === 'times'
                       ? 'Georgia, "Times New Roman", serif'
@@ -917,6 +979,7 @@ export const FichesEtDocEsModule: React.FC<FichesEtDocEsModuleProps> = ({
                   )}
                 </div>
               )}
+            </div>
             </div>
           )}
 
